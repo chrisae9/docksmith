@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "playwright-docker": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--name",
+        "playwright-docker",
+        "-i",
+        "--rm",
+        "--init",
+        "-v",
+        "/home/chis/www/docksmith/.playwright-screenshots:/screenshots",
+        "--label",
+        "docksmith.ignore=true",
+        "mcr.microsoft.com/playwright/mcp",
+        "--output-dir",
+        "/screenshots"
+      ]
+    }
+  }
+}

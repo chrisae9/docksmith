@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+agent-os/
+
+# Build artifacts
+docksmith
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test and coverage
+*.test
+*.out
+coverage.txt
+*.prof
+
+# Data and temporary files
+data/
+tmp/
+temp/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Claude
+.claude/
+
+# Test data
+test/
+registry-report*.json
+old.md

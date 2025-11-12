@@ -1,0 +1,462 @@
+package update
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/graph"
+	"github.com/chis/docksmith/internal/storage"
+	"github.com/chis/docksmith/internal/version"
+)
+
+// DiscoveryResult contains the complete discovery and check results
+type DiscoveryResult struct {
+	Containers           []ContainerInfo
+	Stacks              map[string]*Stack
+	StandaloneContainers []ContainerInfo
+	UpdateOrder         []string
+	TotalChecked        int
+	UpdatesFound        int
+	UpToDate           int
+	LocalImages        int
+	Failed             int
+	Ignored            int
+}
+
+// ContainerInfo extends ContainerUpdate with additional metadata
+type ContainerInfo struct {
+	ContainerUpdate
+	ID             string
+	Stack          string
+	Service        string
+	Dependencies   []string
+	PreUpdateCheck string
+	Labels         map[string]string
+}
+
+// Stack represents a group of related containers
+type Stack struct {
+	Name           string
+	Containers     []ContainerInfo
+	HasUpdates     bool
+	AllUpdatable   bool
+	UpdatePriority string // "major", "minor", "patch"
+}
+
+// StackDefinition represents a manual stack definition
+type StackDefinition struct {
+	Name       string   `json:"name"`
+	Containers []string `json:"containers"`
+}
+
+// Orchestrator coordinates discovery and checking across all components
+type Orchestrator struct {
+	dockerClient     docker.Client
+	registryManager  RegistryClient
+	checker          *Checker
+	stackManager     *docker.StackManager
+	graphBuilder     *graph.Builder
+	safetyChecker    *SafetyChecker
+	cache            *Cache
+	maxConcurrency   int
+	cacheEnabled     bool
+	cacheTTL         time.Duration
+}
+
+// NewOrchestrator creates a new orchestrator
+func NewOrchestrator(dockerClient docker.Client, registryManager RegistryClient) *Orchestrator {
+	return &Orchestrator{
+		dockerClient:    dockerClient,
+		registryManager: registryManager,
+		checker:         NewChecker(dockerClient, registryManager, nil), // nil storage for orchestrator (uses check command's storage)
+		stackManager:    docker.NewStackManager(),
+		graphBuilder:    graph.NewBuilder(),
+		safetyChecker:   NewSafetyChecker(),
+		cache:          NewCache(),
+		maxConcurrency: 5,
+		cacheEnabled:   false,
+		cacheTTL:       15 * time.Minute,
+	}
+}
+
+// EnableCache enables the caching layer
+func (o *Orchestrator) EnableCache(ttl time.Duration) {
+	o.cacheEnabled = true
+	o.cacheTTL = ttl
+}
+
+// SetStorage sets the storage service for the orchestrator's checker
+func (o *Orchestrator) SetStorage(store storage.Storage) {
+	if o.checker != nil {
+		o.checker.storage = store
+	}
+}
+
+// ClearCache clears the cache
+func (o *Orchestrator) ClearCache() {
+	o.cache.Clear()
+}
+
+// SetMaxConcurrency sets the maximum number of concurrent registry queries
+func (o *Orchestrator) SetMaxConcurrency(max int) {
+	o.maxConcurrency = max
+}
+
+// AddManualStack adds a manual stack definition
+func (o *Orchestrator) AddManualStack(def StackDefinition) {
+	stackDef := docker.StackDefinition{
+		Name:       def.Name,
+		Containers: def.Containers,
+	}
+	o.stackManager.AddManualStack(stackDef)
+}
+
+// LoadManualStacks loads manual stack definitions from a file
+func (o *Orchestrator) LoadManualStacks(filepath string) error {
+	return o.stackManager.LoadManualStacksFromFile(filepath)
+}
+
+// DiscoverAndCheck performs complete discovery and update checking
+func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, error) {
+	// Step 1: Discover containers
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	result := &DiscoveryResult{
+		Containers:           make([]ContainerInfo, 0, len(containers)),
+		Stacks:              make(map[string]*Stack),
+		StandaloneContainers: make([]ContainerInfo, 0),
+		TotalChecked:        len(containers),
+	}
+
+	// Step 2: Check for updates with concurrency control
+	sem := make(chan struct{}, o.maxConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	containerInfos := make([]ContainerInfo, len(containers))
+
+	for i, container := range containers {
+		wg.Add(1)
+		go func(idx int, c docker.Container) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Check if container should be ignored
+			if o.checker.shouldIgnoreContainer(c) {
+				info := ContainerInfo{
+					ContainerUpdate: ContainerUpdate{
+						ContainerName: c.Name,
+						Image:         c.Image,
+						Status:        Ignored,
+					},
+					ID:     c.ID,
+					Labels: c.Labels,
+				}
+				// Determine stack for ignored container
+				info.Stack = o.stackManager.DetermineStack(ctx, c)
+				if service, ok := c.Labels["com.docker.compose.service"]; ok {
+					info.Service = service
+				}
+
+				mu.Lock()
+				containerInfos[idx] = info
+				result.Ignored++
+				mu.Unlock()
+				return
+			}
+
+			// Check for updates
+			info := o.checkContainer(ctx, c)
+
+			// Store result
+			mu.Lock()
+			containerInfos[idx] = info
+
+			// Update counters
+			switch info.Status {
+			case UpdateAvailable:
+				result.UpdatesFound++
+			case UpToDate:
+				result.UpToDate++
+			case LocalImage:
+				result.LocalImages++
+			case CheckFailed:
+				result.Failed++
+			}
+			mu.Unlock()
+		}(i, container)
+	}
+
+	wg.Wait()
+	result.Containers = containerInfos
+
+	// Step 3: Group into stacks
+	o.groupIntoStacks(result)
+
+	// Step 4: Build dependency graph and get update order
+	depGraph := o.graphBuilder.BuildFromContainers(containers)
+	if !depGraph.HasCycles() {
+		updateOrder, _ := depGraph.GetUpdateOrder()
+		result.UpdateOrder = updateOrder
+	}
+
+	// Step 5: Run pre-update checks if configured
+	for i, info := range result.Containers {
+		if info.PreUpdateCheck != "" && info.Status == UpdateAvailable {
+			canUpdate, err := o.safetyChecker.CheckContainer(ctx, info)
+			if err != nil {
+				result.Containers[i].Error = fmt.Sprintf("pre-update check failed: %v", err)
+			} else if !canUpdate {
+				result.Containers[i].Status = Unknown
+				result.Containers[i].Error = "pre-update check blocked update"
+				result.UpdatesFound--
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// checkContainer checks a single container for updates
+func (o *Orchestrator) checkContainer(ctx context.Context, container docker.Container) ContainerInfo {
+	// Use existing checker logic
+	update := o.checker.checkContainer(ctx, container)
+
+	// Extract additional metadata
+	info := ContainerInfo{
+		ContainerUpdate: update,
+		ID:             container.ID,
+		Labels:         container.Labels,
+	}
+
+	// Determine stack
+	info.Stack = o.stackManager.DetermineStack(ctx, container)
+
+	// Extract service name
+	if service, ok := container.Labels["com.docker.compose.service"]; ok {
+		info.Service = service
+	}
+
+	// Extract dependencies
+	if deps, ok := container.Labels["com.docker.compose.depends_on"]; ok {
+		info.Dependencies = graph.ParseDependsOn(deps)
+	}
+
+	// Extract pre-update check
+	if check, found := docker.ExtractPreUpdateCheck(container); found {
+		info.PreUpdateCheck = check
+	}
+
+	// Use cache if enabled
+	if o.cacheEnabled && info.Status != LocalImage {
+		cacheKey := fmt.Sprintf("%s:%s", info.Image, info.CurrentVersion)
+		if cached, found := o.cache.Get(cacheKey); found {
+			if cachedInfo, ok := cached.(ContainerInfo); ok {
+				// Preserve container-specific fields
+				cachedInfo.ID = info.ID
+				cachedInfo.Labels = info.Labels
+				cachedInfo.Stack = info.Stack
+				cachedInfo.Service = info.Service
+				cachedInfo.Dependencies = info.Dependencies
+				cachedInfo.PreUpdateCheck = info.PreUpdateCheck
+				return cachedInfo
+			}
+		}
+
+		// Store in cache
+		o.cache.Set(cacheKey, info, o.cacheTTL)
+	}
+
+	return info
+}
+
+// groupIntoStacks groups containers into stacks
+func (o *Orchestrator) groupIntoStacks(result *DiscoveryResult) {
+	for _, container := range result.Containers {
+		if container.Stack != "" {
+			// Add to stack
+			if _, exists := result.Stacks[container.Stack]; !exists {
+				result.Stacks[container.Stack] = &Stack{
+					Name:       container.Stack,
+					Containers: make([]ContainerInfo, 0),
+				}
+			}
+
+			stack := result.Stacks[container.Stack]
+			stack.Containers = append(stack.Containers, container)
+
+			// Update stack status
+			if container.Status == UpdateAvailable {
+				stack.HasUpdates = true
+
+				// Track highest priority update
+				if stack.UpdatePriority == "" {
+					switch container.ChangeType {
+					case version.MajorChange:
+						stack.UpdatePriority = "major"
+					case version.MinorChange:
+						stack.UpdatePriority = "minor"
+					case version.PatchChange:
+						stack.UpdatePriority = "patch"
+					}
+				} else {
+					// Upgrade priority if needed
+					if container.ChangeType == version.MajorChange {
+						stack.UpdatePriority = "major"
+					} else if container.ChangeType == version.MinorChange && stack.UpdatePriority == "patch" {
+						stack.UpdatePriority = "minor"
+					}
+				}
+			}
+		} else {
+			// Standalone container
+			result.StandaloneContainers = append(result.StandaloneContainers, container)
+		}
+	}
+
+	// Check if all containers in each stack have updates
+	for _, stack := range result.Stacks {
+		allUpdatable := true
+		for _, container := range stack.Containers {
+			if container.Status != UpdateAvailable && container.Status != LocalImage {
+				allUpdatable = false
+				break
+			}
+		}
+		stack.AllUpdatable = allUpdatable
+	}
+}
+
+// SafetyChecker runs pre-update safety checks
+type SafetyChecker struct {
+	bypassChecks bool
+}
+
+// NewSafetyChecker creates a new safety checker
+func NewSafetyChecker() *SafetyChecker {
+	return &SafetyChecker{}
+}
+
+// SetBypass allows bypassing safety checks
+func (s *SafetyChecker) SetBypass(bypass bool) {
+	s.bypassChecks = bypass
+}
+
+// CheckContainer runs pre-update checks for a container
+func (s *SafetyChecker) CheckContainer(ctx context.Context, container ContainerInfo) (bool, error) {
+	if s.bypassChecks {
+		return true, nil
+	}
+
+	if container.PreUpdateCheck == "" {
+		return true, nil // No check configured, allow update
+	}
+
+	// Validate script path
+	if !docker.ValidatePreUpdateScript(container.PreUpdateCheck) {
+		return false, fmt.Errorf("invalid pre-update script path: %s", container.PreUpdateCheck)
+	}
+
+	// Check if script exists
+	if !filepath.IsAbs(container.PreUpdateCheck) {
+		return false, fmt.Errorf("pre-update script path must be absolute: %s", container.PreUpdateCheck)
+	}
+
+	// Execute the check script with timeout
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(checkCtx, container.PreUpdateCheck, container.ID, container.ContainerName)
+	output, err := cmd.Output()
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Non-zero exit code means check failed (don't update)
+			_ = exitErr
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to execute pre-update check: %w", err)
+	}
+
+	// Check succeeded (exit code 0), allow update
+	_ = output // Could log this for audit
+	return true, nil
+}
+
+// Cache provides caching for registry responses
+type Cache struct {
+	mu      sync.RWMutex
+	entries map[string]*CacheEntry
+}
+
+// CacheEntry represents a cached item
+type CacheEntry struct {
+	Value     interface{}
+	ExpiresAt time.Time
+}
+
+// NewCache creates a new cache
+func NewCache() *Cache {
+	return &Cache{
+		entries: make(map[string]*CacheEntry),
+	}
+}
+
+// Get retrieves an item from cache
+func (c *Cache) Get(key string) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, found := c.entries[key]
+	if !found {
+		return nil, false
+	}
+
+	if time.Now().After(entry.ExpiresAt) {
+		return nil, false
+	}
+
+	return entry.Value, true
+}
+
+// Set stores an item in cache
+func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries[key] = &CacheEntry{
+		Value:     value,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+}
+
+// Clear removes all items from cache
+func (c *Cache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries = make(map[string]*CacheEntry)
+}
+
+// Cleanup removes expired entries
+func (c *Cache) Cleanup() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	for key, entry := range c.entries {
+		if now.After(entry.ExpiresAt) {
+			delete(c.entries, key)
+		}
+	}
+}

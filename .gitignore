@@ -1,0 +1,34 @@
+# Environment files
+.env
+
+# Build artifacts
+/docksmith
+bin/
+
+# Docker files (not ready yet)
+Dockerfile
+docker-compose.yml
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.backup
+data/
+
+# Screenshots and images
+*.png
+*.jpg
+*.jpeg
+
+# IDE and editor files
+.claude
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
