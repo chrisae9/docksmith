@@ -79,6 +79,11 @@ func NewUpdateOrchestrator(
 	return orch
 }
 
+// GetStorage returns the storage instance for accessing operation status
+func (o *UpdateOrchestrator) GetStorage() storage.Storage {
+	return o.storage
+}
+
 // UpdateSingleContainer initiates an update for a single container.
 func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containerName, targetVersion string) (string, error) {
 	operationID := uuid.New().String()

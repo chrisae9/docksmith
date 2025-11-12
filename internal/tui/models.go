@@ -96,8 +96,14 @@ func formatVersionChange(container update.ContainerInfo) string {
 }
 
 // getChangeTypeBadge returns a styled badge for the change type
-func getChangeTypeBadge(changeType version.ChangeType) string {
-	switch changeType {
+// Checks status first to handle migrations correctly
+func getChangeTypeBadge(container update.ContainerInfo) string {
+	// Check status first - migrations should show MIGRATE, not REBUILD
+	if container.Status == update.UpToDatePinnable {
+		return WarningBadge.Render("MIGRATE")
+	}
+
+	switch container.ChangeType {
 	case version.MajorChange:
 		return BadgeStyle.Copy().
 			Background(ColorMajor).
@@ -159,13 +165,13 @@ func formatContainerLine(container update.ContainerInfo, selected bool) string {
 	// Build the line
 	name := formatContainerName(container)
 	versionChange := formatVersionChange(container)
-	changeType := getChangeTypeBadge(container.ChangeType)
+	changeTypeBadge := getChangeTypeBadge(container)
 
 	line := fmt.Sprintf("%s %s", checkbox, name)
 	if versionChange != "" {
 		line += fmt.Sprintf(" %s", versionChange)
 	}
-	line += fmt.Sprintf(" %s", changeType)
+	line += fmt.Sprintf(" %s", changeTypeBadge)
 
 	// Add stack info if available
 	if container.Stack != "" {

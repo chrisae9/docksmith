@@ -125,7 +125,7 @@ func (m PreviewModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Transition to progress screen and start execution
-		progressModel := NewProgressModel(m.updateOrch, m.plan)
+		progressModel := NewProgressModel(m.discoveryOrch, m.updateOrch, m.plan)
 		return progressModel, progressModel.Init()
 	}
 
@@ -233,7 +233,7 @@ func (m PreviewModel) renderExecutionOrder() string {
 			}
 
 			// Add change type badge
-			badge := getChangeTypeBadge(container.ChangeType)
+			badge := getChangeTypeBadge(container)
 			line += " " + badge
 
 			// Add stack if available

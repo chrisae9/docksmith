@@ -47,10 +47,11 @@ type ContainerUpdateMsg struct {
 // ProgressModel shows real-time update progress
 type ProgressModel struct {
 	// Backend data
-	updateOrch *update.UpdateOrchestrator
-	plan       *update.UpdatePlan
-	ctx        context.Context
-	cancel     context.CancelFunc
+	discoveryOrch *update.Orchestrator
+	updateOrch    *update.UpdateOrchestrator
+	plan          *update.UpdatePlan
+	ctx           context.Context
+	cancel        context.CancelFunc
 
 	// Progress tracking
 	containerProgress map[string]*ContainerProgress
@@ -65,15 +66,16 @@ type ProgressModel struct {
 	height    int
 
 	// Log messages
-	logs     []LogMsg
-	maxLogs  int
+	logs    []LogMsg
+	maxLogs int
 }
 
 // NewProgressModel creates a new progress screen
-func NewProgressModel(updateOrch *update.UpdateOrchestrator, plan *update.UpdatePlan) ProgressModel {
+func NewProgressModel(discoveryOrch *update.Orchestrator, updateOrch *update.UpdateOrchestrator, plan *update.UpdatePlan) ProgressModel {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 	m := ProgressModel{
+		discoveryOrch:     discoveryOrch,
 		updateOrch:        updateOrch,
 		plan:              plan,
 		ctx:               ctx,
@@ -170,6 +172,14 @@ func (m ProgressModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.completed {
 			return m, tea.Quit
 		}
+
+	case "b":
+		// Go back to selection screen (re-run discovery)
+		if m.completed {
+			// Create a new discovery model that will run discovery and transition to selection
+			discoveryModel := NewDiscoveryModel(m.discoveryOrch, m.updateOrch, context.Background())
+			return discoveryModel, discoveryModel.Init()
+		}
 	}
 
 	return m, nil
@@ -211,23 +221,66 @@ func (m ProgressModel) updateNextContainer() tea.Cmd {
 			targetVersion = containerInfo.CurrentVersion
 		}
 
-		_, err := m.updateOrch.UpdateSingleContainer(m.ctx, containerName, targetVersion)
-
-		// Determine status based on result
-		status := StatusSuccess
-		message := "Updated successfully"
-
+		// Start the update (this returns immediately with operationID)
+		operationID, err := m.updateOrch.UpdateSingleContainer(m.ctx, containerName, targetVersion)
 		if err != nil {
-			status = StatusFailed
-			message = "Update failed"
+			return ContainerUpdateMsg{
+				Name:    containerName,
+				Status:  StatusFailed,
+				Message: "Failed to start update",
+				Error:   err,
+			}
 		}
 
-		// Return completion message
-		return ContainerUpdateMsg{
-			Name:    containerName,
-			Status:  status,
-			Message: message,
-			Error:   err,
+		// Poll the storage to wait for operation completion
+		// The update runs asynchronously, so we need to wait for it
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		timeout := time.After(30 * time.Minute)
+
+		for {
+			select {
+			case <-timeout:
+				return ContainerUpdateMsg{
+					Name:    containerName,
+					Status:  StatusFailed,
+					Message: "Update timed out",
+					Error:   fmt.Errorf("update timed out after 30 minutes"),
+				}
+
+			case <-ticker.C:
+				// Check operation status
+				op, found, err := m.updateOrch.GetStorage().GetUpdateOperation(m.ctx, operationID)
+				if err != nil {
+					continue // Retry on error
+				}
+
+				if !found {
+					continue // Operation not found yet, keep waiting
+				}
+
+				// Check if operation is complete
+				if op.Status == "complete" {
+					return ContainerUpdateMsg{
+						Name:    containerName,
+						Status:  StatusSuccess,
+						Message: "Updated successfully",
+						Error:   nil,
+					}
+				}
+
+				if op.Status == "failed" {
+					return ContainerUpdateMsg{
+						Name:    containerName,
+						Status:  StatusFailed,
+						Message: "Update failed",
+						Error:   fmt.Errorf("%s", op.ErrorMessage),
+					}
+				}
+
+				// Still in progress (validating, pulling, etc.), keep waiting
+			}
 		}
 	}
 }
@@ -428,6 +481,7 @@ func (m ProgressModel) renderLogs() string {
 func (m ProgressModel) renderHelp() string {
 	if m.completed {
 		bindings := []KeyBinding{
+			{"b", "back to menu"},
 			{"q", "quit"},
 		}
 		return formatHelp(bindings)

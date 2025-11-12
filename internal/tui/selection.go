@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -93,6 +94,11 @@ func (m SelectionModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+
+	case "r":
+		// Recheck for updates - re-run discovery
+		discoveryModel := NewDiscoveryModel(m.discoveryOrch, m.updateOrch, context.Background())
+		return discoveryModel, discoveryModel.Init()
 
 	case "up", "k":
 		if m.cursor > 0 {
@@ -324,16 +330,27 @@ func (m SelectionModel) getSelectedList() []string {
 
 // View renders the selection screen
 func (m SelectionModel) View() string {
-	if len(m.visibleContainers) == 0 {
-		return m.renderEmpty()
-	}
-
 	// Build the view
 	var sections []string
 
 	// Title
 	title := TitleStyle.Render("Select Containers to Update")
 	sections = append(sections, title)
+
+	if len(m.visibleContainers) == 0 {
+		// Empty state with help
+		sections = append(sections, m.renderEmpty())
+
+		// Help footer for empty state
+		bindings := []KeyBinding{
+			{"r", "recheck for updates"},
+			{"q", "quit"},
+		}
+		help := formatHelp(bindings)
+		sections = append(sections, help)
+
+		return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	}
 
 	// Filters status
 	filterStatus := m.renderFilterStatus()
@@ -448,6 +465,11 @@ func (m SelectionModel) renderContainerList() string {
 func (m SelectionModel) getGroupName(container update.ContainerInfo) string {
 	switch m.grouping {
 	case GroupBySeverity:
+		// Check status first - migrations should be separate from rebuilds
+		if container.Status == update.UpToDatePinnable {
+			return "Tag Migrations"
+		}
+
 		switch container.ChangeType {
 		case version.MajorChange:
 			return "Major Updates"
@@ -524,6 +546,7 @@ func (m SelectionModel) renderHelp() string {
 		{"m", "toggle migrations"},
 		{"B", "bypass check"},
 		{"enter", "continue"},
+		{"r", "recheck"},
 		{"q", "quit"},
 	}
 	return formatHelp(bindings)
