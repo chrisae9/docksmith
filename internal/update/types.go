@@ -19,32 +19,33 @@ const (
 
 // ContainerUpdate represents an update candidate for a container.
 type ContainerUpdate struct {
-	ContainerName      string
-	Image              string
-	CurrentTag         string // The tag portion of the image (e.g., "latest", "v1.2.3")
-	CurrentVersion     string
-	CurrentSuffix      string // Variant suffix (e.g., "tensorrt", "alpine") - used for strict filtering
-	LatestVersion      string
-	CurrentDigest      string // SHA256 digest of current image
-	LatestDigest       string // SHA256 digest of latest (for non-versioned fallback)
-	AvailableTags      []string
-	ChangeType         version.ChangeType
-	Status             UpdateStatus
-	Error              string
-	IsLocal            bool
-	RecommendedTag     string // Recommended semver tag to switch to (if using :latest)
-	UsingLatestTag     bool   // True if container is using :latest tag
-	PreUpdateCheck     string // Path to pre-update check script
-	PreUpdateCheckFail string // Reason why pre-update check failed (if blocked)
+	ContainerName      string              `json:"container_name"`
+	Image              string              `json:"image"`
+	CurrentTag         string              `json:"current_tag,omitempty"` // The tag portion of the image (e.g., "latest", "v1.2.3")
+	CurrentVersion     string              `json:"current_version,omitempty"`
+	CurrentSuffix      string              `json:"current_suffix,omitempty"` // Variant suffix (e.g., "tensorrt", "alpine") - used for strict filtering
+	LatestVersion      string              `json:"latest_version,omitempty"`
+	CurrentDigest      string              `json:"current_digest,omitempty"` // SHA256 digest of current image
+	LatestDigest       string              `json:"latest_digest,omitempty"`  // SHA256 digest of latest (for non-versioned fallback)
+	AvailableTags      []string            `json:"available_tags,omitempty"`
+	ChangeType         version.ChangeType  `json:"change_type"`
+	Status             UpdateStatus        `json:"status"`
+	Error              string              `json:"error,omitempty"`
+	IsLocal            bool                `json:"is_local"`
+	RecommendedTag     string              `json:"recommended_tag,omitempty"` // Recommended semver tag to switch to (if using :latest)
+	UsingLatestTag     bool                `json:"using_latest_tag"`
+	PreUpdateCheck     string              `json:"pre_update_check,omitempty"`      // Path to pre-update check script
+	PreUpdateCheckFail string              `json:"pre_update_check_fail,omitempty"` // Reason why pre-update check failed (if blocked)
+	PreUpdateCheckPass bool                `json:"pre_update_check_pass"`           // True if pre-update check passed
 }
 
 // CheckResult contains the results of checking for updates.
 type CheckResult struct {
-	Updates        []ContainerUpdate
-	TotalChecked   int
-	UpdatesFound   int
-	UpToDate       int
-	LocalImages    int
-	Failed         int
-	Ignored        int
+	Updates      []ContainerUpdate `json:"updates"`
+	TotalChecked int               `json:"total_checked"`
+	UpdatesFound int               `json:"updates_found"`
+	UpToDate     int               `json:"up_to_date"`
+	LocalImages  int               `json:"local_images"`
+	Failed       int               `json:"failed"`
+	Ignored      int               `json:"ignored"`
 }

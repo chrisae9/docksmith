@@ -483,6 +483,110 @@ func (s *SQLiteStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, e
 	return history, nil
 }
 
+// GetAllCheckHistory retrieves check history for all containers.
+// Returns entries ordered by check_time DESC (most recent first).
+func (s *SQLiteStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]CheckHistoryEntry, error) {
+	query := `
+		SELECT id, container_name, image, check_time, current_version, latest_version, status, error
+		FROM check_history
+		ORDER BY check_time DESC
+	`
+
+	// Add limit if specified
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf("Failed to query all check history: %v", err)
+		return nil, fmt.Errorf("failed to query all check history: %w", err)
+	}
+	defer rows.Close()
+
+	var history []CheckHistoryEntry
+	for rows.Next() {
+		var entry CheckHistoryEntry
+		var errorMsg sql.NullString
+
+		err := rows.Scan(
+			&entry.ID,
+			&entry.ContainerName,
+			&entry.Image,
+			&entry.CheckTime,
+			&entry.CurrentVersion,
+			&entry.LatestVersion,
+			&entry.Status,
+			&errorMsg,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan check history entry: %w", err)
+		}
+
+		if errorMsg.Valid {
+			entry.Error = errorMsg.String
+		}
+
+		history = append(history, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating check history rows: %w", err)
+	}
+
+	return history, nil
+}
+
+// GetCheckHistorySince retrieves check history since a specific time.
+// Returns entries ordered by check_time DESC (most recent first).
+func (s *SQLiteStorage) GetCheckHistorySince(ctx context.Context, since time.Time) ([]CheckHistoryEntry, error) {
+	query := `
+		SELECT id, container_name, image, check_time, current_version, latest_version, status, error
+		FROM check_history
+		WHERE check_time >= ?
+		ORDER BY check_time DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, since)
+	if err != nil {
+		log.Printf("Failed to query check history since %v: %v", since, err)
+		return nil, fmt.Errorf("failed to query check history since: %w", err)
+	}
+	defer rows.Close()
+
+	var history []CheckHistoryEntry
+	for rows.Next() {
+		var entry CheckHistoryEntry
+		var errorMsg sql.NullString
+
+		err := rows.Scan(
+			&entry.ID,
+			&entry.ContainerName,
+			&entry.Image,
+			&entry.CheckTime,
+			&entry.CurrentVersion,
+			&entry.LatestVersion,
+			&entry.Status,
+			&errorMsg,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan check history entry: %w", err)
+		}
+
+		if errorMsg.Valid {
+			entry.Error = errorMsg.String
+		}
+
+		history = append(history, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating check history rows: %w", err)
+	}
+
+	return history, nil
+}
+
 // LogUpdate implements Storage.LogUpdate.
 // Records an update operation in the audit log (append-only).
 // Validates that operation is one of: pull, restart, rollback.
@@ -537,6 +641,60 @@ func (s *SQLiteStorage) GetUpdateLog(ctx context.Context, containerName string, 
 	if err != nil {
 		log.Printf("Failed to query update log for %s: %v", containerName, err)
 		return nil, fmt.Errorf("failed to query update log: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []UpdateLogEntry
+	for rows.Next() {
+		var entry UpdateLogEntry
+		var errorMsg sql.NullString
+
+		err := rows.Scan(
+			&entry.ID,
+			&entry.ContainerName,
+			&entry.Operation,
+			&entry.FromVersion,
+			&entry.ToVersion,
+			&entry.Timestamp,
+			&entry.Success,
+			&errorMsg,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan update log entry: %w", err)
+		}
+
+		if errorMsg.Valid {
+			entry.Error = errorMsg.String
+		}
+
+		logs = append(logs, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating update log rows: %w", err)
+	}
+
+	return logs, nil
+}
+
+// GetAllUpdateLog retrieves update log for all containers.
+// Returns entries ordered by timestamp DESC (most recent first).
+func (s *SQLiteStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]UpdateLogEntry, error) {
+	query := `
+		SELECT id, container_name, operation, from_version, to_version, timestamp, success, error
+		FROM update_log
+		ORDER BY timestamp DESC
+	`
+
+	// Add limit if specified
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf("Failed to query all update log: %v", err)
+		return nil, fmt.Errorf("failed to query all update log: %w", err)
 	}
 	defer rows.Close()
 
@@ -1084,6 +1242,164 @@ func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]U
 	return operations, nil
 }
 
+// GetUpdateOperationsByContainer retrieves update operations for a specific container.
+// Returns entries ordered by started_at DESC (most recent first).
+func (s *SQLiteStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]UpdateOperation, error) {
+	query := `
+		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
+		       old_version, new_version, started_at, completed_at, error_message,
+		       dependents_affected, rollback_occurred, created_at, updated_at
+		FROM update_operations
+		WHERE container_name = ?
+		ORDER BY started_at DESC
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, containerName)
+	if err != nil {
+		log.Printf("Failed to query update operations for %s: %v", containerName, err)
+		return nil, fmt.Errorf("failed to query update operations: %w", err)
+	}
+	defer rows.Close()
+
+	var operations []UpdateOperation
+	for rows.Next() {
+		var op UpdateOperation
+		var dependentsJSON string
+		var startedAt, completedAt sql.NullTime
+		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
+
+		err := rows.Scan(
+			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
+			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
+			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan update operation: %w", err)
+		}
+
+		// Handle nullable fields
+		if containerID.Valid {
+			op.ContainerID = containerID.String
+		}
+		if stackName.Valid {
+			op.StackName = stackName.String
+		}
+		if oldVersion.Valid {
+			op.OldVersion = oldVersion.String
+		}
+		if newVersion.Valid {
+			op.NewVersion = newVersion.String
+		}
+		if errorMessage.Valid {
+			op.ErrorMessage = errorMessage.String
+		}
+		if startedAt.Valid {
+			op.StartedAt = &startedAt.Time
+		}
+		if completedAt.Valid {
+			op.CompletedAt = &completedAt.Time
+		}
+
+		// Deserialize dependents affected from JSON
+		if dependentsJSON != "" {
+			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
+			if err != nil {
+				log.Printf("Failed to deserialize dependents affected: %v", err)
+				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
+			}
+		}
+
+		operations = append(operations, op)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating update operations rows: %w", err)
+	}
+
+	return operations, nil
+}
+
+// GetUpdateOperationsByTimeRange retrieves update operations within a time range.
+// Returns entries ordered by started_at DESC (most recent first).
+func (s *SQLiteStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]UpdateOperation, error) {
+	query := `
+		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
+		       old_version, new_version, started_at, completed_at, error_message,
+		       dependents_affected, rollback_occurred, created_at, updated_at
+		FROM update_operations
+		WHERE started_at >= ? AND started_at <= ?
+		ORDER BY started_at DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, start, end)
+	if err != nil {
+		log.Printf("Failed to query update operations by time range: %v", err)
+		return nil, fmt.Errorf("failed to query update operations by time range: %w", err)
+	}
+	defer rows.Close()
+
+	var operations []UpdateOperation
+	for rows.Next() {
+		var op UpdateOperation
+		var dependentsJSON string
+		var startedAt, completedAt sql.NullTime
+		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
+
+		err := rows.Scan(
+			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
+			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
+			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan update operation: %w", err)
+		}
+
+		// Handle nullable fields
+		if containerID.Valid {
+			op.ContainerID = containerID.String
+		}
+		if stackName.Valid {
+			op.StackName = stackName.String
+		}
+		if oldVersion.Valid {
+			op.OldVersion = oldVersion.String
+		}
+		if newVersion.Valid {
+			op.NewVersion = newVersion.String
+		}
+		if errorMessage.Valid {
+			op.ErrorMessage = errorMessage.String
+		}
+		if startedAt.Valid {
+			op.StartedAt = &startedAt.Time
+		}
+		if completedAt.Valid {
+			op.CompletedAt = &completedAt.Time
+		}
+
+		// Deserialize dependents affected from JSON
+		if dependentsJSON != "" {
+			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
+			if err != nil {
+				log.Printf("Failed to deserialize dependents affected: %v", err)
+				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
+			}
+		}
+
+		operations = append(operations, op)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating update operations rows: %w", err)
+	}
+
+	return operations, nil
+}
+
 // UpdateOperationStatus implements Storage.UpdateOperationStatus.
 // Updates the status and error message of an operation.
 // Also updates the updated_at timestamp automatically.
@@ -1171,6 +1487,97 @@ func (s *SQLiteStorage) GetComposeBackup(ctx context.Context, operationID string
 
 	log.Printf("Retrieved compose backup: operation=%s, path=%s", backup.OperationID, backup.BackupFilePath)
 	return backup, true, nil
+}
+
+// GetComposeBackupsByContainer retrieves all backups for a specific container.
+// Returns entries ordered by backup_timestamp DESC (most recent first).
+func (s *SQLiteStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]ComposeBackup, error) {
+	query := `
+		SELECT id, operation_id, container_name, stack_name, compose_file_path, backup_file_path, backup_timestamp, created_at
+		FROM compose_backups
+		WHERE container_name = ?
+		ORDER BY backup_timestamp DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, containerName)
+	if err != nil {
+		log.Printf("Failed to query compose backups for %s: %v", containerName, err)
+		return nil, fmt.Errorf("failed to query compose backups: %w", err)
+	}
+	defer rows.Close()
+
+	var backups []ComposeBackup
+	for rows.Next() {
+		var backup ComposeBackup
+		var stackName sql.NullString
+
+		err := rows.Scan(
+			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
+			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
+		}
+
+		if stackName.Valid {
+			backup.StackName = stackName.String
+		}
+
+		backups = append(backups, backup)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
+	}
+
+	return backups, nil
+}
+
+// GetAllComposeBackups retrieves all compose backups.
+// Returns entries ordered by backup_timestamp DESC (most recent first).
+func (s *SQLiteStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]ComposeBackup, error) {
+	query := `
+		SELECT id, operation_id, container_name, stack_name, compose_file_path, backup_file_path, backup_timestamp, created_at
+		FROM compose_backups
+		ORDER BY backup_timestamp DESC
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf("Failed to query all compose backups: %v", err)
+		return nil, fmt.Errorf("failed to query all compose backups: %w", err)
+	}
+	defer rows.Close()
+
+	var backups []ComposeBackup
+	for rows.Next() {
+		var backup ComposeBackup
+		var stackName sql.NullString
+
+		err := rows.Scan(
+			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
+			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
+		}
+
+		if stackName.Valid {
+			backup.StackName = stackName.String
+		}
+
+		backups = append(backups, backup)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
+	}
+
+	return backups, nil
 }
 
 // GetRollbackPolicy implements Storage.GetRollbackPolicy.

@@ -530,23 +530,23 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		}
 	}
 
-	// Run pre-update check if configured and update is available or migration to semver is recommended
-	// (because changing from :latest to :v1.2.3 will trigger an update operation)
+	// Run pre-update check if configured - always run to provide health status visibility
 	log.Printf("Container %s: Checking pre-update conditions - status=%s", container.Name, update.Status)
-	if update.Status == UpdateAvailable || update.Status == UpdateAvailableBlocked || update.Status == UpToDatePinnable {
-		if checkScript, found := container.Labels["docksmith.pre-update-check"]; found && checkScript != "" {
-			update.PreUpdateCheck = checkScript
-			log.Printf("Container %s: Running pre-update check: %s", container.Name, checkScript)
+	if checkScript, found := container.Labels["docksmith.pre-update-check"]; found && checkScript != "" {
+		update.PreUpdateCheck = checkScript
+		log.Printf("Container %s: Running pre-update check: %s", container.Name, checkScript)
 
-			success, reason := c.runPreUpdateCheck(ctx, checkScript, container.Name)
-			if !success {
-				log.Printf("Container %s: Pre-update check failed: %s", container.Name, reason)
-				// Mark as blocked since any operation (update or semver migration) would trigger a container update
+		success, reason := c.runPreUpdateCheck(ctx, checkScript, container.Name)
+		if !success {
+			log.Printf("Container %s: Pre-update check failed: %s", container.Name, reason)
+			update.PreUpdateCheckFail = reason
+			// Only block if there's actually an update or semver migration available
+			if update.Status == UpdateAvailable || update.Status == UpToDatePinnable {
 				update.Status = UpdateAvailableBlocked
-				update.PreUpdateCheckFail = reason
-			} else {
-				log.Printf("Container %s: Pre-update check passed", container.Name)
 			}
+		} else {
+			log.Printf("Container %s: Pre-update check passed", container.Name)
+			update.PreUpdateCheckPass = true
 		}
 	}
 

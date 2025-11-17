@@ -12,11 +12,15 @@ import (
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/graph"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
 	"github.com/chis/docksmith/internal/version"
 )
+
+// GlobalJSONMode indicates whether JSON output mode is enabled
+var GlobalJSONMode bool
 
 // ContainerRegistryInfo contains registry information for a container.
 type ContainerRegistryInfo struct {
@@ -140,12 +144,25 @@ func runCheckCommand(token string) {
 }
 
 func main() {
+	// Parse global --json flag early
+	// We need to check for it before processing commands
+	for _, arg := range os.Args[1:] {
+		if arg == "--json" || arg == "-json" {
+			GlobalJSONMode = true
+			break
+		}
+	}
+
 	// Default to interactive mode if no args or only flags
 	if len(os.Args) == 1 || (len(os.Args) > 1 && os.Args[1][0] == '-') {
 		cmd := NewApplyCommand()
 		// Parse flags if provided
 		if len(os.Args) > 1 {
 			if err := cmd.ParseFlags(os.Args[1:]); err != nil {
+				if GlobalJSONMode {
+					output.WriteJSONError(os.Stdout, err)
+					os.Exit(1)
+				}
 				log.Fatalf("Failed to parse flags: %v", err)
 			}
 		}
@@ -154,6 +171,10 @@ func main() {
 		defer cancel()
 
 		if err := cmd.Run(ctx); err != nil {
+			if GlobalJSONMode {
+				output.WriteJSONError(os.Stdout, err)
+				os.Exit(1)
+			}
 			log.Fatalf("Interactive mode failed: %v", err)
 		}
 		return
@@ -186,6 +207,84 @@ func main() {
 		return
 	}
 
+	// Handle operations command
+	if command == "operations" {
+		cmd := NewOperationsCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("Operations command failed: %v", err)
+		}
+		return
+	}
+
+	// Handle history command
+	if command == "history" {
+		cmd := NewHistoryCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("History command failed: %v", err)
+		}
+		return
+	}
+
+	// Handle backups command
+	if command == "backups" {
+		cmd := NewBackupsCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("Backups command failed: %v", err)
+		}
+		return
+	}
+
+	// Handle rollback command
+	if command == "rollback" {
+		cmd := NewRollbackCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("Rollback command failed: %v", err)
+		}
+		return
+	}
+
+	// Handle API server command
+	if command == "api" {
+		cmd := NewAPICommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("API server failed: %v", err)
+		}
+		return
+	}
+
 	// Handle debug command (old default behavior)
 	if command == "debug" {
 		runDebugMode()
@@ -193,7 +292,7 @@ func main() {
 	}
 
 	// Unknown command
-	log.Fatalf("Unknown command: %s\nAvailable commands: check, update, debug\nRun with no arguments for interactive mode", command)
+	log.Fatalf("Unknown command: %s\nAvailable commands: check, update, operations, history, backups, rollback, api, debug\nRun with no arguments for interactive mode", command)
 }
 
 // runDebugMode runs the debug/analysis mode (old default behavior)

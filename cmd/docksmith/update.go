@@ -9,6 +9,7 @@ import (
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
@@ -96,6 +97,17 @@ func runUpdateCommand(args []string) error {
 			if upd.ContainerName == containerName {
 				currentVer = upd.CurrentVersion
 				if upd.Status != update.UpdateAvailable {
+					if GlobalJSONMode {
+						// Return JSON with up-to-date status
+						output.WriteJSONData(os.Stdout, map[string]interface{}{
+							"container_name":  containerName,
+							"current_version": currentVer,
+							"status":          "up_to_date",
+							"message":         "Container is already up to date",
+						})
+						return nil
+					}
+
 					log.Printf("✓ Container '%s' is already up to date", containerName)
 					log.Printf("  Current version: %s", currentVer)
 					return nil
@@ -181,6 +193,11 @@ func runUpdateCommand(args []string) error {
 
 			// Check if complete
 			if op.Status == "completed" || op.Status == "complete" {
+				if GlobalJSONMode {
+					// Output JSON response with operation details
+					return output.WriteJSONData(os.Stdout, op)
+				}
+
 				log.Println("\n✓ === UPDATE COMPLETED SUCCESSFULLY ===")
 				log.Printf("  Container: %s", containerName)
 				log.Printf("  Old version: %s", op.OldVersion)
@@ -195,6 +212,11 @@ func runUpdateCommand(args []string) error {
 			}
 
 			if op.Status == "failed" {
+				if GlobalJSONMode {
+					// Output JSON error response with operation details
+					return output.WriteJSONData(os.Stdout, op)
+				}
+
 				log.Println("\n✗ === UPDATE FAILED ===")
 				log.Printf("  Error: %s", op.ErrorMessage)
 				log.Printf("  Final status: %s", op.Status)

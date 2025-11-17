@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
@@ -52,9 +52,9 @@ func NewCheckCommand() *CheckCommand {
 func (c *CheckCommand) ParseFlags(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 
-	var jsonFlag string
+	var jsonFlag bool
 	fs.StringVar(&c.options.OutputFormat, "format", c.options.OutputFormat, "Output format: table, json")
-	fs.StringVar(&jsonFlag, "json", "", "Shorthand for --format=json (use --json=true)")
+	fs.BoolVar(&jsonFlag, "json", false, "Output in JSON format (global flag)")
 	fs.StringVar(&c.options.FilterName, "filter", "", "Filter by container name")
 	fs.StringVar(&c.options.FilterStack, "stack", "", "Filter by stack name")
 	fs.StringVar(&c.options.FilterType, "type", "", "Filter by update type: major, minor, patch")
@@ -70,8 +70,8 @@ func (c *CheckCommand) ParseFlags(args []string) error {
 		return err
 	}
 
-	// Handle --json flag
-	if jsonFlag == "true" || jsonFlag == "1" {
+	// Set JSON mode if either global flag or local flag is set
+	if GlobalJSONMode || jsonFlag {
 		c.options.OutputFormat = "json"
 	}
 
@@ -247,9 +247,7 @@ func (c *CheckCommand) matchesFilter(container update.ContainerInfo) bool {
 
 // outputJSON outputs results in JSON format
 func (c *CheckCommand) outputJSON(result *update.DiscoveryResult) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(result)
+	return output.WriteJSONData(os.Stdout, result)
 }
 
 // outputTable outputs results in human-readable table format
@@ -340,9 +338,13 @@ func (c *CheckCommand) displayContainer(container update.ContainerInfo) {
 		fmt.Printf("    → Migrate to: %s\n", container.RecommendedTag)
 	}
 
-	// Show block reason for blocked updates (always visible, not just in verbose)
-	if container.Status == update.UpdateAvailableBlocked && container.PreUpdateCheckFail != "" {
-		fmt.Printf("    ⚠ Blocked: %s\n", container.PreUpdateCheckFail)
+	// Show pre-update check status (always visible, not just in verbose)
+	if container.PreUpdateCheck != "" {
+		if container.Status == update.UpdateAvailableBlocked && container.PreUpdateCheckFail != "" {
+			fmt.Printf("    ⚠ Pre-update check failed: %s\n", container.PreUpdateCheckFail)
+		} else if container.PreUpdateCheckPass {
+			fmt.Printf("    ✓ Pre-update check passed\n")
+		}
 	}
 
 	if c.options.Verbose {

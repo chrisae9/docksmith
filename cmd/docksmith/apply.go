@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/tui"
@@ -33,12 +34,23 @@ func NewApplyCommand() *ApplyCommand {
 func (c *ApplyCommand) ParseFlags(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 
+	var jsonFlag bool
+	fs.BoolVar(&jsonFlag, "json", false, "Output in JSON format (global flag)")
 	fs.StringVar(&c.filterName, "filter", "", "Pre-filter by container name")
 	fs.StringVar(&c.filterStack, "stack", "", "Pre-filter by stack name")
 	fs.StringVar(&c.filterType, "type", "", "Pre-filter by change type (major, minor, patch)")
 	fs.BoolVar(&c.verbose, "verbose", false, "Show debug logs during discovery")
 
-	return fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Update global mode if local flag is set
+	if jsonFlag {
+		GlobalJSONMode = true
+	}
+
+	return nil
 }
 
 // Run executes the apply command (interactive mode)
@@ -87,7 +99,26 @@ func (c *ApplyCommand) Run(ctx context.Context) error {
 		)
 	}
 
-	// Step 6 & 7: Launch TUI with discovery screen
+	// Step 6: Check if JSON mode is enabled
+	if GlobalJSONMode {
+		// JSON mode: Run discovery and return results without TUI
+		if c.verbose {
+			log.Println("Running discovery in JSON mode...")
+		}
+
+		discoveryResult, err := discoveryOrchestrator.DiscoverAndCheck(ctx)
+		if err != nil {
+			if c.verbose {
+				log.Printf("Discovery failed: %v", err)
+			}
+			return output.WriteJSONError(os.Stdout, err)
+		}
+
+		// Return discovery result as JSON
+		return output.WriteJSONData(os.Stdout, discoveryResult)
+	}
+
+	// Step 7: Launch TUI with discovery screen (normal interactive mode)
 	// The discovery screen will run the discovery process and show logs in real-time
 	discoveryModel := tui.NewDiscoveryModel(discoveryOrchestrator, updateOrchestrator, ctx)
 	program := tea.NewProgram(discoveryModel, tea.WithAltScreen())

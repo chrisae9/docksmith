@@ -46,6 +46,18 @@ type Storage interface {
 	//   - limit: Maximum number of entries to return
 	GetCheckHistory(ctx context.Context, containerName string, limit int) ([]CheckHistoryEntry, error)
 
+	// GetAllCheckHistory retrieves check history for all containers.
+	// Returns entries ordered by check_time DESC (most recent first).
+	// Parameters:
+	//   - limit: Maximum number of entries to return (0 for no limit)
+	GetAllCheckHistory(ctx context.Context, limit int) ([]CheckHistoryEntry, error)
+
+	// GetCheckHistorySince retrieves check history since a specific time.
+	// Returns entries ordered by check_time DESC (most recent first).
+	// Parameters:
+	//   - since: Time to query from (inclusive)
+	GetCheckHistorySince(ctx context.Context, since time.Time) ([]CheckHistoryEntry, error)
+
 	// GetCheckHistoryByTimeRange retrieves check history within a time range.
 	// Returns entries ordered by check_time DESC (most recent first).
 	// Parameters:
@@ -69,6 +81,12 @@ type Storage interface {
 	//   - containerName: Name of the container to query
 	//   - limit: Maximum number of entries to return
 	GetUpdateLog(ctx context.Context, containerName string, limit int) ([]UpdateLogEntry, error)
+
+	// GetAllUpdateLog retrieves update log for all containers.
+	// Returns entries ordered by timestamp DESC (most recent first).
+	// Parameters:
+	//   - limit: Maximum number of entries to return (0 for no limit)
+	GetAllUpdateLog(ctx context.Context, limit int) ([]UpdateLogEntry, error)
 
 	// GetConfig retrieves a configuration value by key.
 	// Returns:
@@ -124,6 +142,20 @@ type Storage interface {
 	//   - limit: Maximum number of entries to return (0 for no limit)
 	GetUpdateOperations(ctx context.Context, limit int) ([]UpdateOperation, error)
 
+	// GetUpdateOperationsByContainer retrieves update operations for a specific container.
+	// Returns entries ordered by started_at DESC (most recent first).
+	// Parameters:
+	//   - containerName: Name of the container to query
+	//   - limit: Maximum number of entries to return (0 for no limit)
+	GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]UpdateOperation, error)
+
+	// GetUpdateOperationsByTimeRange retrieves update operations within a time range.
+	// Returns entries ordered by started_at DESC (most recent first).
+	// Parameters:
+	//   - start: Start of time range (inclusive)
+	//   - end: End of time range (inclusive)
+	GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]UpdateOperation, error)
+
 	// GetUpdateOperationsByStatus retrieves update operations filtered by status.
 	// Returns entries ordered by created_at DESC (most recent first).
 	// Parameters:
@@ -151,6 +183,18 @@ type Storage interface {
 	//   - found: True if the backup exists
 	//   - err: Any error that occurred during lookup
 	GetComposeBackup(ctx context.Context, operationID string) (ComposeBackup, bool, error)
+
+	// GetComposeBackupsByContainer retrieves all backups for a specific container.
+	// Returns entries ordered by backup_timestamp DESC (most recent first).
+	// Parameters:
+	//   - containerName: Name of the container to query
+	GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]ComposeBackup, error)
+
+	// GetAllComposeBackups retrieves all compose backups.
+	// Returns entries ordered by backup_timestamp DESC (most recent first).
+	// Parameters:
+	//   - limit: Maximum number of entries to return (0 for no limit)
+	GetAllComposeBackups(ctx context.Context, limit int) ([]ComposeBackup, error)
 
 	// GetRollbackPolicy retrieves the rollback policy for an entity.
 	// Parameters:
@@ -192,92 +236,92 @@ type Storage interface {
 
 // CheckHistoryEntry represents a single check operation result.
 type CheckHistoryEntry struct {
-	ID             int64
-	ContainerName  string
-	Image          string
-	CheckTime      time.Time
-	CurrentVersion string
-	LatestVersion  string
-	Status         string
-	Error          string
+	ID             int64     `json:"id"`
+	ContainerName  string    `json:"container_name"`
+	Image          string    `json:"image"`
+	CheckTime      time.Time `json:"check_time"`
+	CurrentVersion string    `json:"current_version,omitempty"`
+	LatestVersion  string    `json:"latest_version,omitempty"`
+	Status         string    `json:"status"`
+	Error          string    `json:"error,omitempty"`
 }
 
 // UpdateLogEntry represents a single update operation result.
 type UpdateLogEntry struct {
-	ID            int64
-	ContainerName string
-	Operation     string
-	FromVersion   string
-	ToVersion     string
-	Timestamp     time.Time
-	Success       bool
-	Error         string
+	ID            int64     `json:"id"`
+	ContainerName string    `json:"container_name"`
+	Operation     string    `json:"operation"`
+	FromVersion   string    `json:"from_version,omitempty"`
+	ToVersion     string    `json:"to_version,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+	Success       bool      `json:"success"`
+	Error         string    `json:"error,omitempty"`
 }
 
 // ConfigSnapshot represents a complete configuration state at a point in time.
 // Used for configuration rollback and audit trail.
 type ConfigSnapshot struct {
-	ID           int64
-	SnapshotTime time.Time
-	ConfigData   map[string]string
-	ChangedBy    string
-	CreatedAt    time.Time
+	ID           int64             `json:"id"`
+	SnapshotTime time.Time         `json:"snapshot_time"`
+	ConfigData   map[string]string `json:"config_data"`
+	ChangedBy    string            `json:"changed_by"`
+	CreatedAt    time.Time         `json:"created_at"`
 }
 
 // UpdateOperation represents a container update operation with full state tracking.
 // Tracks progress through all stages of the update workflow.
 type UpdateOperation struct {
-	ID                 int64
-	OperationID        string
-	ContainerID        string
-	ContainerName      string
-	StackName          string
-	OperationType      string // single, batch, stack
-	Status             string // queued, validating, backup, updating_compose, pulling_image, stopping, starting, health_check, restarting_dependents, complete, failed, rolling_back, cancelled
-	OldVersion         string
-	NewVersion         string
-	StartedAt          *time.Time
-	CompletedAt        *time.Time
-	ErrorMessage       string
-	DependentsAffected []string // JSON array of container names
-	RollbackOccurred   bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                 int64      `json:"id"`
+	OperationID        string     `json:"operation_id"`
+	ContainerID        string     `json:"container_id"`
+	ContainerName      string     `json:"container_name"`
+	StackName          string     `json:"stack_name,omitempty"`
+	OperationType      string     `json:"operation_type"` // single, batch, stack
+	Status             string     `json:"status"`         // queued, validating, backup, updating_compose, pulling_image, stopping, starting, health_check, restarting_dependents, complete, failed, rolling_back, cancelled
+	OldVersion         string     `json:"old_version,omitempty"`
+	NewVersion         string     `json:"new_version"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	ErrorMessage       string     `json:"error_message,omitempty"`
+	DependentsAffected []string   `json:"dependents_affected,omitempty"` // JSON array of container names
+	RollbackOccurred   bool       `json:"rollback_occurred"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // ComposeBackup represents metadata for a compose file backup.
 // Links to an update operation for rollback capability.
 type ComposeBackup struct {
-	ID              int64
-	OperationID     string
-	ContainerName   string
-	StackName       string
-	ComposeFilePath string
-	BackupFilePath  string
-	BackupTimestamp time.Time
-	CreatedAt       time.Time
+	ID              int64     `json:"id"`
+	OperationID     string    `json:"operation_id"`
+	ContainerName   string    `json:"container_name"`
+	StackName       string    `json:"stack_name,omitempty"`
+	ComposeFilePath string    `json:"compose_file_path"`
+	BackupFilePath  string    `json:"backup_file_path"`
+	BackupTimestamp time.Time `json:"backup_timestamp"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // RollbackPolicy represents auto-rollback configuration at various levels.
 // Supports hierarchical policy resolution: container > stack > global.
 type RollbackPolicy struct {
-	ID                   int64
-	EntityType           string // global, container, stack
-	EntityID             string // container or stack name, empty for global
-	AutoRollbackEnabled  bool
-	HealthCheckRequired  bool
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                   int64     `json:"id"`
+	EntityType           string    `json:"entity_type"`            // global, container, stack
+	EntityID             string    `json:"entity_id,omitempty"`    // container or stack name, empty for global
+	AutoRollbackEnabled  bool      `json:"auto_rollback_enabled"`
+	HealthCheckRequired  bool      `json:"health_check_required"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // UpdateQueue represents a queued update operation waiting for stack lock.
 // Implements FIFO queue with persistence across restarts.
 type UpdateQueue struct {
-	ID                 int64
-	OperationID        string
-	StackName          string
-	Containers         []string // JSON array of container names
-	Priority           int
-	QueuedAt           time.Time
-	EstimatedStartTime *time.Time
+	ID                 int64      `json:"id"`
+	OperationID        string     `json:"operation_id"`
+	StackName          string     `json:"stack_name"`
+	Containers         []string   `json:"containers"` // JSON array of container names
+	Priority           int        `json:"priority"`
+	QueuedAt           time.Time  `json:"queued_at"`
+	EstimatedStartTime *time.Time `json:"estimated_start_time,omitempty"`
 }

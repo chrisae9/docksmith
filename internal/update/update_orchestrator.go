@@ -114,6 +114,12 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 		return operationID, nil
 	}
 
+	// Extract current version from container's image tag
+	currentVersion := ""
+	if parts := strings.Split(targetContainer.Image, ":"); len(parts) >= 2 {
+		currentVersion = parts[len(parts)-1]
+	}
+
 	op := storage.UpdateOperation{
 		OperationID:   operationID,
 		ContainerID:   targetContainer.ID,
@@ -121,6 +127,7 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 		StackName:     stackName,
 		OperationType: "single",
 		Status:        "validating",
+		OldVersion:    currentVersion,
 		NewVersion:    targetVersion,
 	}
 
@@ -414,35 +421,184 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string) {
 	defer o.releaseStackLock(stackName)
 
+	// Filter containers that have target versions
+	updateContainers := make([]*docker.Container, 0)
+	for _, container := range containers {
+		if targetVersions != nil {
+			if _, ok := targetVersions[container.Name]; ok {
+				updateContainers = append(updateContainers, container)
+			}
+		}
+	}
+
+	if len(updateContainers) == 0 {
+		o.publishProgress(operationID, "", stackName, "complete", 100, "No containers to update")
+		return
+	}
+
+	// Phase 1: Backup and update all compose files first (10-30%)
+	o.publishProgress(operationID, "", stackName, "backup", 10, fmt.Sprintf("Backing up %d compose files", len(updateContainers)))
+
+	backupPaths := make(map[string]string)
+	for i, container := range updateContainers {
+		progress := 10 + (i * 20 / len(updateContainers))
+		o.publishProgress(operationID, container.Name, stackName, "backup", progress, fmt.Sprintf("Backing up %s", container.Name))
+
+		backupPath, err := o.backupComposeFile(ctx, operationID, container)
+		if err != nil {
+			o.failOperation(ctx, operationID, "backup", fmt.Sprintf("Failed to backup %s: %v", container.Name, err))
+			return
+		}
+		backupPaths[container.Name] = backupPath
+
+		// Update compose file with new version
+		if backupPath != "" {
+			targetVersion := targetVersions[container.Name]
+			composeFilePath := o.getComposeFilePath(container)
+			resolvedPath, err := o.resolveComposeFile(composeFilePath)
+			if err != nil {
+				o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Failed to resolve compose for %s: %v", container.Name, err))
+				return
+			}
+
+			if err := o.updateComposeFile(ctx, resolvedPath, container, targetVersion); err != nil {
+				o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Failed to update compose for %s: %v", container.Name, err))
+				return
+			}
+		}
+	}
+
+	// Phase 2: Pull all images (30-60%)
+	o.publishProgress(operationID, "", stackName, "pulling_image", 30, fmt.Sprintf("Pulling %d images", len(updateContainers)))
+
+	for i, container := range updateContainers {
+		targetVersion := targetVersions[container.Name]
+		newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
+
+		progress := 30 + (i * 30 / len(updateContainers))
+		o.publishProgress(operationID, container.Name, stackName, "pulling_image", progress, fmt.Sprintf("Pulling %s", newImageRef))
+
+		progressChan := make(chan PullProgress, 10)
+		pullDone := make(chan error, 1)
+
+		go func() {
+			pullDone <- o.pullImage(ctx, newImageRef, progressChan)
+			close(progressChan)
+		}()
+
+		// Drain progress channel
+		for range progressChan {
+		}
+
+		if err := <-pullDone; err != nil {
+			log.Printf("BATCH UPDATE: Warning - failed to pull %s: %v", newImageRef, err)
+		}
+	}
+
+	// Phase 3: Recreate all containers respecting dependency order (60-90%)
+	o.publishProgress(operationID, "", stackName, "recreating", 60, "Recreating containers in dependency order")
+
+	// Build dependency graph
+	allContainers, _ := o.dockerClient.ListContainers(ctx)
+	depGraph := o.graphBuilder.BuildFromContainers(allContainers)
+	updateOrder, _ := depGraph.GetUpdateOrder()
+
+	// Order our containers by dependency order
+	orderedContainers := make([]*docker.Container, 0)
+	containerMap := make(map[string]*docker.Container)
+	for _, c := range updateContainers {
+		containerMap[c.Name] = c
+	}
+
+	for _, name := range updateOrder {
+		if c, found := containerMap[name]; found {
+			orderedContainers = append(orderedContainers, c)
+		}
+	}
+
+	// If not in dependency graph, add remaining
+	if len(orderedContainers) < len(updateContainers) {
+		for _, c := range updateContainers {
+			found := false
+			for _, oc := range orderedContainers {
+				if oc.Name == c.Name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				orderedContainers = append(orderedContainers, c)
+			}
+		}
+	}
+
+	// Stop containers in reverse order (dependents first)
+	o.publishProgress(operationID, "", stackName, "recreating", 65, "Stopping containers")
+	for i := len(orderedContainers) - 1; i >= 0; i-- {
+		cont := orderedContainers[i]
+		log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
+		timeout := 10
+		if err := o.dockerSDK.ContainerStop(ctx, cont.Name, container.StopOptions{Timeout: &timeout}); err != nil {
+			log.Printf("BATCH UPDATE: Warning - failed to stop %s: %v", cont.Name, err)
+		}
+	}
+
+	// Remove and recreate in dependency order
 	successCount := 0
 	failCount := 0
 
-	for i, container := range containers {
-		progress := (i * 100) / len(containers)
-		o.publishProgress(operationID, container.Name, stackName, "processing", progress, fmt.Sprintf("Processing %s (%d/%d)", container.Name, i+1, len(containers)))
+	for i, cont := range orderedContainers {
+		targetVersion := targetVersions[cont.Name]
+		newImageRef := strings.Split(cont.Image, ":")[0] + ":" + targetVersion
 
-		// Get target version from map, skip if not provided
-		targetVersion := ""
-		if targetVersions != nil {
-			if v, ok := targetVersions[container.Name]; ok {
-				targetVersion = v
-			}
-		}
+		progress := 70 + (i * 20 / len(orderedContainers))
+		o.publishProgress(operationID, cont.Name, stackName, "recreating", progress, fmt.Sprintf("Recreating %s", cont.Name))
 
-		// Skip containers without a detected update version
-		if targetVersion == "" {
-			o.publishProgress(operationID, container.Name, stackName, "skipped", progress, fmt.Sprintf("Skipping %s (no update available)", container.Name))
+		inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
+		if err != nil {
+			log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
+			failCount++
 			continue
 		}
 
-		childOpID := uuid.New().String()
-		o.executeSingleUpdate(ctx, childOpID, container, targetVersion, stackName)
-
-		childOp, found, _ := o.storage.GetUpdateOperation(ctx, childOpID)
-		if found && childOp.Status == "complete" {
-			successCount++
-		} else {
+		// Remove container
+		if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, container.RemoveOptions{}); err != nil {
+			log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
 			failCount++
+			continue
+		}
+
+		// Create with new image
+		newConfig := inspect.Config
+		newConfig.Image = newImageRef
+		networkingConfig := &network.NetworkingConfig{
+			EndpointsConfig: inspect.NetworkSettings.Networks,
+		}
+
+		if _, err := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name); err != nil {
+			log.Printf("BATCH UPDATE: Failed to create %s: %v", cont.Name, err)
+			failCount++
+			continue
+		}
+
+		// Start container
+		if err := o.dockerSDK.ContainerStart(ctx, cont.Name, container.StartOptions{}); err != nil {
+			log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
+			failCount++
+			continue
+		}
+
+		log.Printf("BATCH UPDATE: Successfully recreated %s with %s", cont.Name, newImageRef)
+		successCount++
+	}
+
+	// Phase 4: Health check (90-100%)
+	o.publishProgress(operationID, "", stackName, "health_check", 90, "Verifying container health")
+
+	// Wait for all containers to be healthy
+	for _, cont := range orderedContainers {
+		if err := o.waitForHealthy(ctx, cont.Name, o.healthCheckCfg.Timeout); err != nil {
+			log.Printf("BATCH UPDATE: Health check warning for %s: %v", cont.Name, err)
 		}
 	}
 
@@ -955,6 +1111,203 @@ func (o *UpdateOrchestrator) attemptRollback(ctx context.Context, operationID st
 	if shouldRollback {
 		o.rollbackUpdate(ctx, operationID, container, backupPath)
 	}
+}
+
+// RollbackOperation performs a rollback of a previous update operation.
+// Creates a new rollback operation, restores the compose file, and recreates the container.
+func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOperationID string) (string, error) {
+	// Get original operation
+	origOp, found, err := o.storage.GetUpdateOperation(ctx, originalOperationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get operation: %w", err)
+	}
+	if !found {
+		return "", fmt.Errorf("operation not found: %s", originalOperationID)
+	}
+
+	// Get backup
+	backup, found, err := o.storage.GetComposeBackup(ctx, originalOperationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get backup: %w", err)
+	}
+	if !found {
+		return "", fmt.Errorf("no backup found for operation: %s", originalOperationID)
+	}
+
+	// Find the container
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for i := range containers {
+		if containers[i].Name == origOp.ContainerName {
+			targetContainer = &containers[i]
+			break
+		}
+	}
+	if targetContainer == nil {
+		return "", fmt.Errorf("container %s not found", origOp.ContainerName)
+	}
+
+	// Create rollback operation (swapped versions: new becomes old, old becomes new)
+	rollbackOpID := uuid.New().String()
+	rollbackOp := storage.UpdateOperation{
+		OperationID:    rollbackOpID,
+		ContainerID:    targetContainer.ID,
+		ContainerName:  origOp.ContainerName,
+		StackName:      origOp.StackName,
+		OperationType:  "rollback",
+		Status:         "in_progress",
+		OldVersion:     origOp.NewVersion, // Current version (what we're rolling back from)
+		NewVersion:     origOp.OldVersion, // Target version (what we're rolling back to)
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		StartedAt:      func() *time.Time { t := time.Now(); return &t }(),
+	}
+
+	if err := o.storage.SaveUpdateOperation(ctx, rollbackOp); err != nil {
+		return "", fmt.Errorf("failed to save rollback operation: %w", err)
+	}
+
+	// Execute rollback in background with a fresh context (not tied to HTTP request)
+	go o.executeRollback(context.Background(), rollbackOpID, originalOperationID, targetContainer, backup)
+
+	return rollbackOpID, nil
+}
+
+// executeRollback performs the actual rollback process
+func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, originalOpID string, container *docker.Container, backup storage.ComposeBackup) {
+	stackName := container.Labels["com.docker.compose.project"]
+
+	// Stage 1: Restore compose file (10%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "updating_compose", 10, "Restoring compose file from backup")
+
+	composeFilePath := o.getComposeFilePath(container)
+	if composeFilePath != "" {
+		data, err := os.ReadFile(backup.BackupFilePath)
+		if err != nil {
+			o.failOperation(ctx, rollbackOpID, "updating_compose", fmt.Sprintf("Failed to read backup: %v", err))
+			return
+		}
+
+		resolvedPath, err := o.resolveComposeFile(composeFilePath)
+		if err != nil {
+			o.failOperation(ctx, rollbackOpID, "updating_compose", fmt.Sprintf("Failed to resolve compose file: %v", err))
+			return
+		}
+
+		if err := os.WriteFile(resolvedPath, data, 0644); err != nil {
+			o.failOperation(ctx, rollbackOpID, "updating_compose", fmt.Sprintf("Failed to restore compose file: %v", err))
+			return
+		}
+
+		log.Printf("ROLLBACK: Restored compose file from backup for container %s", container.Name)
+	}
+
+	// Stage 2: Extract old image from backup (20%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "validating", 20, "Extracting old image reference")
+
+	var compose map[string]interface{}
+	data, _ := os.ReadFile(backup.BackupFilePath)
+	yaml.Unmarshal(data, &compose)
+
+	oldImageTag := ""
+	serviceName := container.Labels["com.docker.compose.service"]
+	if services, ok := compose["services"].(map[string]interface{}); ok {
+		if service, ok := services[serviceName].(map[string]interface{}); ok {
+			if img, ok := service["image"].(string); ok {
+				oldImageTag = img
+			}
+		}
+	}
+
+	if oldImageTag == "" {
+		o.failOperation(ctx, rollbackOpID, "validating", "Could not extract old image from backup")
+		return
+	}
+
+	log.Printf("ROLLBACK: Old image reference: %s", oldImageTag)
+
+	// Stage 3: Pull old image (30-60%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", 30, fmt.Sprintf("Pulling old image: %s", oldImageTag))
+
+	progressChan := make(chan PullProgress, 10)
+	pullDone := make(chan error, 1)
+
+	go func() {
+		pullDone <- o.pullImage(ctx, oldImageTag, progressChan)
+		close(progressChan) // Close channel when pull is done
+	}()
+
+	// Monitor pull progress
+	for progress := range progressChan {
+		percent := 30
+		if progress.Percent > 0 {
+			percent = 30 + int(float64(progress.Percent)*0.3) // 30-60%
+		}
+		o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", percent, progress.Status)
+	}
+
+	if err := <-pullDone; err != nil {
+		log.Printf("ROLLBACK: Warning - failed to pull old image: %v (may already exist locally)", err)
+	}
+
+	// Stage 4: Recreate container with old image (60-80%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "recreating", 60, "Recreating container with old image")
+
+	if _, err := o.restartContainerWithDependents(ctx, rollbackOpID, container.Name, stackName, oldImageTag); err != nil {
+		o.failOperation(ctx, rollbackOpID, "recreating", fmt.Sprintf("Failed to recreate container: %v", err))
+		return
+	}
+
+	// Stage 5: Health check (80-95%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 80, "Verifying container health")
+
+	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
+		log.Printf("ROLLBACK: Warning - health check failed: %v", err)
+		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 90, fmt.Sprintf("Health check warning: %v", err))
+	} else {
+		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 95, "Health check passed")
+	}
+
+	// Stage 6: Complete (100%)
+	// Update rollback operation status BEFORE publishing complete event
+	// This ensures the database is updated before the CLI sees the event and exits
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, rollbackOpID)
+	if found {
+		op.Status = "complete"
+		op.CompletedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	// Mark original operation as rolled back
+	origOp, found, _ := o.storage.GetUpdateOperation(ctx, originalOpID)
+	if found {
+		origOp.RollbackOccurred = true
+		o.storage.SaveUpdateOperation(ctx, origOp)
+	}
+
+	// Now publish the complete event (CLI will see this and may exit)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "complete", 100, "Rollback completed successfully")
+
+	// Publish container updated event
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"operation_id":   rollbackOpID,
+				"container_id":   container.ID,
+				"container_name": container.Name,
+				"stack_name":     stackName,
+				"status":         "complete",
+			},
+		})
+	}
+
+	log.Printf("ROLLBACK: Successfully completed rollback for container %s", container.Name)
 }
 
 // getComposeFilePath extracts the compose file path from container labels.

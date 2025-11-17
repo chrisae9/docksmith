@@ -113,13 +113,16 @@ func (m SelectionModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ": // Space to toggle selection
 		if len(m.visibleContainers) > 0 {
 			container := m.visibleContainers[m.cursor]
-			m.selections[container.ContainerName] = !m.selections[container.ContainerName]
+			// Only allow selection for actionable statuses
+			if m.isSelectable(container) {
+				m.selections[container.ContainerName] = !m.selections[container.ContainerName]
+			}
 		}
 
 	case "a": // Select all in current view
 		for _, container := range m.visibleContainers {
-			// Only select if not blocked (unless bypassed)
-			if container.Status != update.UpdateAvailableBlocked || m.bypassedChecks[container.ContainerName] {
+			// Only select selectable containers
+			if m.isSelectable(container) {
 				m.selections[container.ContainerName] = true
 			}
 		}
@@ -221,23 +224,32 @@ func (m *SelectionModel) rebuildVisibleList() {
 	m.visibleContainers = visible
 }
 
-// shouldShowContainer determines if a container should be shown based on filters
-func (m *SelectionModel) shouldShowContainer(container update.ContainerInfo) bool {
-	// Only show containers with updates or migration opportunities
-	hasUpdate := container.Status == update.UpdateAvailable || container.Status == update.UpdateAvailableBlocked
-	isMigration := container.Status == update.UpToDatePinnable
-
-	if !hasUpdate && !isMigration {
+// isSelectable determines if a container can be selected for updates
+func (m *SelectionModel) isSelectable(container update.ContainerInfo) bool {
+	// Only allow selection for actionable statuses
+	switch container.Status {
+	case update.UpdateAvailable:
+		return true
+	case update.UpdateAvailableBlocked:
+		// Allowed if bypassed
+		return m.bypassedChecks[container.ContainerName]
+	case update.UpToDatePinnable:
+		return true
+	default:
+		// UpToDate, LocalImage, Ignored, CheckFailed - not selectable
 		return false
 	}
+}
 
+// shouldShowContainer determines if a container should be shown based on filters
+func (m *SelectionModel) shouldShowContainer(container update.ContainerInfo) bool {
 	// Filter by blocked status
 	if container.Status == update.UpdateAvailableBlocked && !m.filters.ShowBlocked {
 		return false
 	}
 
 	// Filter by migration status
-	if isMigration && !m.filters.ShowMigration {
+	if container.Status == update.UpToDatePinnable && !m.filters.ShowMigration {
 		return false
 	}
 
@@ -267,18 +279,48 @@ func (m *SelectionModel) shouldShowContainer(container update.ContainerInfo) boo
 	return true
 }
 
-// sortBySeverity sorts containers by change severity (major -> minor -> patch -> rebuild)
+// sortBySeverity sorts containers by status and change severity
 func (m *SelectionModel) sortBySeverity(containers []update.ContainerInfo) {
 	sort.Slice(containers, func(i, j int) bool {
-		// Primary sort: by change type severity
+		// Primary sort: by status priority (updates first, then migrations, then up-to-date, etc.)
+		statusPriorityI := m.getStatusPriority(containers[i].Status)
+		statusPriorityJ := m.getStatusPriority(containers[j].Status)
+		if statusPriorityI != statusPriorityJ {
+			return statusPriorityI > statusPriorityJ // Higher priority first
+		}
+
+		// Secondary sort: by change type severity (within same status)
 		severityI := m.getChangeSeverity(containers[i].ChangeType)
 		severityJ := m.getChangeSeverity(containers[j].ChangeType)
 		if severityI != severityJ {
 			return severityI > severityJ // Higher severity first
 		}
-		// Secondary sort: by name
+
+		// Tertiary sort: by name
 		return containers[i].ContainerName < containers[j].ContainerName
 	})
+}
+
+// getStatusPriority returns a priority score for status sorting (higher = more important)
+func (m *SelectionModel) getStatusPriority(status update.UpdateStatus) int {
+	switch status {
+	case update.UpdateAvailable:
+		return 10 // Updates first
+	case update.UpdateAvailableBlocked:
+		return 9 // Blocked updates next
+	case update.UpToDatePinnable:
+		return 8 // Migrations
+	case update.UpToDate:
+		return 5 // Up to date containers
+	case update.LocalImage:
+		return 4 // Local images
+	case update.Ignored:
+		return 3 // Ignored
+	case update.CheckFailed, update.MetadataUnavailable:
+		return 2 // Failed checks last
+	default:
+		return 1
+	}
 }
 
 // getChangeSeverity returns a severity score for sorting (higher = more severe)
@@ -333,9 +375,12 @@ func (m SelectionModel) View() string {
 	// Build the view
 	var sections []string
 
-	// Title
-	title := TitleStyle.Render("Select Containers to Update")
-	sections = append(sections, title)
+	// Compact title for narrow terminals
+	title := "Select Containers"
+	if m.width > 60 {
+		title = "Select Containers to Update"
+	}
+	sections = append(sections, TitleStyle.Render(title))
 
 	if len(m.visibleContainers) == 0 {
 		// Empty state with help
@@ -343,7 +388,7 @@ func (m SelectionModel) View() string {
 
 		// Help footer for empty state
 		bindings := []KeyBinding{
-			{"r", "recheck for updates"},
+			{"r", "recheck"},
 			{"q", "quit"},
 		}
 		help := formatHelp(bindings)
@@ -352,14 +397,31 @@ func (m SelectionModel) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left, sections...)
 	}
 
-	// Filters status
-	filterStatus := m.renderFilterStatus()
+	// Calculate lines reserved for UI chrome
+	// UI elements: title(2) + summary(1) + help(2) = 5 lines minimum
+	// Add small buffer for safety
+	reservedLines := 6
+
+	// Check if we'll show filter
+	var filterStatus string
+	if m.width > 50 {
+		filterStatus = m.renderFilterStatus()
+	}
+
+	// Calculate available height for container list
+	// If height not set yet (first render), use generous default
+	availableHeight := m.height - reservedLines
+	if m.height == 0 {
+		availableHeight = 30 // Reasonable default before WindowSizeMsg arrives
+	}
+
+	// Render container list with remaining height
+	containerList := m.renderContainerListWithHeight(availableHeight)
+
+	// Now actually append sections
 	if filterStatus != "" {
 		sections = append(sections, filterStatus)
 	}
-
-	// Container list
-	containerList := m.renderContainerList()
 	sections = append(sections, containerList)
 
 	// Selection summary
@@ -378,20 +440,12 @@ func (m SelectionModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// renderEmpty shows a message when no containers match filters
+// renderEmpty shows a message when no containers are found
 func (m SelectionModel) renderEmpty() string {
-	msg := "No containers with updates or migrations available."
+	msg := "No containers found."
 
-	hints := []string{}
-	if !m.filters.ShowBlocked {
-		hints = append(hints, "b=show blocked")
-	}
-	if !m.filters.ShowMigration {
-		hints = append(hints, "m=show :latest migrations")
-	}
-
-	if len(hints) > 0 {
-		msg += "\n\nTry adjusting filters: " + strings.Join(hints, ", ")
+	if m.filters.Stack != "" || m.filters.ChangeType != "" || !m.filters.ShowBlocked || !m.filters.ShowMigration {
+		msg += "\n\nFilters are active. Try adjusting or clearing filters."
 	}
 
 	return lipgloss.NewStyle().
@@ -436,17 +490,42 @@ func (m SelectionModel) renderFilterStatus() string {
 	return ""
 }
 
-// renderContainerList renders the list of containers
-func (m SelectionModel) renderContainerList() string {
-	lines := make([]string, 0)
+// renderContainerListWithHeight renders the list of containers with viewport scrolling
+// availableHeight is the number of lines available for the container list
+func (m SelectionModel) renderContainerListWithHeight(availableHeight int) string {
+	if len(m.visibleContainers) == 0 {
+		return ""
+	}
+
+	// Use all available height for viewport
+	// IMPORTANT: Don't limit viewport, let it use all available space
+	viewportHeight := availableHeight
+	if viewportHeight < 1 {
+		viewportHeight = 1 // Absolute minimum
+	}
+
+	// Build all lines first with group tracking
+	type lineInfo struct {
+		content      string
+		containerIdx int
+		groupName    string // Track which group this line belongs to
+		isGroupHeader bool
+	}
+	allLines := make([]lineInfo, 0)
 
 	var lastGroup string
 	for i, container := range m.visibleContainers {
+		currentGroup := ""
 		// Add group header if grouping changed
 		if m.grouping != GroupFlat {
-			currentGroup := m.getGroupName(container)
+			currentGroup = m.getGroupName(container)
 			if currentGroup != lastGroup {
-				lines = append(lines, m.renderGroupHeader(currentGroup))
+				allLines = append(allLines, lineInfo{
+					content:       m.renderGroupHeader(currentGroup),
+					containerIdx:  -1, // Not a container line
+					groupName:     currentGroup,
+					isGroupHeader: true,
+				})
 				lastGroup = currentGroup
 			}
 		}
@@ -455,21 +534,113 @@ func (m SelectionModel) renderContainerList() string {
 		isSelected := m.selections[container.ContainerName]
 		isCursor := i == m.cursor
 		line := m.renderContainerItem(container, isSelected, isCursor)
-		lines = append(lines, line)
+		allLines = append(allLines, lineInfo{
+			content:       line,
+			containerIdx:  i,
+			groupName:     currentGroup,
+			isGroupHeader: false,
+		})
 	}
 
-	return strings.Join(lines, "\n")
+	// Find the line index of the cursor and its group
+	cursorLineIdx := 0
+	cursorGroupName := ""
+	for i, line := range allLines {
+		if line.containerIdx == m.cursor {
+			cursorLineIdx = i
+			cursorGroupName = line.groupName
+			break
+		}
+	}
+
+	// Calculate viewport window - simple and predictable
+	start := 0
+	end := len(allLines)
+
+	// Only scroll if we have more lines than viewport
+	if len(allLines) > viewportHeight {
+		// Keep cursor centered in viewport
+		preferredStart := cursorLineIdx - (viewportHeight / 2)
+		if preferredStart < 0 {
+			preferredStart = 0
+		}
+		preferredEnd := preferredStart + viewportHeight
+		if preferredEnd > len(allLines) {
+			preferredEnd = len(allLines)
+			preferredStart = preferredEnd - viewportHeight
+			if preferredStart < 0 {
+				preferredStart = 0
+			}
+		}
+
+		start = preferredStart
+		end = preferredEnd
+	}
+
+	// Find the cursor's group header position
+	cursorGroupHeaderIdx := -1
+	if m.grouping != GroupFlat && cursorGroupName != "" {
+		for i := cursorLineIdx; i >= 0; i-- {
+			if allLines[i].isGroupHeader && allLines[i].groupName == cursorGroupName {
+				cursorGroupHeaderIdx = i
+				break
+			}
+		}
+	}
+
+	// Determine if we need sticky header
+	showStickyHeader := cursorGroupHeaderIdx >= 0 && cursorGroupHeaderIdx < start
+
+	// Render visible lines
+	visibleLines := make([]string, 0)
+
+	// Add sticky header at the very top if needed
+	if showStickyHeader {
+		stickyHeader := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorTitle).
+			Background(lipgloss.Color("236")). // Subtle dark background
+			Width(m.width - 4).                // Full width minus padding
+			Render("▸ " + cursorGroupName)
+		visibleLines = append(visibleLines, stickyHeader)
+	}
+
+	// Add viewport content
+	for i := start; i < end; i++ {
+		visibleLines = append(visibleLines, allLines[i].content)
+	}
+
+	// Add scroll indicators
+	result := strings.Join(visibleLines, "\n")
+	if start > 0 {
+		result = lipgloss.NewStyle().Foreground(ColorMuted).Render("  ▲ More above") + "\n" + result
+	}
+	if end < len(allLines) {
+		result = result + "\n" + lipgloss.NewStyle().Foreground(ColorMuted).Render("  ▼ More below")
+	}
+
+	return result
 }
 
 // getGroupName returns the group name for a container based on current grouping
 func (m SelectionModel) getGroupName(container update.ContainerInfo) string {
 	switch m.grouping {
 	case GroupBySeverity:
-		// Check status first - migrations should be separate from rebuilds
-		if container.Status == update.UpToDatePinnable {
+		// Group by status first for special cases
+		switch container.Status {
+		case update.UpToDatePinnable:
 			return "Tag Migrations"
+		case update.UpToDate:
+			return "Up to Date"
+		case update.LocalImage:
+			return "Local Images"
+		case update.Ignored:
+			return "Ignored"
+		case update.CheckFailed, update.MetadataUnavailable:
+			return "Failed Checks"
 		}
 
+		// Then group updates by change type
 		switch container.ChangeType {
 		case version.MajorChange:
 			return "Major Updates"
@@ -492,12 +663,11 @@ func (m SelectionModel) getGroupName(container update.ContainerInfo) string {
 	}
 }
 
-// renderGroupHeader renders a group header
+// renderGroupHeader renders a group header (compact, no top margin for mobile)
 func (m SelectionModel) renderGroupHeader(groupName string) string {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorTitle).
-		MarginTop(1).
 		Render(groupName + ":")
 }
 

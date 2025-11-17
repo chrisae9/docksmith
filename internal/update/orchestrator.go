@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/version"
@@ -16,36 +18,36 @@ import (
 
 // DiscoveryResult contains the complete discovery and check results
 type DiscoveryResult struct {
-	Containers           []ContainerInfo
-	Stacks              map[string]*Stack
-	StandaloneContainers []ContainerInfo
-	UpdateOrder         []string
-	TotalChecked        int
-	UpdatesFound        int
-	UpToDate           int
-	LocalImages        int
-	Failed             int
-	Ignored            int
+	Containers           []ContainerInfo   `json:"containers"`
+	Stacks              map[string]*Stack  `json:"stacks"`
+	StandaloneContainers []ContainerInfo   `json:"standalone_containers"`
+	UpdateOrder         []string           `json:"update_order"`
+	TotalChecked        int                `json:"total_checked"`
+	UpdatesFound        int                `json:"updates_found"`
+	UpToDate           int                 `json:"up_to_date"`
+	LocalImages        int                 `json:"local_images"`
+	Failed             int                 `json:"failed"`
+	Ignored            int                 `json:"ignored"`
 }
 
 // ContainerInfo extends ContainerUpdate with additional metadata
 type ContainerInfo struct {
 	ContainerUpdate
-	ID             string
-	Stack          string
-	Service        string
-	Dependencies   []string
-	PreUpdateCheck string
-	Labels         map[string]string
+	ID             string            `json:"id"`
+	Stack          string            `json:"stack,omitempty"`
+	Service        string            `json:"service,omitempty"`
+	Dependencies   []string          `json:"dependencies,omitempty"`
+	PreUpdateCheck string            `json:"pre_update_check,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
 }
 
 // Stack represents a group of related containers
 type Stack struct {
-	Name           string
-	Containers     []ContainerInfo
-	HasUpdates     bool
-	AllUpdatable   bool
-	UpdatePriority string // "major", "minor", "patch"
+	Name           string          `json:"name"`
+	Containers     []ContainerInfo `json:"containers"`
+	HasUpdates     bool            `json:"has_updates"`
+	AllUpdatable   bool            `json:"all_updatable"`
+	UpdatePriority string          `json:"update_priority,omitempty"` // "major", "minor", "patch"
 }
 
 // StackDefinition represents a manual stack definition
@@ -66,6 +68,7 @@ type Orchestrator struct {
 	maxConcurrency   int
 	cacheEnabled     bool
 	cacheTTL         time.Duration
+	eventBus         *events.Bus
 }
 
 // NewOrchestrator creates a new orchestrator
@@ -97,6 +100,11 @@ func (o *Orchestrator) SetStorage(store storage.Storage) {
 	}
 }
 
+// SetEventBus sets the event bus for publishing progress events
+func (o *Orchestrator) SetEventBus(bus *events.Bus) {
+	o.eventBus = bus
+}
+
 // ClearCache clears the cache
 func (o *Orchestrator) ClearCache() {
 	o.cache.Clear()
@@ -124,10 +132,13 @@ func (o *Orchestrator) LoadManualStacks(filepath string) error {
 // DiscoverAndCheck performs complete discovery and update checking
 func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, error) {
 	// Step 1: Discover containers
+	o.publishCheckProgress("discovering", 0, 0, "", "Discovering containers...")
 	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
+
+	o.publishCheckProgress("discovered", len(containers), 0, "", fmt.Sprintf("Found %d containers", len(containers)))
 
 	result := &DiscoveryResult{
 		Containers:           make([]ContainerInfo, 0, len(containers)),
@@ -141,6 +152,7 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	containerInfos := make([]ContainerInfo, len(containers))
+	var checkedCount int32
 
 	for i, container := range containers {
 		wg.Add(1)
@@ -150,6 +162,9 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 			// Acquire semaphore
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			// Publish that we're checking this container
+			o.publishCheckProgress("checking", len(containers), int(atomic.LoadInt32(&checkedCount)), c.Name, fmt.Sprintf("Checking %s...", c.Name))
 
 			// Check if container should be ignored
 			if o.checker.shouldIgnoreContainer(c) {
@@ -172,6 +187,9 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 				containerInfos[idx] = info
 				result.Ignored++
 				mu.Unlock()
+
+				atomic.AddInt32(&checkedCount, 1)
+				o.publishCheckProgress("checked", len(containers), int(atomic.LoadInt32(&checkedCount)), c.Name, fmt.Sprintf("Checked %s (ignored)", c.Name))
 				return
 			}
 
@@ -194,6 +212,15 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 				result.Failed++
 			}
 			mu.Unlock()
+
+			atomic.AddInt32(&checkedCount, 1)
+			statusMsg := "up to date"
+			if info.Status == UpdateAvailable {
+				statusMsg = "update available"
+			} else if info.Status == LocalImage {
+				statusMsg = "local image"
+			}
+			o.publishCheckProgress("checked", len(containers), int(atomic.LoadInt32(&checkedCount)), c.Name, fmt.Sprintf("Checked %s (%s)", c.Name, statusMsg))
 		}(i, container)
 	}
 
@@ -224,7 +251,34 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 		}
 	}
 
+	o.publishCheckProgress("complete", result.TotalChecked, result.TotalChecked, "",
+		fmt.Sprintf("Complete: %d updates, %d current, %d local", result.UpdatesFound, result.UpToDate, result.LocalImages))
+
 	return result, nil
+}
+
+// publishCheckProgress publishes check progress events to the event bus
+func (o *Orchestrator) publishCheckProgress(stage string, total, checked int, containerName, message string) {
+	if o.eventBus == nil {
+		return
+	}
+
+	percent := 0
+	if total > 0 {
+		percent = (checked * 100) / total
+	}
+
+	o.eventBus.Publish(events.Event{
+		Type: events.EventCheckProgress,
+		Payload: map[string]interface{}{
+			"stage":          stage,
+			"total":          total,
+			"checked":        checked,
+			"percent":        percent,
+			"container_name": containerName,
+			"message":        message,
+		},
+	})
 }
 
 // checkContainer checks a single container for updates

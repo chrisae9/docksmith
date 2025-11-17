@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/chis/docksmith/internal/update"
@@ -95,14 +96,26 @@ func formatVersionChange(container update.ContainerInfo) string {
 	return ""
 }
 
-// getChangeTypeBadge returns a styled badge for the change type
-// Checks status first to handle migrations correctly
+// getChangeTypeBadge returns a styled badge for the change type or status
+// Handles both updates and non-update statuses
 func getChangeTypeBadge(container update.ContainerInfo) string {
-	// Check status first - migrations should show MIGRATE, not REBUILD
-	if container.Status == update.UpToDatePinnable {
+	// For non-update statuses, show status badge instead of change type
+	switch container.Status {
+	case update.UpToDatePinnable:
 		return WarningBadge.Render("MIGRATE")
+	case update.UpToDate:
+		return SuccessBadge.Render("UP TO DATE")
+	case update.LocalImage:
+		return InfoBadge.Render("LOCAL")
+	case update.Ignored:
+		return lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Render("IGNORED")
+	case update.CheckFailed, update.MetadataUnavailable:
+		return ErrorBadge.Render("CHECK FAILED")
 	}
 
+	// For updates, show change type
 	switch container.ChangeType {
 	case version.MajorChange:
 		return BadgeStyle.Copy().
@@ -165,13 +178,26 @@ func formatContainerLine(container update.ContainerInfo, selected bool) string {
 	// Build the line
 	name := formatContainerName(container)
 	versionChange := formatVersionChange(container)
-	changeTypeBadge := getChangeTypeBadge(container)
+
+	// For updates: show change type badge (MAJOR/MINOR/PATCH)
+	// For non-updates: show status badge (UP TO DATE, LOCAL, etc.)
+	var badge string
+	if container.Status == update.UpdateAvailable || container.Status == update.UpdateAvailableBlocked {
+		// Show "UPDATE" badge for unknown change types, otherwise show the type
+		if container.ChangeType == version.UnknownChange {
+			badge = WarningBadge.Render("UPDATE")
+		} else {
+			badge = getChangeTypeBadge(container)
+		}
+	} else {
+		badge = getStatusBadge(container.Status)
+	}
 
 	line := fmt.Sprintf("%s %s", checkbox, name)
 	if versionChange != "" {
 		line += fmt.Sprintf(" %s", versionChange)
 	}
-	line += fmt.Sprintf(" %s", changeTypeBadge)
+	line += fmt.Sprintf(" %s", badge)
 
 	// Add stack info if available
 	if container.Stack != "" {
@@ -180,11 +206,19 @@ func formatContainerLine(container update.ContainerInfo, selected bool) string {
 			Render(fmt.Sprintf(" [%s]", container.Stack))
 	}
 
-	// Add blocked reason if present
-	if container.Status == update.UpdateAvailableBlocked && container.PreUpdateCheckFail != "" {
-		line += "\n    " + lipgloss.NewStyle().
-			Foreground(ColorWarning).
-			Render("⚠ "+container.PreUpdateCheckFail)
+	// Add pre-update check status if present
+	if container.PreUpdateCheck != "" {
+		if container.Status == update.UpdateAvailableBlocked && container.PreUpdateCheckFail != "" {
+			// Show failure reason
+			line += "\n    " + lipgloss.NewStyle().
+				Foreground(ColorWarning).
+				Render("⚠ Pre-update check failed: "+container.PreUpdateCheckFail)
+		} else if container.PreUpdateCheckPass {
+			// Show success indicator
+			line += "\n    " + lipgloss.NewStyle().
+				Foreground(ColorSuccess).
+				Render("✓ Pre-update check passed")
+		}
 	}
 
 	return style.Render(line)
@@ -220,10 +254,16 @@ type KeyBinding struct {
 }
 
 // formatHelp formats multiple keybindings as a help footer
+// Uses compact horizontal format for narrow terminals
 func formatHelp(bindings []KeyBinding) string {
-	lines := make([]string, len(bindings))
+	// Compact format: key=desc • key=desc
+	parts := make([]string, len(bindings))
 	for i, binding := range bindings {
-		lines[i] = formatHelpLine(binding.Key, binding.Description)
+		parts[i] = lipgloss.NewStyle().
+			Foreground(ColorInfo).
+			Bold(true).
+			Render(binding.Key) + "=" + binding.Description
 	}
-	return HelpStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	helpText := strings.Join(parts, " • ")
+	return HelpStyle.Render(helpText)
 }
