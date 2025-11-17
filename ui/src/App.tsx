@@ -1,21 +1,78 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Dashboard } from './components/Dashboard'
 import { History } from './components/History'
+import { TabBar, type TabId } from './components/TabBar'
+import { checkContainers } from './api/client'
+import { useEventStream } from './hooks/useEventStream'
 import './App.css'
 
-type Page = 'dashboard' | 'history';
-
 function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [activeTab, setActiveTab] = useState<TabId>('updates');
+  const [updateCount, setUpdateCount] = useState(0);
+  const { lastEvent } = useEventStream(true);
+
+  const fetchUpdateCount = useCallback(async () => {
+    try {
+      const result = await checkContainers();
+      if (result.success && result.data) {
+        const pinnableCount = result.data.containers.filter(
+          c => c.status === 'UP_TO_DATE_PINNABLE'
+        ).length;
+        setUpdateCount(result.data.updates_found + pinnableCount);
+      }
+    } catch {
+      // Silently fail - badge will show 0
+    }
+  }, []);
+
+  // Fetch update count for badge
+  useEffect(() => {
+    fetchUpdateCount();
+    // Refresh count every 5 minutes
+    const interval = setInterval(fetchUpdateCount, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [fetchUpdateCount]);
+
+  // Refresh badge count when update completes
+  useEffect(() => {
+    if (lastEvent && (lastEvent.stage === 'complete' || lastEvent.stage === 'failed')) {
+      // Delay slightly to let API update
+      setTimeout(fetchUpdateCount, 1000);
+    }
+  }, [lastEvent, fetchUpdateCount]);
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'updates':
+        return <Dashboard onNavigateToHistory={() => setActiveTab('history')} />;
+      case 'history':
+        return <History onBack={() => setActiveTab('updates')} />;
+      case 'settings':
+        return (
+          <div className="settings-tab">
+            <div className="settings-header">
+              <h1>Settings</h1>
+            </div>
+            <div className="settings-content">
+              <p className="settings-placeholder">Settings coming soon</p>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="app">
-      {currentPage === 'dashboard' && (
-        <Dashboard onNavigateToHistory={() => setCurrentPage('history')} />
-      )}
-      {currentPage === 'history' && (
-        <History onBack={() => setCurrentPage('dashboard')} />
-      )}
+      <div className="tab-content">
+        {renderTabContent()}
+      </div>
+      <TabBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        updateCount={updateCount}
+      />
     </div>
   )
 }

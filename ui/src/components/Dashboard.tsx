@@ -11,7 +11,7 @@ interface DashboardProps {
   onNavigateToHistory?: () => void;
 }
 
-export function Dashboard({ onNavigateToHistory }: DashboardProps) {
+export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: DashboardProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResult | null>(null);
@@ -443,28 +443,28 @@ export function Dashboard({ onNavigateToHistory }: DashboardProps) {
     return <div className="empty">No containers found</div>;
   }
 
-  const getStageIcon = (stage: string): string => {
+  const getStageIcon = (stage: string): React.ReactNode => {
     switch (stage) {
       case 'validating':
-        return '🔍';
+        return <i className="fa-solid fa-magnifying-glass"></i>;
       case 'backup':
-        return '💾';
+        return <i className="fa-solid fa-floppy-disk"></i>;
       case 'updating_compose':
-        return '📝';
+        return <i className="fa-solid fa-file-pen"></i>;
       case 'pulling_image':
-        return '⬇️';
+        return <i className="fa-solid fa-cloud-arrow-down"></i>;
       case 'recreating':
-        return '🔄';
+        return <i className="fa-solid fa-rotate"></i>;
       case 'health_check':
-        return '❤️';
+        return <i className="fa-solid fa-heart-pulse"></i>;
       case 'rolling_back':
-        return '⏪';
+        return <i className="fa-solid fa-rotate-left"></i>;
       case 'complete':
-        return '✅';
+        return <i className="fa-solid fa-circle-check"></i>;
       case 'failed':
-        return '❌';
+        return <i className="fa-solid fa-circle-xmark"></i>;
       default:
-        return '⏳';
+        return <i className="fa-solid fa-hourglass-half"></i>;
     }
   };
 
@@ -472,22 +472,50 @@ export function Dashboard({ onNavigateToHistory }: DashboardProps) {
     <div className="dashboard">
       <header>
         <div className="header-top">
-          <h1>Docksmith</h1>
+          <h1>Updates</h1>
           <div className="header-actions">
-            {onNavigateToHistory && (
-              <button onClick={onNavigateToHistory} className="history-btn">
-                History
-              </button>
-            )}
             <button onClick={fetchData} className="refresh-btn">
               Refresh
             </button>
           </div>
         </div>
-        <div className="stats-bar">
-          <span className="stat">{result.updates_found + result.containers.filter(c => c.status === 'UP_TO_DATE_PINNABLE').length} <small>updates</small></span>
-          <span className="stat">{result.up_to_date - result.containers.filter(c => c.status === 'UP_TO_DATE_PINNABLE').length} <small>current</small></span>
-          <span className="stat">{result.total_checked} <small>total</small></span>
+        <div className="filter-toolbar">
+          <div className="segmented-control">
+            <button
+              className={filter === 'all' ? 'active' : ''}
+              onClick={() => setFilter('all')}
+            >
+              All
+            </button>
+            <button
+              className={filter === 'updates' ? 'active' : ''}
+              onClick={() => setFilter('updates')}
+            >
+              Updates
+            </button>
+            <button
+              className={filter === 'current' ? 'active' : ''}
+              onClick={() => setFilter('current')}
+            >
+              Current
+            </button>
+          </div>
+          <div className="toolbar-options">
+            <button
+              className={`icon-btn ${showLocalImages ? 'active' : ''}`}
+              onClick={() => setShowLocalImages(!showLocalImages)}
+              title="Show local images"
+            >
+              {showLocalImages ? '◉' : '○'}
+            </button>
+            <button
+              className={`icon-btn ${sort === 'stack' ? 'active' : ''}`}
+              onClick={() => setSort(sort === 'stack' ? 'name' : 'stack')}
+              title={sort === 'stack' ? 'Group by stack' : 'List view'}
+            >
+              {sort === 'stack' ? '▤' : '≡'}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -609,10 +637,10 @@ export function Dashboard({ onNavigateToHistory }: DashboardProps) {
               {updateProgress.containers.map((container, index) => (
                 <div key={container.name} className={`update-container-item status-${container.status}`}>
                   <span className="status-icon">
-                    {container.status === 'pending' && '○'}
-                    {container.status === 'in_progress' && '◐'}
-                    {container.status === 'success' && '✓'}
-                    {container.status === 'failed' && '✗'}
+                    {container.status === 'pending' && <i className="fa-regular fa-circle"></i>}
+                    {container.status === 'in_progress' && <i className="fa-solid fa-spinner fa-spin"></i>}
+                    {container.status === 'success' && <i className="fa-solid fa-check"></i>}
+                    {container.status === 'failed' && <i className="fa-solid fa-xmark"></i>}
                   </span>
                   <span className="container-index">{index + 1}.</span>
                   <span className="container-name">{container.name}</span>
@@ -661,9 +689,9 @@ export function Dashboard({ onNavigateToHistory }: DashboardProps) {
             {!updateProgress.containers.some(c => c.status === 'pending' || c.status === 'in_progress') && (
               <div className="update-completion">
                 {updateProgress.containers.every(c => c.status === 'success') ? (
-                  <div className="completion-success">✓ All updates completed successfully!</div>
+                  <div className="completion-success"><i className="fa-solid fa-check"></i> All updates completed successfully!</div>
                 ) : (
-                  <div className="completion-error">✗ Updates completed with errors</div>
+                  <div className="completion-error"><i className="fa-solid fa-xmark"></i> Updates completed with errors</div>
                 )}
                 <button className="close-btn" onClick={() => {
                   setUpdateProgress(null);
@@ -678,43 +706,6 @@ export function Dashboard({ onNavigateToHistory }: DashboardProps) {
         </div>
       )}
 
-      <nav className="bottom-nav">
-        <button
-          className={filter === 'all' ? 'active' : ''}
-          onClick={() => setFilter('all')}
-        >
-          <span className="nav-icon">⊡</span>
-          <span>All</span>
-        </button>
-        <button
-          className={filter === 'updates' ? 'active' : ''}
-          onClick={() => setFilter('updates')}
-        >
-          <span className="nav-icon">↑</span>
-          <span>Updates</span>
-        </button>
-        <button
-          className={filter === 'current' ? 'active' : ''}
-          onClick={() => setFilter('current')}
-        >
-          <span className="nav-icon">✓</span>
-          <span>Current</span>
-        </button>
-        <button
-          className={showLocalImages ? 'active' : ''}
-          onClick={() => setShowLocalImages(!showLocalImages)}
-        >
-          <span className="nav-icon">{showLocalImages ? '◉' : '○'}</span>
-          <span>Local</span>
-        </button>
-        <button
-          className={sort === 'stack' ? 'active' : ''}
-          onClick={() => setSort(sort === 'stack' ? 'name' : 'stack')}
-        >
-          <span className="nav-icon">{sort === 'stack' ? '▤' : '≡'}</span>
-          <span>{sort === 'stack' ? 'Stacks' : 'List'}</span>
-        </button>
-      </nav>
     </div>
   );
 }
@@ -781,9 +772,9 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
         <span className="version">{getVersion()}</span>
       </div>
       {getStatusIndicator()}
-      {container.pre_update_check_pass && <span className="check" title="Pre-update check passed">✓</span>}
+      {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
       {isBlocked && container.pre_update_check_fail && (
-        <span className="warn" title={container.pre_update_check_fail}>⚠</span>
+        <span className="warn" title={container.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>
       )}
     </li>
   );

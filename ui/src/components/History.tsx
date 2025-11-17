@@ -14,7 +14,7 @@ interface RollbackConfirmation {
   newVersion?: string;
 }
 
-export function History({ onBack }: HistoryProps) {
+export function History({ onBack: _onBack }: HistoryProps) {
   const [operations, setOperations] = useState<UpdateOperation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -328,7 +328,6 @@ export function History({ onBack }: HistoryProps) {
       <div className="history-page">
         <header>
           <div className="header-top">
-            <button onClick={onBack} className="back-btn">&larr;</button>
             <h1>History</h1>
           </div>
         </header>
@@ -344,7 +343,6 @@ export function History({ onBack }: HistoryProps) {
       <div className="history-page">
         <header>
           <div className="header-top">
-            <button onClick={onBack} className="back-btn">&larr;</button>
             <h1>History</h1>
           </div>
         </header>
@@ -360,36 +358,34 @@ export function History({ onBack }: HistoryProps) {
     <div className="history-page">
       <header>
         <div className="header-top">
-          <button onClick={onBack} className="back-btn">&larr;</button>
           <h1>History</h1>
-          <button onClick={fetchOperations} className="refresh-btn">
-            Refresh
-          </button>
+          <div className="header-actions">
+            <button onClick={fetchOperations} className="refresh-btn">
+              Refresh
+            </button>
+          </div>
         </div>
-        <div className="history-stats">
-          <span className="stat">{operations.length} <small>total</small></span>
-          <span className="stat">{operations.filter(o => o.status === 'complete').length} <small>ok</small></span>
-          <span className="stat">{operations.filter(o => o.status === 'failed').length} <small>fail</small></span>
-        </div>
-        <div className="filter-tabs">
-          <button
-            className={filter === 'all' ? 'active' : ''}
-            onClick={() => setFilter('all')}
-          >
-            All
-          </button>
-          <button
-            className={filter === 'complete' ? 'active' : ''}
-            onClick={() => setFilter('complete')}
-          >
-            Success
-          </button>
-          <button
-            className={filter === 'failed' ? 'active' : ''}
-            onClick={() => setFilter('failed')}
-          >
-            Failed
-          </button>
+        <div className="filter-toolbar">
+          <div className="segmented-control">
+            <button
+              className={filter === 'all' ? 'active' : ''}
+              onClick={() => setFilter('all')}
+            >
+              All
+            </button>
+            <button
+              className={filter === 'complete' ? 'active' : ''}
+              onClick={() => setFilter('complete')}
+            >
+              Success
+            </button>
+            <button
+              className={filter === 'failed' ? 'active' : ''}
+              onClick={() => setFilter('failed')}
+            >
+              Failed
+            </button>
+          </div>
         </div>
       </header>
 
@@ -408,32 +404,49 @@ export function History({ onBack }: HistoryProps) {
                   <span className={`op-status-icon ${getStatusClass(op.status)}`}>
                     {getStatusIcon(op.status, op.rollback_occurred)}
                   </span>
-                  <span className="op-container">{op.container_name}</span>
+                  <span className="op-container">
+                    {op.operation_type === 'batch' ? (
+                      <>{op.stack_name || 'Batch'} <span className="op-type-badge batch">BATCH</span></>
+                    ) : (
+                      op.container_name || op.stack_name || 'Unknown'
+                    )}
+                  </span>
                   {op.operation_type === 'rollback' && (
                     <span className="op-type-badge rollback">ROLLBACK</span>
                   )}
                   {op.rollback_occurred && (
                     <span className="op-type-badge rolled-back">ROLLED BACK</span>
                   )}
-                  {op.new_version && (
+                </div>
+                <div className="op-info">
+                  {op.operation_type === 'batch' && op.error_message && (
+                    <span className="op-batch-summary">{op.error_message.replace('Batch update completed: ', '')}</span>
+                  )}
+                  {op.operation_type !== 'batch' && op.new_version && (
                     <span className="op-version">
-                      {op.old_version ? (
-                        op.old_version !== op.new_version ? (
-                          <>{op.old_version} → {op.new_version}</>
-                        ) : (
-                          <>{op.new_version}</>
-                        )
+                      {op.old_version && op.old_version !== op.new_version ? (
+                        <>{op.old_version} → {op.new_version}</>
                       ) : (
-                        <>→ {op.new_version}</>
+                        <>{op.new_version}</>
                       )}
                     </span>
                   )}
                 </div>
                 <div className="op-meta">
-                  <span className="op-id-mini" title="Click to copy" onClick={(e) => {
-                    e.stopPropagation();
-                    navigator.clipboard.writeText(op.operation_id);
-                  }}>{op.operation_id.slice(0, 8)}</span>
+                  <button
+                    className="op-copy-btn"
+                    title={`Copy ID: ${op.operation_id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(op.operation_id);
+                      const btn = e.currentTarget;
+                      btn.classList.add('copied');
+                      setTimeout(() => btn.classList.remove('copied'), 1500);
+                    }}
+                  >
+                    <i className="fa-regular fa-copy"></i>
+                    <span className="op-id-short">{op.operation_id.slice(0, 8)}</span>
+                  </button>
                   <span className="op-time">{formatTime(op.completed_at || op.created_at)}</span>
                   <span className="op-duration">{formatDuration(op.started_at, op.completed_at, op.created_at)}</span>
                 </div>
