@@ -398,8 +398,18 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	log.Printf("Container %s: findLatestVersion returned: '%s'", container.Name, latestVersion)
 
 	// Update LatestVersion if we don't already have one from digest resolution
-	if update.LatestVersion == "" {
+	// or if we only have "latest" (not a real semver tag)
+	if update.LatestVersion == "" || update.LatestVersion == "latest" {
 		update.LatestVersion = latestVersion
+	}
+
+	// Re-check pinnable status after we have the actual latest semver tag
+	// This handles the case where resolveVersionFromDigest returned "latest"
+	// because no semver tag matched the digest, but findLatestVersion found one
+	if update.Status == UpToDate && checkTag == "latest" && !allowLatest && latestVersion != "" && latestVersion != "latest" {
+		update.Status = UpToDatePinnable
+		update.RecommendedTag = latestVersion
+		log.Printf("Container %s: Marked as pinnable with recommendation: %s", container.Name, update.RecommendedTag)
 	}
 
 	// Only do semantic version comparison if we haven't already determined status via digest check

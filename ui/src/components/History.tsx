@@ -32,6 +32,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
   } | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const elapsedIntervalRef = useRef<number | null>(null);
+  const logEntriesRef = useRef<HTMLDivElement>(null);
 
   const { lastEvent: progressEvent, clearEvents } = useEventStream(true);
 
@@ -55,6 +56,13 @@ export function History({ onBack: _onBack }: HistoryProps) {
       }
     };
   }, [rollbackProgress]);
+
+  // Auto-scroll logs to bottom when new entries are added
+  useEffect(() => {
+    if (logEntriesRef.current && rollbackProgress?.logs) {
+      logEntriesRef.current.scrollTop = logEntriesRef.current.scrollHeight;
+    }
+  }, [rollbackProgress?.logs]);
 
   // Add SSE progress events to rollback log
   useEffect(() => {
@@ -249,18 +257,28 @@ export function History({ onBack: _onBack }: HistoryProps) {
     }
   };
 
-  const getStageIcon = (stage: string): string => {
+  const getStageIcon = (stage: string): React.ReactNode => {
     switch (stage) {
-      case 'validating': return '🔍';
-      case 'backup': return '💾';
-      case 'updating_compose': return '📝';
-      case 'pulling_image': return '⬇️';
-      case 'recreating': return '🔄';
-      case 'health_check': return '❤️';
-      case 'rolling_back': return '⏪';
-      case 'complete': return '✅';
-      case 'failed': return '❌';
-      default: return '⏳';
+      case 'validating':
+        return <i className="fa-solid fa-magnifying-glass"></i>;
+      case 'backup':
+        return <i className="fa-solid fa-floppy-disk"></i>;
+      case 'updating_compose':
+        return <i className="fa-solid fa-file-pen"></i>;
+      case 'pulling_image':
+        return <i className="fa-solid fa-cloud-arrow-down"></i>;
+      case 'recreating':
+        return <i className="fa-solid fa-rotate"></i>;
+      case 'health_check':
+        return <i className="fa-solid fa-heart-pulse"></i>;
+      case 'rolling_back':
+        return <i className="fa-solid fa-rotate-left"></i>;
+      case 'complete':
+        return <i className="fa-solid fa-circle-check"></i>;
+      case 'failed':
+        return <i className="fa-solid fa-circle-xmark"></i>;
+      default:
+        return <i className="fa-solid fa-hourglass-half"></i>;
     }
   };
 
@@ -300,15 +318,16 @@ export function History({ onBack: _onBack }: HistoryProps) {
   };
 
   const getStatusIcon = (status: string, rollback: boolean) => {
-    if (rollback) return '⏪';
+    if (rollback) return <i className="fa-solid fa-rotate-left"></i>;
     switch (status) {
-      case 'complete': return '✓';
-      case 'failed': return '✗';
-      default: return '○';
+      case 'complete': return <i className="fa-solid fa-check"></i>;
+      case 'failed': return <i className="fa-solid fa-xmark"></i>;
+      default: return <i className="fa-regular fa-circle"></i>;
     }
   };
 
-  const getStatusClass = (status: string) => {
+  const getStatusClass = (status: string, rollback: boolean = false) => {
+    if (rollback) return 'status-rollback';
     switch (status) {
       case 'complete': return 'status-success';
       case 'failed': return 'status-failed';
@@ -396,12 +415,12 @@ export function History({ onBack: _onBack }: HistoryProps) {
           filteredOperations.map((op) => (
             <div
               key={op.operation_id}
-              className={`operation-card ${getStatusClass(op.status)} ${expandedOp === op.operation_id ? 'expanded' : ''}`}
+              className={`operation-card ${getStatusClass(op.status, op.rollback_occurred)} ${expandedOp === op.operation_id ? 'expanded' : ''}`}
               onClick={() => setExpandedOp(expandedOp === op.operation_id ? null : op.operation_id)}
             >
               <div className="operation-summary">
                 <div className="op-main">
-                  <span className={`op-status-icon ${getStatusClass(op.status)}`}>
+                  <span className={`op-status-icon ${getStatusClass(op.status, op.rollback_occurred)}`}>
                     {getStatusIcon(op.status, op.rollback_occurred)}
                   </span>
                   <span className="op-container">
@@ -491,7 +510,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
                           showRollbackConfirm(op);
                         }}
                       >
-                        ⏪ Rollback
+                        <i className="fa-solid fa-rotate-left"></i> Rollback
                       </button>
                     )}
                     <span className="op-id">ID: {op.operation_id.slice(0, 12)}</span>
@@ -546,10 +565,10 @@ export function History({ onBack: _onBack }: HistoryProps) {
             <div className="update-container-list">
               <div className={`update-container-item status-${rollbackProgress.status}`}>
                 <span className="status-icon">
-                  {rollbackProgress.status === 'pending' && '○'}
-                  {rollbackProgress.status === 'in_progress' && '◐'}
-                  {rollbackProgress.status === 'success' && '✓'}
-                  {rollbackProgress.status === 'failed' && '✗'}
+                  {rollbackProgress.status === 'pending' && <i className="fa-regular fa-circle"></i>}
+                  {rollbackProgress.status === 'in_progress' && <i className="fa-solid fa-spinner fa-spin"></i>}
+                  {rollbackProgress.status === 'success' && <i className="fa-solid fa-check"></i>}
+                  {rollbackProgress.status === 'failed' && <i className="fa-solid fa-xmark"></i>}
                 </span>
                 <span className="container-name">{rollbackProgress.containerName}</span>
                 {rollbackProgress.message && (
@@ -579,8 +598,8 @@ export function History({ onBack: _onBack }: HistoryProps) {
 
             {/* Activity log */}
             <div className="update-activity-log">
-              <div className="log-header">Activity:</div>
-              <div className="log-entries">
+              <div className="log-header">Recent Activity:</div>
+              <div className="log-entries" ref={logEntriesRef}>
                 {rollbackProgress.logs.slice(-10).map((log, i) => (
                   <div key={i} className="log-entry">
                     <span className="log-time">
@@ -596,9 +615,9 @@ export function History({ onBack: _onBack }: HistoryProps) {
             {(rollbackProgress.status === 'success' || rollbackProgress.status === 'failed') && (
               <div className="update-completion">
                 {rollbackProgress.status === 'success' ? (
-                  <div className="completion-success">✓ Rollback completed successfully!</div>
+                  <div className="completion-success"><i className="fa-solid fa-check"></i> Rollback completed successfully!</div>
                 ) : (
-                  <div className="completion-error">✗ Rollback failed</div>
+                  <div className="completion-error"><i className="fa-solid fa-xmark"></i> Rollback failed</div>
                 )}
                 <button className="close-btn" onClick={() => {
                   setRollbackProgress(null);

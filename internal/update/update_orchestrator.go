@@ -1151,7 +1151,26 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 		return "", fmt.Errorf("container %s not found", origOp.ContainerName)
 	}
 
-	// Create rollback operation (swapped versions: new becomes old, old becomes new)
+	// Extract the actual image tag from the backup to use as the target version
+	targetVersion := origOp.OldVersion // Fallback to original old version
+	var compose map[string]interface{}
+	if data, err := os.ReadFile(backup.BackupFilePath); err == nil {
+		if err := yaml.Unmarshal(data, &compose); err == nil {
+			serviceName := targetContainer.Labels["com.docker.compose.service"]
+			if services, ok := compose["services"].(map[string]interface{}); ok {
+				if service, ok := services[serviceName].(map[string]interface{}); ok {
+					if img, ok := service["image"].(string); ok {
+						// Extract tag from image (e.g., "traefik/whoami:latest" -> "latest")
+						if parts := strings.Split(img, ":"); len(parts) == 2 {
+							targetVersion = parts[1]
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Create rollback operation
 	rollbackOpID := uuid.New().String()
 	rollbackOp := storage.UpdateOperation{
 		OperationID:    rollbackOpID,
@@ -1161,7 +1180,7 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 		OperationType:  "rollback",
 		Status:         "in_progress",
 		OldVersion:     origOp.NewVersion, // Current version (what we're rolling back from)
-		NewVersion:     origOp.OldVersion, // Target version (what we're rolling back to)
+		NewVersion:     targetVersion,     // Target version from backup (what we're rolling back to)
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 		StartedAt:      func() *time.Time { t := time.Now(); return &t }(),

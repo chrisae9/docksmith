@@ -17,9 +17,11 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<FilterType>('all');
+  const [filter, setFilter] = useState<FilterType>('updates');
   const [sort, setSort] = useState<SortType>('stack');
   const [showLocalImages, setShowLocalImages] = useState(false);
+  const [showIgnored, setShowIgnored] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [updating, setUpdating] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -36,6 +38,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     logs: Array<{ time: number; message: string }>;
   } | null>(null);
   const elapsedIntervalRef = useRef<number | null>(null);
+  const logEntriesRef = useRef<HTMLDivElement>(null);
 
   // Connect to SSE for real-time progress (always connected for check progress)
   const { lastEvent: progressEvent, checkProgress, clearEvents } = useEventStream(true);
@@ -56,6 +59,13 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       }
     };
   }, [updateProgress]);
+
+  // Auto-scroll logs to bottom when new entries are added
+  useEffect(() => {
+    if (logEntriesRef.current && updateProgress?.logs) {
+      logEntriesRef.current.scrollTop = logEntriesRef.current.scrollHeight;
+    }
+  }, [updateProgress?.logs]);
 
   // Add SSE progress events to activity log
   useEffect(() => {
@@ -388,8 +398,23 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   };
 
   const filterContainer = (container: ContainerInfo) => {
+    // Apply search filter first
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      const matchesSearch =
+        container.container_name.toLowerCase().includes(query) ||
+        container.image.toLowerCase().includes(query) ||
+        (container.stack && container.stack.toLowerCase().includes(query));
+      if (!matchesSearch) {
+        return false;
+      }
+    }
     // Hide local images unless explicitly showing them or filtering for them
     if (container.status === 'LOCAL_IMAGE' && !showLocalImages && filter !== 'local') {
+      return false;
+    }
+    // Hide ignored containers unless explicitly showing them
+    if (container.status === 'IGNORED' && !showIgnored) {
       return false;
     }
     switch (filter) {
@@ -479,6 +504,24 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </button>
           </div>
         </div>
+        <div className="search-bar">
+          <i className="fa-solid fa-magnifying-glass search-icon"></i>
+          <input
+            type="text"
+            placeholder="Search containers..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+          />
+          {searchQuery && (
+            <button
+              className="search-clear"
+              onClick={() => setSearchQuery('')}
+            >
+              <i className="fa-solid fa-xmark"></i>
+            </button>
+          )}
+        </div>
         <div className="filter-toolbar">
           <div className="segmented-control">
             <button
@@ -501,6 +544,13 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </button>
           </div>
           <div className="toolbar-options">
+            <button
+              className={`icon-btn ${showIgnored ? 'active' : ''}`}
+              onClick={() => setShowIgnored(!showIgnored)}
+              title="Show ignored containers"
+            >
+              <i className={`fa-solid fa-eye${showIgnored ? '' : '-slash'}`}></i>
+            </button>
             <button
               className={`icon-btn ${showLocalImages ? 'active' : ''}`}
               onClick={() => setShowLocalImages(!showLocalImages)}
@@ -673,7 +723,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             {/* Activity log */}
             <div className="update-activity-log">
               <div className="log-header">Recent Activity:</div>
-              <div className="log-entries">
+              <div className="log-entries" ref={logEntriesRef}>
                 {updateProgress.logs.slice(-10).map((log, i) => (
                   <div key={i} className="log-entry">
                     <span className="log-time">
@@ -752,8 +802,16 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
     if (hasUpdate && container.current_version && container.latest_version) {
       return `${container.current_version} → ${container.latest_version}`;
     }
+    // Handle case where we have latest_version but no current_version (e.g., :latest tag updates)
+    if (hasUpdate && !container.current_version && container.latest_version) {
+      const currentTag = container.current_tag || 'unknown';
+      return `${currentTag} → ${container.latest_version}`;
+    }
     if (container.status === 'LOCAL_IMAGE') {
       return 'Local image';
+    }
+    if (container.status === 'IGNORED') {
+      return 'Ignored';
     }
     return container.current_tag || container.current_version || '';
   };
