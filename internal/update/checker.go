@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
@@ -174,6 +175,104 @@ func (c *Checker) shouldIgnoreContainer(container docker.Container) bool {
 	return false
 }
 
+// checkComposeMismatch checks if the running container's image differs from the compose file specification.
+// Detects two scenarios:
+// 1. Container lost its tag reference and is running with bare SHA digest
+// 2. Container is running different tag than what compose file specifies
+// Returns (true, expectedImage) if there's a mismatch, (false, "") if no mismatch or unable to determine.
+func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string) {
+	// Check if this is a compose-managed container
+	composeFile, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok || composeFile == "" {
+		// Not a compose-managed container
+		return false, ""
+	}
+
+	// SCENARIO 1: Check if container lost its tag reference (running with bare SHA)
+	// This happens when container.Image is "sha256:..." or just the digest
+	if strings.HasPrefix(container.Image, "sha256:") || (!strings.Contains(container.Image, ":") && len(container.Image) == 64) {
+		log.Printf("Container %s: Lost tag reference - running with bare SHA digest", container.Name)
+		return true, "(lost tag reference - see compose file)"
+	}
+
+	// SCENARIO 2: Check if running image differs from compose file specification
+	// The label may contain multiple paths separated by comma
+	composeFiles := strings.Split(composeFile, ",")
+	if len(composeFiles) == 0 {
+		return false, ""
+	}
+
+	// Use the first compose file
+	composePath := strings.TrimSpace(composeFiles[0])
+	if composePath == "" {
+		return false, ""
+	}
+
+	// Load and parse the compose file
+	composeData, err := compose.LoadComposeFile(composePath)
+	if err != nil {
+		// If we can't read the compose file, we can't verify scenario 2 (file content mismatch)
+		// This is OK - scenario 1 (lost tag) already works above
+		// Note: Path translation is handled elsewhere when docksmith runs inside Docker
+		return false, ""
+	}
+
+	// Find the service definition for this container
+	service, err := composeData.FindServiceByContainerName(container.Name)
+	if err != nil {
+		log.Printf("Container %s: Failed to find service in compose file: %v", container.Name, err)
+		return false, ""
+	}
+
+	// Extract the image specification from the service definition
+	if service.Node.Kind != 2 { // yaml.MappingNode
+		return false, ""
+	}
+
+	var imageSpec string
+	for i := 0; i < len(service.Node.Content); i += 2 {
+		keyNode := service.Node.Content[i]
+		if keyNode.Value == "image" && i+1 < len(service.Node.Content) {
+			valueNode := service.Node.Content[i+1]
+			imageSpec = valueNode.Value
+			break
+		}
+	}
+
+	if imageSpec == "" {
+		// No image spec in compose file (might be using build)
+		return false, ""
+	}
+
+	// Normalize both images for comparison (handle digest vs tag differences)
+	// The running container may have a full SHA while compose has a tag
+	runningImage := container.Image
+
+	// If running image contains @sha256:, extract the base image name
+	if strings.Contains(runningImage, "@sha256:") {
+		runningImage = strings.Split(runningImage, "@")[0]
+	}
+
+	// If running image has no tag, it's using latest implicitly
+	if !strings.Contains(runningImage, ":") {
+		runningImage += ":latest"
+	}
+
+	// Normalize compose spec too
+	normalizedSpec := imageSpec
+	if !strings.Contains(normalizedSpec, ":") {
+		normalizedSpec += ":latest"
+	}
+
+	// Compare the normalized images
+	if runningImage != normalizedSpec {
+		log.Printf("Container %s: Image mismatch - running: %s, compose: %s", container.Name, container.Image, imageSpec)
+		return true, imageSpec
+	}
+
+	return false, ""
+}
+
 // checkContainer checks a single container for updates.
 func (c *Checker) checkContainer(ctx context.Context, container docker.Container) ContainerUpdate {
 	log.Printf("checkContainer: Starting check for %s (image: %s)", container.Name, container.Image)
@@ -181,6 +280,14 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		ContainerName: container.Name,
 		Image:         container.Image,
 		HealthStatus:  container.HealthStatus,
+	}
+
+	// Check for compose mismatch (running image != compose file specification)
+	if mismatch, expectedImage := c.checkComposeMismatch(container); mismatch {
+		log.Printf("Container %s: COMPOSE MISMATCH - running %s, compose specifies %s", container.Name, container.Image, expectedImage)
+		update.Status = ComposeMismatch
+		update.Error = fmt.Sprintf("Running image (%s) differs from compose specification (%s)", container.Image, expectedImage)
+		return update
 	}
 
 	// Check if container explicitly allows :latest tag (only from labels)

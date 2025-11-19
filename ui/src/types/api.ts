@@ -168,12 +168,12 @@ export const UpdateStatus = {
 
 // Change Type Constants (matches version.ChangeType)
 export const ChangeType = {
-  Unknown: 0,
-  NoChange: 1,
-  PatchChange: 2,
-  MinorChange: 3,
-  MajorChange: 4,
-  Downgrade: 5,
+  NoChange: 0,
+  PatchChange: 1,
+  MinorChange: 2,
+  MajorChange: 3,
+  Downgrade: 4,
+  UnknownChange: 5,
 } as const;
 
 // Helper function to get change type name

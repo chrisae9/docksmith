@@ -215,7 +215,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     const changeTypeName = getChangeTypeName(container.change_type);
     if (
       container.change_type === ChangeType.NoChange ||
-      container.change_type === ChangeType.Unknown ||
+      container.change_type === ChangeType.UnknownChange ||
       changeTypeName === 'unknown' ||
       changeTypeName === 'rebuild'
     ) {

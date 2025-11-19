@@ -43,7 +43,7 @@
   /* Status Indicators */
   --color-status-major: #FF453A;        /* Major version update */
   --color-status-minor: #FF9F0A;        /* Minor version update */
-  --color-status-patch: #30D158;        /* Patch version update */
+  --color-status-patch: #64D2FF;        /* Patch version update (blue - distinct from up-to-date) */
   --color-status-current: #30D158;      /* Up to date */
   --color-status-pinnable: #FFD60A;     /* Needs version pinning */
   --color-status-local: #636366;        /* Local image */
@@ -2351,8 +2351,8 @@ li.selected {
 }
 
 .change-badge.patch {
-  background: var(--color-success-dim);
-  color: var(--color-success);
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
 }
 
 .change-badge.rebuild {
