@@ -7,10 +7,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/version"
 )
@@ -158,18 +160,17 @@ func (c *Checker) mapStatusToString(status UpdateStatus) string {
 	}
 }
 
-// shouldIgnoreContainer checks if a container has the docksmith.ignore label set to true
+// shouldIgnoreContainer checks if a container should be ignored from update checks.
+// Only checks container labels (source of truth from compose file).
 func (c *Checker) shouldIgnoreContainer(container docker.Container) bool {
-	// Check for docksmith.ignore label
-	if ignoreValue, found := container.Labels["docksmith.ignore"]; found {
-		log.Printf("Container %s has docksmith.ignore label: '%s'", container.Name, ignoreValue)
-		// Accept "true", "1", "yes" as ignore values
-		ignoreValue = strings.ToLower(strings.TrimSpace(ignoreValue))
-		shouldIgnore := ignoreValue == "true" || ignoreValue == "1" || ignoreValue == "yes"
-		log.Printf("Container %s shouldIgnore: %v", container.Name, shouldIgnore)
-		return shouldIgnore
+	if ignoreValue, ok := container.Labels[scripts.IgnoreLabel]; ok {
+		ignore := ignoreValue == "true" || ignoreValue == "1" || ignoreValue == "yes"
+		if ignore {
+			log.Printf("Container %s: Ignore flag set via label", container.Name)
+			return true
+		}
 	}
-	log.Printf("Container %s has no docksmith.ignore label (labels: %d)", container.Name, len(container.Labels))
+
 	return false
 }
 
@@ -179,15 +180,15 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	update := ContainerUpdate{
 		ContainerName: container.Name,
 		Image:         container.Image,
+		HealthStatus:  container.HealthStatus,
 	}
 
-	// Check if container explicitly allows :latest tag
+	// Check if container explicitly allows :latest tag (only from labels)
 	allowLatest := false
-	if allowValue, found := container.Labels["docksmith.allow-latest"]; found {
-		allowValue = strings.ToLower(strings.TrimSpace(allowValue))
-		allowLatest = allowValue == "true" || allowValue == "1" || allowValue == "yes"
+	if allowLatestValue, ok := container.Labels[scripts.AllowLatestLabel]; ok {
+		allowLatest = allowLatestValue == "true" || allowLatestValue == "1" || allowLatestValue == "yes"
 		if allowLatest {
-			log.Printf("Container %s has docksmith.allow-latest=true, will not suggest migration", container.Name)
+			log.Printf("Container %s: allow-latest flag set via label", container.Name)
 		}
 	}
 
@@ -540,9 +541,17 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		}
 	}
 
-	// Run pre-update check if configured - always run to provide health status visibility
+	// Run pre-update check if configured (only from labels)
 	log.Printf("Container %s: Checking pre-update conditions - status=%s", container.Name, update.Status)
-	if checkScript, found := container.Labels["docksmith.pre-update-check"]; found && checkScript != "" {
+	checkScript := ""
+
+	if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+		log.Printf("Container %s: Pre-update script found in label: %s", container.Name, scriptPath)
+		checkScript = scriptPath
+	}
+
+	// Run the check if we found a script
+	if checkScript != "" {
 		update.PreUpdateCheck = checkScript
 		log.Printf("Container %s: Running pre-update check: %s", container.Name, checkScript)
 
@@ -594,7 +603,13 @@ func (c *Checker) isRegistryMetadataError(err error) bool {
 // The script should exit 0 for success (safe to update) and non-zero for failure (blocked).
 // Output from the script (stdout/stderr) is captured and returned as the reason.
 func (c *Checker) runPreUpdateCheck(ctx context.Context, scriptPath, containerName string) (bool, string) {
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", scriptPath)
+	// Construct full path if not already absolute
+	fullPath := scriptPath
+	if !filepath.IsAbs(scriptPath) {
+		fullPath = filepath.Join(scripts.ScriptsDir, scriptPath)
+	}
+
+	cmd := exec.CommandContext(ctx, fullPath)
 
 	// Set environment variables for the script
 	cmd.Env = append(os.Environ(),

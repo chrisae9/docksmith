@@ -1,0 +1,611 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"github.com/chis/docksmith/internal/compose"
+	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/output"
+	"github.com/chis/docksmith/internal/scripts"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+)
+
+// SetLabelsRequest represents a request to set labels
+type SetLabelsRequest struct {
+	Container   string  `json:"container"`
+	Ignore      *bool   `json:"ignore,omitempty"`
+	AllowLatest *bool   `json:"allow_latest,omitempty"`
+	Script      *string `json:"script,omitempty"`
+	NoRestart   bool    `json:"no_restart,omitempty"`
+	Force       bool    `json:"force,omitempty"`
+}
+
+// RemoveLabelsRequest represents a request to remove labels
+type RemoveLabelsRequest struct {
+	Container  string   `json:"container"`
+	LabelNames []string `json:"label_names"`
+	NoRestart  bool     `json:"no_restart,omitempty"`
+	Force      bool     `json:"force,omitempty"`
+}
+
+// LabelOperationResult represents the result of a label operation
+type LabelOperationResult struct {
+	Success        bool              `json:"success"`
+	Container      string            `json:"container"`
+	Operation      string            `json:"operation"`
+	LabelsModified map[string]string `json:"labels_modified,omitempty"`
+	LabelsRemoved  []string          `json:"labels_removed,omitempty"`
+	ComposeFile    string            `json:"compose_file"`
+	Restarted      bool              `json:"restarted"`
+	PreCheckRan    bool              `json:"pre_check_ran"`
+	PreCheckPassed bool              `json:"pre_check_passed,omitempty"`
+	Message        string            `json:"message,omitempty"`
+}
+
+// handleLabelsGet returns labels for a container
+// GET /api/labels/:container
+func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
+	containerName := r.PathValue("container")
+
+	if containerName == "" {
+		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+		return
+	}
+
+	ctx := r.Context()
+
+	// List containers
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		output.WriteJSONError(w, fmt.Errorf("failed to list containers: %w", err))
+		return
+	}
+
+	// Find the container
+	var container *docker.Container
+	for _, c := range containers {
+		if c.Name == containerName {
+			container = &c
+			break
+		}
+	}
+
+	if container == nil {
+		output.WriteJSONError(w, fmt.Errorf("container not found: %s", containerName))
+		return
+	}
+
+	// Extract docksmith labels
+	docksmithLabels := make(map[string]string)
+	if val, ok := container.Labels[scripts.IgnoreLabel]; ok {
+		docksmithLabels[scripts.IgnoreLabel] = val
+	}
+	if val, ok := container.Labels[scripts.AllowLatestLabel]; ok {
+		docksmithLabels[scripts.AllowLatestLabel] = val
+	}
+	if val, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok {
+		docksmithLabels[scripts.PreUpdateCheckLabel] = val
+	}
+
+	output.WriteJSONData(w, map[string]interface{}{
+		"container": containerName,
+		"labels":    docksmithLabels,
+	})
+}
+
+// handleLabelsSet sets labels on a container
+// POST /api/labels/set
+func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
+	var req SetLabelsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		output.WriteJSONError(w, fmt.Errorf("invalid request: %w", err))
+		return
+	}
+
+	if req.Container == "" {
+		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+		return
+	}
+
+	if req.Ignore == nil && req.AllowLatest == nil && req.Script == nil {
+		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	result, err := s.setLabels(ctx, &req)
+	if err != nil {
+		output.WriteJSONError(w, err)
+		return
+	}
+
+	output.WriteJSONData(w, result)
+}
+
+// handleLabelsRemove removes labels from a container
+// POST /api/labels/remove
+func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
+	var req RemoveLabelsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		output.WriteJSONError(w, fmt.Errorf("invalid request: %w", err))
+		return
+	}
+
+	if req.Container == "" {
+		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+		return
+	}
+
+	if len(req.LabelNames) == 0 {
+		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	result, err := s.removeLabels(ctx, &req)
+	if err != nil {
+		output.WriteJSONError(w, err)
+		return
+	}
+
+	output.WriteJSONData(w, result)
+}
+
+// setLabels implements the label setting logic (atomic: compose update + restart)
+func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
+	result := &LabelOperationResult{
+		Success:        false,
+		Container:      req.Container,
+		Operation:      "set",
+		LabelsModified: make(map[string]string),
+		Restarted:      false,
+		PreCheckRan:    false,
+	}
+
+	// Find container
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var container *docker.Container
+	for _, c := range containers {
+		if c.Name == req.Container {
+			container = &c
+			break
+		}
+	}
+
+	if container == nil {
+		return nil, fmt.Errorf("container not found: %s", req.Container)
+	}
+
+	// Get compose file path
+	composeFilePath, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok || composeFilePath == "" {
+		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
+	}
+
+	// Translate host path to container path
+	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
+
+	result.ComposeFile = composeFilePath
+	serviceName := container.Labels["com.docker.compose.service"]
+
+	// Run pre-update check if configured and not forced/no-restart
+	if !req.NoRestart && !req.Force {
+		if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+			result.PreCheckRan = true
+			if err := s.runPreUpdateCheck(ctx, container, scriptPath); err != nil {
+				return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
+			}
+			result.PreCheckPassed = true
+		}
+	}
+
+	// Create backup
+	backupPath, err := compose.BackupComposeFile(composeFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create backup: %w", err)
+	}
+	defer func() {
+		// Clean up backup on success
+		if result.Success {
+			_ = os.Remove(backupPath)
+		}
+	}()
+
+	// Load compose file
+	composeFile, err := compose.LoadComposeFile(composeFilePath)
+	if err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to load compose file: %w", err)
+	}
+
+	// Find service
+	service, err := composeFile.FindServiceByContainerName(serviceName)
+	if err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to find service: %w", err)
+	}
+
+	// Apply label updates
+	if req.Ignore != nil {
+		if *req.Ignore {
+			// Set to true (non-default)
+			if err := service.SetLabel(scripts.IgnoreLabel, "true"); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to set ignore label: %w", err)
+			}
+			result.LabelsModified[scripts.IgnoreLabel] = "true"
+		} else {
+			// Remove label when false (default value)
+			if err := service.RemoveLabel(scripts.IgnoreLabel); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to remove ignore label: %w", err)
+			}
+			result.LabelsModified[scripts.IgnoreLabel] = ""
+		}
+	}
+
+	if req.AllowLatest != nil {
+		if *req.AllowLatest {
+			// Set to true (non-default)
+			if err := service.SetLabel(scripts.AllowLatestLabel, "true"); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to set allow-latest label: %w", err)
+			}
+			result.LabelsModified[scripts.AllowLatestLabel] = "true"
+		} else {
+			// Remove label when false (default value)
+			if err := service.RemoveLabel(scripts.AllowLatestLabel); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to remove allow-latest label: %w", err)
+			}
+			result.LabelsModified[scripts.AllowLatestLabel] = ""
+		}
+	}
+
+	if req.Script != nil {
+		// If script is empty string, remove the label; otherwise set it
+		if *req.Script == "" {
+			if err := service.RemoveLabel(scripts.PreUpdateCheckLabel); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to remove script label: %w", err)
+			}
+			result.LabelsModified[scripts.PreUpdateCheckLabel] = ""
+		} else {
+			if err := service.SetLabel(scripts.PreUpdateCheckLabel, *req.Script); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to set script label: %w", err)
+			}
+			result.LabelsModified[scripts.PreUpdateCheckLabel] = *req.Script
+		}
+	}
+
+	// Save compose file
+	if err := composeFile.Save(); err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to save compose file: %w", err)
+	}
+
+	// Restart container to apply labels (unless --no-restart)
+	if !req.NoRestart {
+		if err := s.restartContainer(ctx, composeFilePath, serviceName, result.LabelsModified); err != nil {
+			compose.RestoreFromBackup(composeFilePath, backupPath)
+			return nil, fmt.Errorf("failed to restart container: %w", err)
+		}
+		result.Restarted = true
+	}
+
+	result.Success = true
+	result.Message = fmt.Sprintf("%d label(s) set successfully", len(result.LabelsModified))
+
+	return result, nil
+}
+
+// removeLabels implements the label removal logic (atomic: compose update + restart)
+func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*LabelOperationResult, error) {
+	result := &LabelOperationResult{
+		Success:       false,
+		Container:     req.Container,
+		Operation:     "remove",
+		LabelsRemoved: req.LabelNames,
+		Restarted:     false,
+		PreCheckRan:   false,
+	}
+
+	// Find container
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var container *docker.Container
+	for _, c := range containers {
+		if c.Name == req.Container {
+			container = &c
+			break
+		}
+	}
+
+	if container == nil {
+		return nil, fmt.Errorf("container not found: %s", req.Container)
+	}
+
+	// Get compose file path
+	composeFilePath, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok || composeFilePath == "" {
+		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
+	}
+
+	// Translate host path to container path
+	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
+
+	result.ComposeFile = composeFilePath
+	serviceName := container.Labels["com.docker.compose.service"]
+
+	// Run pre-update check if configured and not forced/no-restart
+	if !req.NoRestart && !req.Force {
+		if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+			result.PreCheckRan = true
+			if err := s.runPreUpdateCheck(ctx, container, scriptPath); err != nil {
+				return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
+			}
+			result.PreCheckPassed = true
+		}
+	}
+
+	// Create backup
+	backupPath, err := compose.BackupComposeFile(composeFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create backup: %w", err)
+	}
+	defer func() {
+		// Clean up backup on success
+		if result.Success {
+			_ = os.Remove(backupPath)
+		}
+	}()
+
+	// Load compose file
+	composeFile, err := compose.LoadComposeFile(composeFilePath)
+	if err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to load compose file: %w", err)
+	}
+
+	// Find service
+	service, err := composeFile.FindServiceByContainerName(serviceName)
+	if err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to find service: %w", err)
+	}
+
+	// Remove all specified labels
+	for _, labelName := range req.LabelNames {
+		if err := service.RemoveLabel(labelName); err != nil {
+			compose.RestoreFromBackup(composeFilePath, backupPath)
+			return nil, fmt.Errorf("failed to remove label %s: %w", labelName, err)
+		}
+	}
+
+	// Save compose file
+	if err := composeFile.Save(); err != nil {
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return nil, fmt.Errorf("failed to save compose file: %w", err)
+	}
+
+	// Restart container to apply changes (unless --no-restart)
+	if !req.NoRestart {
+		// For remove, we pass empty map and specify which labels to remove separately
+		if err := s.restartContainerWithRemovedLabels(ctx, composeFilePath, serviceName, req.LabelNames); err != nil {
+			compose.RestoreFromBackup(composeFilePath, backupPath)
+			return nil, fmt.Errorf("failed to restart container: %w", err)
+		}
+		result.Restarted = true
+	}
+
+	result.Success = true
+	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(req.LabelNames))
+
+	return result, nil
+}
+
+// runPreUpdateCheck runs a pre-update check script
+func (s *Server) runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
+	// Validate script path
+	if !docker.ValidatePreUpdateScript(scriptPath) {
+		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
+	}
+
+	// Check if script exists
+	if !filepath.IsAbs(scriptPath) {
+		return fmt.Errorf("pre-update script path must be absolute: %s", scriptPath)
+	}
+
+	// Execute the check script with timeout
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.Name)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Non-zero exit code means check failed
+			return fmt.Errorf("script exited with code %d: %s", exitErr.ExitCode(), string(output))
+		}
+		return fmt.Errorf("failed to execute script: %w", err)
+	}
+
+	return nil
+}
+
+// restartContainerWithRemovedLabels recreates a container after removing labels using Docker SDK
+func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeFilePath, serviceName string, removedLabelNames []string) error {
+	// Find the container by service name
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for _, c := range containers {
+		if svc, ok := c.Labels["com.docker.compose.service"]; ok && svc == serviceName {
+			// Also verify it's from the same compose file
+			if cf, ok := c.Labels["com.docker.compose.project.config_files"]; ok {
+				// Translate and compare
+				translatedCF := s.pathTranslator.TranslateToContainer(cf)
+				if translatedCF == composeFilePath {
+					targetContainer = &c
+					break
+				}
+			}
+		}
+	}
+
+	if targetContainer == nil {
+		return fmt.Errorf("container not found for service: %s", serviceName)
+	}
+
+	// Get the Docker client
+	cli := s.dockerService.GetClient()
+
+	// Inspect the container to get its full configuration
+	inspect, err := cli.ContainerInspect(ctx, targetContainer.ID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	// Stop the container
+	timeout := 10 // 10 seconds
+	stopOptions := container.StopOptions{
+		Timeout: &timeout,
+	}
+	if err := cli.ContainerStop(ctx, targetContainer.ID, stopOptions); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	// Remove the container
+	removeOptions := container.RemoveOptions{
+		Force: true,
+	}
+	if err := cli.ContainerRemove(ctx, targetContainer.ID, removeOptions); err != nil {
+		return fmt.Errorf("failed to remove container: %w", err)
+	}
+
+	// Update the config by removing specified labels
+	newConfig := inspect.Config
+	if newConfig.Labels != nil {
+		for _, labelName := range removedLabelNames {
+			delete(newConfig.Labels, labelName)
+		}
+	}
+
+	networkingConfig := &network.NetworkingConfig{
+		EndpointsConfig: inspect.NetworkSettings.Networks,
+	}
+
+	if _, err := cli.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, targetContainer.Name); err != nil {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Start the newly created container
+	if err := cli.ContainerStart(ctx, targetContainer.Name, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start container: %w", err)
+	}
+
+	return nil
+}
+
+// restartContainer recreates a container to apply new labels using Docker SDK
+func (s *Server) restartContainer(ctx context.Context, composeFilePath, serviceName string, updatedLabels map[string]string) error {
+	// Find the container by service name
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for _, c := range containers {
+		if svc, ok := c.Labels["com.docker.compose.service"]; ok && svc == serviceName {
+			// Also verify it's from the same compose file
+			if cf, ok := c.Labels["com.docker.compose.project.config_files"]; ok {
+				// Translate and compare
+				translatedCF := s.pathTranslator.TranslateToContainer(cf)
+				if translatedCF == composeFilePath {
+					targetContainer = &c
+					break
+				}
+			}
+		}
+	}
+
+	if targetContainer == nil {
+		return fmt.Errorf("container not found for service: %s", serviceName)
+	}
+
+	// Get the Docker client
+	cli := s.dockerService.GetClient()
+
+	// Inspect the container to get its full configuration
+	inspect, err := cli.ContainerInspect(ctx, targetContainer.ID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	// Stop the container
+	timeout := 10 // 10 seconds
+	stopOptions := container.StopOptions{
+		Timeout: &timeout,
+	}
+	if err := cli.ContainerStop(ctx, targetContainer.ID, stopOptions); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	// Remove the container
+	removeOptions := container.RemoveOptions{
+		Force: true,
+	}
+	if err := cli.ContainerRemove(ctx, targetContainer.ID, removeOptions); err != nil {
+		return fmt.Errorf("failed to remove container: %w", err)
+	}
+
+	// Update the config with new labels from the compose file
+	newConfig := inspect.Config
+	if newConfig.Labels == nil {
+		newConfig.Labels = make(map[string]string)
+	}
+	// Merge updated labels into the config
+	for key, value := range updatedLabels {
+		newConfig.Labels[key] = value
+	}
+
+	networkingConfig := &network.NetworkingConfig{
+		EndpointsConfig: inspect.NetworkSettings.Networks,
+	}
+
+	if _, err := cli.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, targetContainer.Name); err != nil {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Start the newly created container
+	if err := cli.ContainerStart(ctx, targetContainer.Name, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start container: %w", err)
+	}
+
+	return nil
+}

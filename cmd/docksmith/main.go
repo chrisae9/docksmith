@@ -271,6 +271,38 @@ func main() {
 		return
 	}
 
+	// Handle scripts command
+	if command == "scripts" {
+		cmd := NewScriptsCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("Scripts command failed: %v", err)
+		}
+		return
+	}
+
+	// Handle label command
+	if command == "label" {
+		cmd := NewLabelCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			log.Fatalf("Label command failed: %v", err)
+		}
+		return
+	}
+
 	// Handle API server command
 	if command == "api" {
 		cmd := NewAPICommand()
@@ -292,7 +324,7 @@ func main() {
 	}
 
 	// Unknown command
-	log.Fatalf("Unknown command: %s\nAvailable commands: check, update, operations, history, backups, rollback, api, debug\nRun with no arguments for interactive mode", command)
+	log.Fatalf("Unknown command: %s\nAvailable commands: check, update, operations, history, backups, rollback, scripts, label, api, debug\nRun with no arguments for interactive mode", command)
 }
 
 // runDebugMode runs the debug/analysis mode (old default behavior)

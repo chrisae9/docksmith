@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type TabId = 'updates' | 'history' | 'settings';
+export type TabId = 'updates' | 'history';
 
 interface Tab {
   id: TabId;
@@ -30,12 +30,6 @@ export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCo
       label: 'History',
       icon: 'fa-solid fa-clock-rotate-left',
       activeIcon: 'fa-solid fa-clock-rotate-left',
-    },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: 'fa-solid fa-gear',
-      activeIcon: 'fa-solid fa-gear',
     },
   ];
 

@@ -12,7 +12,8 @@ import (
 
 // Service implements the Client interface using the Docker SDK.
 type Service struct {
-	cli *client.Client
+	cli            *client.Client
+	pathTranslator *PathTranslator
 }
 
 // NewService creates a new Docker service that connects to the Docker socket.
@@ -27,7 +28,13 @@ func NewService() (*Service, error) {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
 	}
 
-	return &Service{cli: cli}, nil
+	// Initialize path translator for host->container path mapping
+	pathTranslator := NewPathTranslator(cli)
+
+	return &Service{
+		cli:            cli,
+		pathTranslator: pathTranslator,
+	}, nil
 }
 
 // ListContainers retrieves all containers from the Docker daemon.
@@ -137,13 +144,25 @@ func (s *Service) convertContainer(c types.Container) Container {
 		name = strings.TrimPrefix(c.Names[0], "/")
 	}
 
+	// Extract health status from the Status field
+	// Status format: "Up 2 minutes (healthy)" or "Up 5 seconds (unhealthy)" or just "Up 10 minutes"
+	healthStatus := "none"
+	if strings.Contains(c.Status, "(healthy)") {
+		healthStatus = "healthy"
+	} else if strings.Contains(c.Status, "(unhealthy)") {
+		healthStatus = "unhealthy"
+	} else if strings.Contains(c.Status, "(health: starting)") {
+		healthStatus = "starting"
+	}
+
 	return Container{
-		ID:      c.ID,
-		Name:    name,
-		Image:   c.Image,
-		State:   c.State,
-		Labels:  c.Labels,
-		Created: c.Created,
+		ID:           c.ID,
+		Name:         name,
+		Image:        c.Image,
+		State:        c.State,
+		HealthStatus: healthStatus,
+		Labels:       c.Labels,
+		Created:      c.Created,
 	}
 }
 
@@ -151,4 +170,10 @@ func (s *Service) convertContainer(c types.Container) Container {
 // This is used by components that need direct access to the Docker SDK.
 func (s *Service) GetClient() *client.Client {
 	return s.cli
+}
+
+// GetPathTranslator returns the path translator for host->container path mapping.
+// This is used by components that need to translate file paths between host and container.
+func (s *Service) GetPathTranslator() *PathTranslator {
+	return s.pathTranslator
 }

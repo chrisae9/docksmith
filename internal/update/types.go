@@ -37,6 +37,7 @@ type ContainerUpdate struct {
 	PreUpdateCheck     string              `json:"pre_update_check,omitempty"`      // Path to pre-update check script
 	PreUpdateCheckFail string              `json:"pre_update_check_fail,omitempty"` // Reason why pre-update check failed (if blocked)
 	PreUpdateCheckPass bool                `json:"pre_update_check_pass"`           // True if pre-update check passed
+	HealthStatus       string              `json:"health_status,omitempty"`         // Current health status: "healthy", "unhealthy", "starting", "none"
 }
 
 // CheckResult contains the results of checking for updates.

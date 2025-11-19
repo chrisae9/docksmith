@@ -231,6 +231,7 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 		storageService,
 		eventBus,
 		registryManager,
+		dockerService.GetPathTranslator(),
 	)
 
 	// Subscribe to progress events for CLI output

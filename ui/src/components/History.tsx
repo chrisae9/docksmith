@@ -19,6 +19,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'complete' | 'failed'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
   const [rollbackProgress, setRollbackProgress] = useState<{
@@ -336,9 +337,24 @@ export function History({ onBack: _onBack }: HistoryProps) {
   };
 
   const filteredOperations = operations.filter(op => {
-    if (filter === 'all') return true;
-    if (filter === 'complete') return op.status === 'complete';
-    if (filter === 'failed') return op.status === 'failed' || op.rollback_occurred;
+    // Status filter
+    if (filter === 'complete' && op.status !== 'complete') return false;
+    if (filter === 'failed' && !(op.status === 'failed' || op.rollback_occurred)) return false;
+
+    // Search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      const matchesContainer = op.container_name?.toLowerCase().includes(query);
+      const matchesStack = op.stack_name?.toLowerCase().includes(query);
+      const matchesId = op.operation_id.toLowerCase().includes(query);
+      const matchesOldVersion = op.old_version?.toLowerCase().includes(query);
+      const matchesNewVersion = op.new_version?.toLowerCase().includes(query);
+
+      if (!matchesContainer && !matchesStack && !matchesId && !matchesOldVersion && !matchesNewVersion) {
+        return false;
+      }
+    }
+
     return true;
   });
 
@@ -382,6 +398,26 @@ export function History({ onBack: _onBack }: HistoryProps) {
             <button onClick={fetchOperations} className="refresh-btn">
               Refresh
             </button>
+          </div>
+        </div>
+        <div className="search-bar">
+          <div className="search-container">
+            <i className="fa-solid fa-magnifying-glass search-icon"></i>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search operations..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                className="search-clear"
+                onClick={() => setSearchQuery('')}
+              >
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            )}
           </div>
         </div>
         <div className="filter-toolbar">
@@ -502,7 +538,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   )}
 
                   <div className="op-actions">
-                    {op.status === 'complete' && !op.rollback_occurred && (
+                    {(op.status === 'complete' || op.status === 'failed') && !op.rollback_occurred && (
                       <button
                         className="rollback-btn"
                         onClick={(e) => {

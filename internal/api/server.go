@@ -11,31 +11,35 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chis/docksmith/internal/config"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/registry"
+	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
 )
 
 // Server represents the HTTP API server
 type Server struct {
-	dockerService        *docker.Service
-	registryManager      *registry.Manager
-	storageService       storage.Storage
+	dockerService         *docker.Service
+	registryManager       *registry.Manager
+	storageService        storage.Storage
 	discoveryOrchestrator *update.Orchestrator
-	updateOrchestrator   *update.UpdateOrchestrator
-	eventBus             *events.Bus
-	httpServer           *http.Server
+	updateOrchestrator    *update.UpdateOrchestrator
+	scriptManager         *scripts.Manager
+	eventBus              *events.Bus
+	httpServer            *http.Server
+	pathTranslator        *docker.PathTranslator
 }
 
 // Config holds configuration for the API server
 type Config struct {
-	Port           int
-	DockerService  *docker.Service
+	Port            int
+	DockerService   *docker.Service
 	RegistryManager *registry.Manager
-	StorageService storage.Storage
-	StaticDir      string // Directory containing static UI files (optional)
+	StorageService  storage.Storage
+	StaticDir       string // Directory containing static UI files (optional)
 }
 
 // NewServer creates a new API server with the given configuration
@@ -56,16 +60,50 @@ func NewServer(cfg Config) *Server {
 			cfg.StorageService,
 			eventBus,
 			cfg.RegistryManager,
+			cfg.DockerService.GetPathTranslator(),
 		)
 	}
 
+	// Initialize script manager if storage is available
+	var scriptManager *scripts.Manager
+	if cfg.StorageService != nil {
+		// Load config for script manager
+		appConfig := &config.Config{}
+		ctx := context.Background()
+		configPath := os.Getenv("CONFIG_PATH")
+		if configPath == "" {
+			configPath = "/data/docksmith.yaml"
+		}
+		if err := appConfig.Load(ctx, cfg.StorageService, configPath); err != nil {
+			log.Printf("Warning: Failed to load config for script manager: %v", err)
+		}
+
+		// Run compose file discovery to populate ComposeFilePaths
+		// This is required for the script manager to find containers in compose files
+		scanner := config.NewScanner(cfg.StorageService, appConfig)
+		discoveredPaths, err := scanner.ScanAll(ctx)
+		if err != nil {
+			log.Printf("Warning: Failed to discover compose files: %v", err)
+		} else {
+			log.Printf("Discovered %d compose files", len(discoveredPaths))
+			// Reload config to get the discovered paths
+			if err := appConfig.Load(ctx, cfg.StorageService, configPath); err != nil {
+				log.Printf("Warning: Failed to reload config after discovery: %v", err)
+			}
+		}
+
+		scriptManager = scripts.NewManager(cfg.StorageService, appConfig)
+	}
+
 	s := &Server{
-		dockerService:        cfg.DockerService,
-		registryManager:      cfg.RegistryManager,
-		storageService:       cfg.StorageService,
+		dockerService:         cfg.DockerService,
+		registryManager:       cfg.RegistryManager,
+		storageService:        cfg.StorageService,
 		discoveryOrchestrator: discoveryOrchestrator,
-		updateOrchestrator:   updateOrchestrator,
-		eventBus:             eventBus,
+		updateOrchestrator:    updateOrchestrator,
+		scriptManager:         scriptManager,
+		eventBus:              eventBus,
+		pathTranslator:        cfg.DockerService.GetPathTranslator(),
 	}
 
 	// Setup HTTP server
@@ -103,6 +141,21 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 
 	// Rollback policies
 	mux.HandleFunc("GET /api/policies", s.handlePolicies)
+
+	// Script management
+	mux.HandleFunc("GET /api/scripts", s.handleScriptsList)
+	mux.HandleFunc("GET /api/scripts/assigned", s.handleScriptsAssigned)
+	mux.HandleFunc("POST /api/scripts/assign", s.handleScriptsAssign)
+	mux.HandleFunc("DELETE /api/scripts/assign/{container}", s.handleScriptsUnassign)
+
+	// Label management (atomic: compose + restart)
+	mux.HandleFunc("GET /api/labels/{container}", s.handleLabelsGet)
+	mux.HandleFunc("POST /api/labels/set", s.handleLabelsSet)
+	mux.HandleFunc("POST /api/labels/remove", s.handleLabelsRemove)
+
+	// Container settings (deprecated - use labels endpoints instead)
+	mux.HandleFunc("POST /api/settings/ignore", s.handleSettingsIgnore)
+	mux.HandleFunc("POST /api/settings/allow-latest", s.handleSettingsAllowLatest)
 
 	// Mutations (POST/PUT/DELETE)
 	mux.HandleFunc("POST /api/update", s.handleUpdate)

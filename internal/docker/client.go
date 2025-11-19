@@ -41,6 +41,7 @@ type Container struct {
 	Name           string
 	Image          string
 	State          string
+	HealthStatus   string // Health check status: "healthy", "unhealthy", "starting", "none"
 	Labels         map[string]string
 	Created        int64
 	PreUpdateCheck string // Path to pre-update check script from docksmith.pre-update-check label

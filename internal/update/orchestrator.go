@@ -306,10 +306,7 @@ func (o *Orchestrator) checkContainer(ctx context.Context, container docker.Cont
 		info.Dependencies = graph.ParseDependsOn(deps)
 	}
 
-	// Extract pre-update check
-	if check, found := docker.ExtractPreUpdateCheck(container); found {
-		info.PreUpdateCheck = check
-	}
+	// Pre-update check is already set by the checker from labels
 
 	// Use cache if enabled
 	if o.cacheEnabled && info.Status != LocalImage {
@@ -421,16 +418,17 @@ func (s *SafetyChecker) CheckContainer(ctx context.Context, container ContainerI
 		return false, fmt.Errorf("invalid pre-update script path: %s", container.PreUpdateCheck)
 	}
 
-	// Check if script exists
-	if !filepath.IsAbs(container.PreUpdateCheck) {
-		return false, fmt.Errorf("pre-update script path must be absolute: %s", container.PreUpdateCheck)
+	// Construct full path if not already absolute
+	scriptPath := container.PreUpdateCheck
+	if !filepath.IsAbs(scriptPath) {
+		scriptPath = filepath.Join("/scripts", scriptPath)
 	}
 
 	// Execute the check script with timeout
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(checkCtx, container.PreUpdateCheck, container.ID, container.ContainerName)
+	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.ContainerName)
 	output, err := cmd.Output()
 
 	if err != nil {

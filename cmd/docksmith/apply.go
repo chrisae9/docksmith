@@ -96,6 +96,7 @@ func (c *ApplyCommand) Run(ctx context.Context) error {
 			storageService,
 			eventBus,
 			registryManager,
+			dockerClient.GetPathTranslator(),
 		)
 	}
 

@@ -3,6 +3,7 @@ import { checkContainers, triggerBatchUpdate } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
+import { ContainerDetailModal } from './ContainerDetailModal';
 
 type FilterType = 'all' | 'updates' | 'current' | 'local';
 type SortType = 'stack' | 'name' | 'status';
@@ -25,6 +26,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [updating, setUpdating] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+  const [expandedContainer, setExpandedContainer] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<{
     containers: Array<{
       name: string;
@@ -369,6 +371,146 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     // Don't auto-close the modal - let user close it manually
   };
 
+  const handleSingleUpdate = async (containerName: string) => {
+    if (!result) return;
+
+    setUpdating(true);
+    setUpdateStatus(null);
+    clearEvents(); // Clear previous events
+
+    // Initialize progress tracking for just this container
+    const initialProgress = {
+      containers: [{
+        name: containerName,
+        status: 'pending' as const,
+      }],
+      currentIndex: 0,
+      startTime: Date.now(),
+      logs: [{ time: Date.now(), message: `Starting update of ${containerName}` }],
+    };
+    setUpdateProgress(initialProgress);
+
+    // Build container info
+    const container = result.containers.find(c => c.container_name === containerName);
+    if (!container) {
+      setUpdateStatus('Container not found');
+      setUpdating(false);
+      return;
+    }
+
+    const containerToUpdate = {
+      name: containerName,
+      target_version: container.latest_version || '',
+      stack: container.stack || '',
+    };
+
+    try {
+      // Update progress to in_progress
+      setUpdateProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          containers: [{ name: containerName, status: 'in_progress' as const, message: 'Triggering update...' }],
+          logs: [...prev.logs, { time: Date.now(), message: `→ Updating ${containerName} to ${containerToUpdate.target_version}` }],
+        };
+      });
+
+      // Trigger batch update with single container
+      const response = await triggerBatchUpdate([containerToUpdate]);
+
+      if (response.success && response.data) {
+        const operations = response.data.operations;
+
+        // Update progress with operation IDs
+        setUpdateProgress(prev => {
+          if (!prev) return prev;
+          const op = operations.find(o => o.containers.includes(containerName));
+          return {
+            ...prev,
+            containers: [{
+              name: containerName,
+              status: 'in_progress' as const,
+              message: 'Update triggered, polling for completion...',
+              operationId: op?.operation_id,
+            }],
+            logs: [...prev.logs, { time: Date.now(), message: `✓ Update triggered (${op?.operation_id?.slice(0, 8)}...)` }],
+          };
+        });
+
+        // Poll for completion
+        const op = operations.find(o => o.containers.includes(containerName));
+        if (op?.operation_id) {
+          let completed = false;
+          let pollCount = 0;
+          const maxPolls = 120;
+
+          while (!completed && pollCount < maxPolls) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            pollCount++;
+
+            try {
+              const opResponse = await fetch(`/api/operations/${op.operation_id}`);
+              const opData = await opResponse.json();
+
+              if (opData.success && opData.data) {
+                const operation = opData.data;
+
+                if (operation.status === 'complete') {
+                  completed = true;
+                  setUpdateProgress(prev => {
+                    if (!prev) return prev;
+                    return {
+                      ...prev,
+                      containers: [{ name: containerName, status: 'success' as const, message: 'Updated successfully' }],
+                      logs: [...prev.logs, { time: Date.now(), message: `✓ ${containerName} updated successfully` }],
+                    };
+                  });
+                } else if (operation.status === 'failed') {
+                  completed = true;
+                  setUpdateProgress(prev => {
+                    if (!prev) return prev;
+                    return {
+                      ...prev,
+                      containers: [{ name: containerName, status: 'failed' as const, message: 'Update failed', error: operation.error_message }],
+                      logs: [...prev.logs, { time: Date.now(), message: `✗ ${containerName}: ${operation.error_message}` }],
+                    };
+                  });
+                }
+              }
+            } catch {
+              // Continue polling on error
+            }
+          }
+
+          if (!completed) {
+            setUpdateProgress(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                containers: [{ name: containerName, status: 'failed' as const, message: 'Timed out waiting for completion' }],
+                logs: [...prev.logs, { time: Date.now(), message: `✗ ${containerName}: Timed out` }],
+              };
+            });
+          }
+        }
+      } else {
+        throw new Error(response.error || 'Update failed');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setUpdateProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          containers: [{ name: containerName, status: 'failed' as const, message: 'Error', error: errorMsg }],
+          logs: [...prev.logs, { time: Date.now(), message: `✗ ${errorMsg}` }],
+        };
+      });
+    }
+
+    setUpdating(false);
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
@@ -395,6 +537,19 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       }
       return next;
     });
+  };
+
+  const selectAll = () => {
+    if (!result) return;
+    const updatableContainers = result.containers
+      .filter(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE')
+      .filter(filterContainer)
+      .map(c => c.container_name);
+    setSelectedContainers(new Set(updatableContainers));
+  };
+
+  const deselectAll = () => {
+    setSelectedContainers(new Set());
   };
 
   const filterContainer = (container: ContainerInfo) => {
@@ -499,6 +654,14 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         <div className="header-top">
           <h1>Updates</h1>
           <div className="header-actions">
+            {result && result.containers.some(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE') && (
+              <button
+                onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
+                className="refresh-btn"
+              >
+                {selectedContainers.size > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
             <button onClick={fetchData} className="refresh-btn">
               Refresh
             </button>
@@ -591,6 +754,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                           container={container}
                           selected={selectedContainers.has(container.container_name)}
                           onToggle={() => toggleContainer(container.container_name)}
+                          onContainerClick={() => setExpandedContainer(container.container_name)}
                         />
                       ))}
                     </ul>
@@ -613,6 +777,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                         container={container}
                         selected={selectedContainers.has(container.container_name)}
                         onToggle={() => toggleContainer(container.container_name)}
+                        onContainerClick={() => setExpandedContainer(container.container_name)}
                       />
                     ))}
                   </ul>
@@ -635,6 +800,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     container={container}
                     selected={selectedContainers.has(container.container_name)}
                     onToggle={() => toggleContainer(container.container_name)}
+                    onContainerClick={() => setExpandedContainer(container.container_name)}
                   />
                 ))}
             </ul>
@@ -756,6 +922,15 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         </div>
       )}
 
+      {expandedContainer && result && (
+        <ContainerDetailModal
+          container={result.containers.find(c => c.container_name === expandedContainer)!}
+          onClose={() => setExpandedContainer(null)}
+          onRefresh={fetchData}
+          onUpdate={handleSingleUpdate}
+        />
+      )}
+
     </div>
   );
 }
@@ -764,9 +939,10 @@ interface ContainerRowProps {
   container: ContainerInfo;
   selected: boolean;
   onToggle: () => void;
+  onContainerClick: () => void;
 }
 
-function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
+function ContainerRow({ container, selected, onToggle, onContainerClick }: ContainerRowProps) {
   const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 
@@ -782,7 +958,7 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
       case 'UP_TO_DATE':
         return <span className="dot current" title="Up to date"></span>;
       case 'UP_TO_DATE_PINNABLE':
-        const pinnableVersion = container.recommended_tag || container.current_version || 'unknown';
+        const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
         return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
       case 'LOCAL_IMAGE':
         return <span className="dot local" title="Local image"></span>;
@@ -804,7 +980,7 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
     }
     // Handle case where we have latest_version but no current_version (e.g., :latest tag updates)
     if (hasUpdate && !container.current_version && container.latest_version) {
-      const currentTag = container.current_tag || 'unknown';
+      const currentTag = container.current_tag || (container.using_latest_tag ? 'latest' : 'current');
       return `${currentTag} → ${container.latest_version}`;
     }
     if (container.status === 'LOCAL_IMAGE') {
@@ -816,8 +992,18 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
     return container.current_tag || container.current_version || '';
   };
 
+  const handleRowClick = (e: React.MouseEvent) => {
+    // Don't open detail modal if clicking checkbox
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox') return;
+    onContainerClick();
+  };
+
   return (
-    <li className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''}`}>
+    <li
+      className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
+      onClick={handleRowClick}
+    >
       {hasUpdate && (
         <input
           type="checkbox"
@@ -831,8 +1017,14 @@ function ContainerRow({ container, selected, onToggle }: ContainerRowProps) {
       </div>
       {getStatusIndicator()}
       {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
-      {isBlocked && container.pre_update_check_fail && (
+      {container.pre_update_check_fail && (
         <span className="warn" title={container.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>
+      )}
+      {container.health_status === 'unhealthy' && (
+        <span className="warn" title="Container is currently unhealthy"><i className="fa-solid fa-heart-crack"></i></span>
+      )}
+      {container.health_status === 'starting' && (
+        <span className="info" title="Container health check is starting"><i className="fa-solid fa-heartbeat"></i></span>
       )}
     </li>
   );

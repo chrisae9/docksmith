@@ -30,6 +30,7 @@ export interface ContainerInfo {
   pre_update_check?: string;
   pre_update_check_fail?: string;
   pre_update_check_pass: boolean;
+  health_status?: string; // Health status: "healthy", "unhealthy", "starting", "none"
   id: string;
   stack?: string;
   service?: string;
@@ -90,6 +91,40 @@ export interface ComposeBackup {
   backup_file_path: string;
   backup_timestamp: string;
   created_at: string;
+}
+
+// Script (matches scripts.Script)
+export interface Script {
+  name: string;
+  path: string;
+  relative_path: string;
+  executable: boolean;
+  size: number;
+  modified_time: string;
+}
+
+// Script Assignment (matches scripts.Assignment)
+export interface ScriptAssignment {
+  container_name: string;
+  script_path: string;
+  enabled: boolean;
+  ignore: boolean;
+  allow_latest: boolean;
+  assigned_at: string;
+  assigned_by?: string;
+  updated_at: string;
+}
+
+// Scripts Response
+export interface ScriptsResponse {
+  scripts: Script[];
+  count: number;
+}
+
+// Script Assignments Response
+export interface ScriptAssignmentsResponse {
+  assignments: ScriptAssignment[];
+  count: number;
 }
 
 // History Entry (matches api.HistoryEntry)

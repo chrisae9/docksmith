@@ -229,6 +229,30 @@ type Storage interface {
 	// Returns entries in FIFO order (oldest first).
 	GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, error)
 
+	// SaveScriptAssignment creates or updates a script assignment for a container.
+	// Uses INSERT OR REPLACE to handle both create and update cases.
+	// Parameters:
+	//   - assignment: ScriptAssignment containing assignment details
+	SaveScriptAssignment(ctx context.Context, assignment ScriptAssignment) error
+
+	// GetScriptAssignment retrieves the script assignment for a specific container.
+	// Returns:
+	//   - assignment: The script assignment record
+	//   - found: True if an assignment exists for this container
+	//   - err: Any error that occurred during lookup
+	GetScriptAssignment(ctx context.Context, containerName string) (ScriptAssignment, bool, error)
+
+	// ListScriptAssignments retrieves all script assignments.
+	// Returns entries ordered by container_name.
+	// Parameters:
+	//   - enabledOnly: If true, only returns enabled assignments
+	ListScriptAssignments(ctx context.Context, enabledOnly bool) ([]ScriptAssignment, error)
+
+	// DeleteScriptAssignment removes the script assignment for a container.
+	// Parameters:
+	//   - containerName: Name of the container to remove assignment from
+	DeleteScriptAssignment(ctx context.Context, containerName string) error
+
 	// Close closes the database connection and releases resources.
 	// Should be called when the storage is no longer needed.
 	Close() error
@@ -324,4 +348,18 @@ type UpdateQueue struct {
 	Priority           int        `json:"priority"`
 	QueuedAt           time.Time  `json:"queued_at"`
 	EstimatedStartTime *time.Time `json:"estimated_start_time,omitempty"`
+}
+
+// ScriptAssignment represents container settings including script, ignore, and allow-latest.
+// Database-only, no compose file modifications needed. Changes apply on next check.
+type ScriptAssignment struct {
+	ID            int64     `json:"id"`
+	ContainerName string    `json:"container_name"`
+	ScriptPath    string    `json:"script_path,omitempty"`    // Path relative to /scripts folder
+	Enabled       bool      `json:"enabled"`
+	Ignore        bool      `json:"ignore"`                    // Ignore container from checks
+	AllowLatest   bool      `json:"allow_latest"`              // Allow :latest tag
+	AssignedAt    time.Time `json:"assigned_at"`
+	AssignedBy    string    `json:"assigned_by,omitempty"`     // 'cli' or 'ui'
+	UpdatedAt     time.Time `json:"updated_at"`
 }

@@ -76,6 +76,7 @@ func runUpdateCommand(args []string) error {
 		storageService,
 		eventBus,
 		registryManager,
+		dockerService.GetPathTranslator(),
 	)
 	log.Println("✓ Update orchestrator ready")
 

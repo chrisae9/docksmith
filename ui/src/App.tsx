@@ -47,17 +47,6 @@ function App() {
         return <Dashboard onNavigateToHistory={() => setActiveTab('history')} />;
       case 'history':
         return <History onBack={() => setActiveTab('updates')} />;
-      case 'settings':
-        return (
-          <div className="settings-tab">
-            <div className="settings-header">
-              <h1>Settings</h1>
-            </div>
-            <div className="settings-content">
-              <p className="settings-placeholder">Settings coming soon</p>
-            </div>
-          </div>
-        );
       default:
         return null;
     }
