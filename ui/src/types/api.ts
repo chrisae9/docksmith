@@ -162,6 +162,7 @@ export const UpdateStatus = {
   LocalImage: 'LOCAL_IMAGE',
   CheckFailed: 'CHECK_FAILED',
   MetadataUnavailable: 'METADATA_UNAVAILABLE',
+  ComposeMismatch: 'COMPOSE_MISMATCH',
   Ignored: 'IGNORED',
 } as const;
 

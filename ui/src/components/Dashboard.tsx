@@ -962,10 +962,27 @@ function ContainerRow({ container, selected, onToggle, onContainerClick }: Conta
         return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
       case 'LOCAL_IMAGE':
         return <span className="dot local" title="Local image"></span>;
+      case 'COMPOSE_MISMATCH':
+        return <span className="dot error" title="Container image doesn't match compose file"></span>;
       case 'IGNORED':
         return <span className="dot ignored" title="Ignored"></span>;
       default:
         return <span className="dot" title={container.status}></span>;
+    }
+  };
+
+  const getChangeTypeBadge = () => {
+    if (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED') return null;
+
+    switch (container.change_type) {
+      case ChangeType.MajorChange:
+        return <span className="change-badge major">MAJOR</span>;
+      case ChangeType.MinorChange:
+        return <span className="change-badge minor">MINOR</span>;
+      case ChangeType.PatchChange:
+        return <span className="change-badge patch">PATCH</span>;
+      default:
+        return null;
     }
   };
 
@@ -985,6 +1002,9 @@ function ContainerRow({ container, selected, onToggle, onContainerClick }: Conta
     }
     if (container.status === 'LOCAL_IMAGE') {
       return 'Local image';
+    }
+    if (container.status === 'COMPOSE_MISMATCH') {
+      return 'Mismatch detected';
     }
     if (container.status === 'IGNORED') {
       return 'Ignored';
@@ -1013,7 +1033,7 @@ function ContainerRow({ container, selected, onToggle, onContainerClick }: Conta
       )}
       <div className="container-info">
         <span className="name">{container.container_name}</span>
-        <span className="version">{getVersion()}</span>
+        <span className="version">{getVersion()} {getChangeTypeBadge()}</span>
       </div>
       {getStatusIndicator()}
       {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}

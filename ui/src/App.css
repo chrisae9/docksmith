@@ -456,6 +456,11 @@ li.has-update .version {
   box-shadow: 0 0 0 2px var(--color-bg-secondary), 0 0 0 4px var(--color-status-blocked);
 }
 
+.dot.error {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 2px var(--color-bg-secondary), 0 0 0 4px var(--color-danger);
+}
+
 .dot.current {
   background: var(--color-status-current);
 }

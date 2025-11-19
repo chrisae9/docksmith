@@ -437,6 +437,8 @@ func (c *CheckCommand) formatStatus(container update.ContainerInfo) string {
 		return fmt.Sprintf("%sCHECK FAILED%s", colorRed(), colorReset())
 	case update.MetadataUnavailable:
 		return fmt.Sprintf("%sMETADATA UNAVAILABLE%s (use -v for details)", colorYellow(), colorReset())
+	case update.ComposeMismatch:
+		return fmt.Sprintf("%sCOMPOSE MISMATCH%s (container image differs from compose file)", colorRed(), colorReset())
 	case update.Unknown:
 		// Show more helpful message for UNKNOWN status
 		if container.Error != "" {

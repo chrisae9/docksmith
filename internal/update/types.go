@@ -14,6 +14,7 @@ const (
 	Unknown                UpdateStatus = "UNKNOWN"
 	CheckFailed            UpdateStatus = "CHECK_FAILED"
 	MetadataUnavailable    UpdateStatus = "METADATA_UNAVAILABLE" // Registry lookup failed, but container may be healthy
+	ComposeMismatch        UpdateStatus = "COMPOSE_MISMATCH"     // Running image doesn't match compose file specification
 	Ignored                UpdateStatus = "IGNORED"              // Container is ignored via docksmith.ignore label
 )
 
