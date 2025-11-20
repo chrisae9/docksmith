@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/chis/docksmith/internal/storage"
@@ -82,7 +83,7 @@ func (s *Service) ensureInitialSnapshot(ctx context.Context) error {
 			return fmt.Errorf("failed to create initial snapshot: %w", err)
 		}
 
-		fmt.Println("Created initial configuration snapshot")
+		log.Printf("CONFIG: Created initial configuration snapshot")
 	}
 
 	return nil

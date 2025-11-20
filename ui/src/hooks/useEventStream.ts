@@ -44,12 +44,10 @@ export function useEventStream(enabled: boolean = true) {
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
-      console.log('SSE connected');
       setState(prev => ({ ...prev, connected: true }));
     };
 
-    eventSource.onerror = (err) => {
-      console.error('SSE error:', err);
+    eventSource.onerror = () => {
       setState(prev => ({ ...prev, connected: false }));
 
       // Try to reconnect after 3 seconds
@@ -61,8 +59,7 @@ export function useEventStream(enabled: boolean = true) {
     };
 
     // Listen for connection event
-    eventSource.addEventListener('connected', (e) => {
-      console.log('SSE connected event:', e.data);
+    eventSource.addEventListener('connected', () => {
       setState(prev => ({ ...prev, connected: true }));
     });
 
@@ -72,21 +69,19 @@ export function useEventStream(enabled: boolean = true) {
         const data = JSON.parse(e.data);
         const progressEvent: UpdateProgressEvent = data.payload;
 
-        console.log('Update progress:', progressEvent);
-
         setState(prev => ({
           ...prev,
           events: [...prev.events.slice(-99), progressEvent], // Keep last 100 events
           lastEvent: progressEvent,
         }));
-      } catch (err) {
-        console.error('Error parsing progress event:', err);
+      } catch {
+        // Silently ignore parsing errors
       }
     });
 
     // Listen for container updated events
-    eventSource.addEventListener('container.updated', (e) => {
-      console.log('Container updated:', e.data);
+    eventSource.addEventListener('container.updated', () => {
+      // Event acknowledged, no action needed
     });
 
     // Listen for check progress events
@@ -95,14 +90,12 @@ export function useEventStream(enabled: boolean = true) {
         const data = JSON.parse(e.data);
         const checkEvent: CheckProgressEvent = data.payload;
 
-        console.log('Check progress:', checkEvent);
-
         setState(prev => ({
           ...prev,
           checkProgress: checkEvent,
         }));
-      } catch (err) {
-        console.error('Error parsing check progress event:', err);
+      } catch {
+        // Silently ignore parsing errors
       }
     });
   }, [enabled]);

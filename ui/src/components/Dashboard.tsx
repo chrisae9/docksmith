@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { checkContainers, triggerBatchUpdate, restartStack } from '../api/client';
+import { checkContainers, getContainerStatus, triggerBatchUpdate, restartStack } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { ContainerDetailModal } from './ContainerDetailModal';
 
-type FilterType = 'all' | 'updates' | 'current' | 'local';
+type FilterType = 'all' | 'updates' | 'local';
 type SortType = 'stack' | 'name' | 'status';
 
 interface DashboardProps {
@@ -18,8 +18,16 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<FilterType>('updates');
+  const [filter, setFilter] = useState<FilterType>(() => {
+    // Try to restore filter from localStorage, or default to 'updates'
+    const saved = localStorage.getItem('docksmith_filter');
+    return (saved as FilterType) || 'updates';
+  });
   const [sort, setSort] = useState<SortType>('stack');
+  const [initialAutoSwitchDone, setInitialAutoSwitchDone] = useState(() => {
+    // Check if we've already done the initial auto-switch in this session
+    return sessionStorage.getItem('docksmith_initial_switch') === 'done';
+  });
   const [showLocalImages, setShowLocalImages] = useState(false);
   const [showIgnored, setShowIgnored] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,7 +100,47 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   }, [progressEvent, updateProgress]);
 
-  const fetchData = async () => {
+  // Calculate time ago from ISO timestamp
+  // Fetch cached status (for initial load)
+  const fetchCachedStatus = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await getContainerStatus();
+      if (response.success && response.data) {
+        setResult(response.data);
+      } else {
+        setError(response.error || 'Failed to fetch data');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Background refresh - triggers background check without clearing cache
+  const backgroundRefresh = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await fetch('/api/trigger-check', { method: 'POST' });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const response = await getContainerStatus();
+      if (response.success && response.data) {
+        setResult(response.data);
+      } else {
+        setError(response.error || 'Failed to fetch data');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Cache refresh - clears cache and triggers fresh registry queries
+  const cacheRefresh = async () => {
     setLoading(true);
     setError(null);
     try {
@@ -525,7 +573,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         // Success - wait a moment then refresh
         setTimeout(() => {
           setRestartingStack(null);
-          fetchData();
+          backgroundRefresh();
         }, 1000);
       } else {
         setError(response.error || 'Failed to restart stack');
@@ -553,9 +601,30 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   };
 
+  // Load cached status on initial mount
   useEffect(() => {
-    fetchData();
+    fetchCachedStatus();
   }, []);
+
+  // Persist filter changes to localStorage
+  useEffect(() => {
+    localStorage.setItem('docksmith_filter', filter);
+  }, [filter]);
+
+  // Auto-switch to 'all' tab if on 'updates' but no updates available (only once per session)
+  useEffect(() => {
+    if (result && !initialAutoSwitchDone && filter === 'updates') {
+      const hasUpdates = result.containers.some(
+        c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE'
+      );
+      if (!hasUpdates) {
+        setFilter('all');
+      }
+      // Mark that we've done the initial auto-switch for this session
+      sessionStorage.setItem('docksmith_initial_switch', 'done');
+      setInitialAutoSwitchDone(true);
+    }
+  }, [result, initialAutoSwitchDone, filter]);
 
   const toggleContainer = (name: string) => {
     setSelectedContainers(prev => {
@@ -617,8 +686,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     switch (filter) {
       case 'updates':
         return container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
-      case 'current':
-        return container.status === 'UP_TO_DATE';
       case 'local':
         return container.status === 'LOCAL_IMAGE';
       default:
@@ -656,7 +723,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     return (
       <div className="error">
         <p>{error}</p>
-        <button onClick={fetchData}>Retry</button>
+        <button onClick={cacheRefresh}>Retry</button>
       </div>
     );
   }
@@ -694,20 +761,17 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     <div className="dashboard">
       <header>
         <div className="header-top">
-          <h1>Updates</h1>
-          <div className="header-actions">
-            {result && result.containers.some(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE') && (
-              <button
-                onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
-                className="refresh-btn"
-              >
-                {selectedContainers.size > 0 ? 'Deselect All' : 'Select All'}
-              </button>
-            )}
-            <button onClick={fetchData} className="refresh-btn">
-              Refresh
-            </button>
+          <div className="header-title-full">
+            <img src="/docksmith-title.svg" alt="Docksmith" className="title-logo" />
           </div>
+          {result && result.containers.some(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE') && (
+            <button
+              onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
+              className="select-all-btn"
+            >
+              {selectedContainers.size > 0 ? 'Deselect All' : 'Select All'}
+            </button>
+          )}
         </div>
         <div className="search-bar">
           <i className="fa-solid fa-magnifying-glass search-icon"></i>
@@ -740,12 +804,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
               onClick={() => setFilter('updates')}
             >
               Updates
-            </button>
-            <button
-              className={filter === 'current' ? 'active' : ''}
-              onClick={() => setFilter('current')}
-            >
-              Current
             </button>
           </div>
           <div className="toolbar-options">
@@ -847,6 +905,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                             selected={selectedContainers.has(container.container_name)}
                             onToggle={() => toggleContainer(container.container_name)}
                             onContainerClick={() => setExpandedContainer(container.container_name)}
+                            allContainers={result.containers}
                           />
                         ))}
                       </ul>
@@ -870,6 +929,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                           selected={selectedContainers.has(container.container_name)}
                           onToggle={() => toggleContainer(container.container_name)}
                           onContainerClick={() => setExpandedContainer(container.container_name)}
+                          allContainers={result.containers}
                         />
                       ))}
                     </ul>
@@ -893,6 +953,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                       selected={selectedContainers.has(container.container_name)}
                       onToggle={() => toggleContainer(container.container_name)}
                       onContainerClick={() => setExpandedContainer(container.container_name)}
+                      allContainers={result.containers}
                     />
                   ))}
               </ul>
@@ -1005,7 +1066,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 <button className="close-btn" onClick={() => {
                   setUpdateProgress(null);
                   setUpdating(false);
-                  fetchData();
+                  backgroundRefresh();
                 }}>
                   Close
                 </button>
@@ -1019,7 +1080,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         <ContainerDetailModal
           container={result.containers.find(c => c.container_name === expandedContainer)!}
           onClose={() => setExpandedContainer(null)}
-          onRefresh={fetchData}
+          onRefresh={backgroundRefresh}
           onUpdate={handleSingleUpdate}
         />
       )}
@@ -1033,11 +1094,24 @@ interface ContainerRowProps {
   selected: boolean;
   onToggle: () => void;
   onContainerClick: () => void;
+  allContainers: ContainerInfo[];
 }
 
-function ContainerRow({ container, selected, onToggle, onContainerClick }: ContainerRowProps) {
+function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
   const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
+
+  // Check restart dependencies
+  const restartDependsOn = container.labels?.['docksmith.restart-depends-on'] || '';
+  const restartDeps = restartDependsOn ? restartDependsOn.split(',').map(d => d.trim()) : [];
+
+  // Find containers that depend on this one
+  const dependents = allContainers.filter(c => {
+    const deps = c.labels?.['docksmith.restart-depends-on'] || '';
+    if (!deps) return false;
+    const depList = deps.split(',').map(d => d.trim());
+    return depList.includes(container.container_name);
+  }).map(c => c.container_name);
 
   const getStatusIndicator = () => {
     switch (container.status) {
@@ -1138,6 +1212,16 @@ function ContainerRow({ container, selected, onToggle, onContainerClick }: Conta
       )}
       {container.health_status === 'starting' && (
         <span className="info" title="Container health check is starting"><i className="fa-solid fa-heartbeat"></i></span>
+      )}
+      {restartDeps.length > 0 && (
+        <span className="info restart-dep" title={`Restarts when ${restartDeps.join(', ')} restart${restartDeps.length > 1 ? '' : 's'}`}>
+          <i className="fa-solid fa-link"></i> {restartDeps.length}
+        </span>
+      )}
+      {dependents.length > 0 && (
+        <span className="warn restart-dep-by" title={`${dependents.length} container${dependents.length > 1 ? 's' : ''} will restart: ${dependents.join(', ')}`}>
+          <i className="fa-solid fa-link"></i> {dependents.length}
+        </span>
       )}
     </li>
   );

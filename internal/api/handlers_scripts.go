@@ -23,7 +23,7 @@ func (s *Server) handleScriptsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"scripts": scripts,
 		"count":   len(scripts),
 	})
@@ -46,7 +46,7 @@ func (s *Server) handleScriptsAssigned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"assignments": assignments,
 		"count":       len(assignments),
 	})
@@ -87,7 +87,7 @@ func (s *Server) handleScriptsAssign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"success":   true,
 		"container": req.ContainerName,
 		"script":    req.ScriptPath,
@@ -120,7 +120,7 @@ func (s *Server) handleScriptsUnassign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"success":   true,
 		"container": containerName,
 		"message":   "Script unassigned successfully. Restart container for changes to take effect.",
@@ -166,7 +166,7 @@ func (s *Server) handleSettingsIgnore(w http.ResponseWriter, r *http.Request) {
 		message = "Container will be ignored from update checks"
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"success":   true,
 		"container": req.ContainerName,
 		"ignore":    req.Ignore,
@@ -213,7 +213,7 @@ func (s *Server) handleSettingsAllowLatest(w http.ResponseWriter, r *http.Reques
 		message = ":latest tag is allowed, migration will not be suggested"
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"success":     true,
 		"container":   req.ContainerName,
 		"allow_latest": req.AllowLatest,

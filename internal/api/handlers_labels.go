@@ -97,7 +97,7 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 		docksmithLabels[scripts.RestartDependsOnLabel] = val
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"container": containerName,
 		"labels":    docksmithLabels,
 	})
@@ -473,8 +473,8 @@ func (s *Server) runPreUpdateCheck(ctx context.Context, container *docker.Contai
 	return nil
 }
 
-// restartContainerWithRemovedLabels recreates a container after removing labels using Docker SDK
-func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeFilePath, serviceName string, removedLabelNames []string) error {
+// restartContainerWithRemovedLabels recreates a container after removing labels using docker compose
+func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeFilePath, serviceName string, _ []string) error {
 	// Find the container by service name
 	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {

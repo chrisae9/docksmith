@@ -177,3 +177,30 @@ func (s *Service) GetClient() *client.Client {
 func (s *Service) GetPathTranslator() *PathTranslator {
 	return s.pathTranslator
 }
+
+// FindDependentContainers finds all containers that have a restart dependency on the given container.
+// It checks the "docksmith.restart-depends-on" label for comma-separated container names.
+// Returns a list of container names that should be restarted when the specified container restarts.
+func (s *Service) FindDependentContainers(ctx context.Context, containerName string, restartDependsOnLabel string) ([]string, error) {
+	containers, err := s.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var dependents []string
+	for _, c := range containers {
+		if dependsOn, ok := c.Labels[restartDependsOnLabel]; ok && dependsOn != "" {
+			// Parse comma-separated list of dependencies
+			dependencies := strings.Split(dependsOn, ",")
+			for _, dep := range dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == containerName {
+					dependents = append(dependents, c.Name)
+					break
+				}
+			}
+		}
+	}
+
+	return dependents, nil
+}

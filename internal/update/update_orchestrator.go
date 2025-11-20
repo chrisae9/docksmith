@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
+	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -382,19 +384,11 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	// Build the full image reference with new version
 	newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
 
-	dependentsRestarted, err := o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, newImageRef)
+	_, err = o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, newImageRef)
 	if err != nil {
 		o.failOperation(ctx, operationID, "recreating", fmt.Sprintf("Recreation failed: %v", err))
 		o.attemptRollback(ctx, operationID, container, backupPath)
 		return
-	}
-
-	if len(dependentsRestarted) > 0 {
-		op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
-		if found {
-			op.DependentsAffected = dependentsRestarted
-			o.storage.SaveUpdateOperation(ctx, op)
-		}
 	}
 
 	o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Verifying health")
@@ -423,6 +417,12 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		op.Status = "complete"
 		op.CompletedAt = &now
 		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	// Restart dependent containers (those with docksmith.restart-depends-on label)
+	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
+		log.Printf("UPDATE: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
+		// Don't fail the update if dependent restarts fail
 	}
 
 	// Execute post-update actions if configured
@@ -836,8 +836,9 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 	return fmt.Errorf("failed to pull image after retries")
 }
 
-// restartContainerWithDependents recreates a container and its dependents using Docker SDK.
-// This function stops and starts containers in the proper order to handle dependencies.
+// restartContainerWithDependents recreates a container using docker compose.
+// Note: This does NOT automatically restart dependent containers.
+// Explicit restart dependencies should use the docksmith.restart-depends-on label.
 func (o *UpdateOrchestrator) restartContainerWithDependents(ctx context.Context, operationID, containerName, stackName, newImageRef string) ([]string, error) {
 	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
@@ -868,13 +869,6 @@ func (o *UpdateOrchestrator) restartContainerWithDependents(ctx context.Context,
 		// Create compose recreator
 		recreator := compose.NewRecreator(o.dockerClient)
 
-		// Find network_mode dependents that need to be recreated
-		dependents, err := recreator.FindNetworkModeDependents(ctx, containerName)
-		if err != nil {
-			log.Printf("UPDATE: Warning - failed to find network_mode dependents: %v", err)
-			dependents = []string{}
-		}
-
 		// Recreate the main service (compose file already updated with new image tag)
 		// Use host path for --project-directory and container path for -f
 		if err := recreator.RecreateWithCompose(ctx, targetContainer, hostComposePath, containerComposePath); err != nil {
@@ -883,18 +877,8 @@ func (o *UpdateOrchestrator) restartContainerWithDependents(ctx context.Context,
 
 		o.publishProgress(operationID, containerName, stackName, "recreating", 70, "Container recreated")
 
-		// Recreate dependents if any
-		if len(dependents) > 0 {
-			log.Printf("UPDATE: Recreating %d network_mode dependents", len(dependents))
-			o.publishProgress(operationID, containerName, stackName, "recreating", 75, fmt.Sprintf("Recreating %d dependents", len(dependents)))
-
-			if err := recreator.RecreateMultipleServices(ctx, hostComposePath, containerComposePath, dependents); err != nil {
-				log.Printf("UPDATE: Warning - failed to recreate dependents: %v", err)
-			}
-		}
-
 		log.Printf("UPDATE: Successfully recreated %s using docker compose", containerName)
-		return dependents, nil
+		return nil, nil
 	}
 
 	// Fallback to SDK-based recreation for non-compose containers
@@ -907,6 +891,79 @@ func (o *UpdateOrchestrator) restartContainerWithSDK(ctx context.Context, operat
 	// For now, return an error - we're moving to compose-based updates
 	// This fallback can be implemented later if needed for non-compose containers
 	return nil, fmt.Errorf("SDK-based recreation not supported - container must be managed by docker compose")
+}
+
+// restartDependentContainers finds and restarts containers that depend on the given container
+// via the docksmith.restart-depends-on label
+func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string) error {
+	// Get docker service to find dependents
+	dockerService, err := docker.NewService()
+	if err != nil {
+		return fmt.Errorf("failed to create docker service: %w", err)
+	}
+	defer dockerService.Close()
+
+	// Find containers that have this container in their restart-depends-on label
+	dependents, err := dockerService.FindDependentContainers(ctx, containerName, scripts.RestartDependsOnLabel)
+	if err != nil {
+		return fmt.Errorf("failed to find dependent containers: %w", err)
+	}
+
+	if len(dependents) == 0 {
+		log.Printf("UPDATE: No dependent containers found for %s", containerName)
+		return nil
+	}
+
+	log.Printf("UPDATE: Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
+
+	// Get full container info for pre-update checks
+	containers, err := dockerService.ListContainers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	containerMap := make(map[string]*docker.Container)
+	for i := range containers {
+		containerMap[containers[i].Name] = &containers[i]
+	}
+
+	// Restart each dependent
+	for _, dep := range dependents {
+		depContainer := containerMap[dep]
+		if depContainer == nil {
+			log.Printf("UPDATE: Dependent container %s not found, skipping", dep)
+			continue
+		}
+
+		// Run pre-update check if configured
+		if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+			log.Printf("UPDATE: Running pre-update check for dependent %s", dep)
+
+			// Translate path if needed
+			translatedPath := scriptPath
+			if o.pathTranslator != nil {
+				translatedPath = o.pathTranslator.TranslateToHost(scriptPath)
+			}
+
+			if err := runPreUpdateCheck(ctx, depContainer, translatedPath); err != nil {
+				log.Printf("UPDATE: Pre-update check failed for dependent %s: %v (skipping restart)", dep, err)
+				continue
+			}
+			log.Printf("UPDATE: Pre-update check passed for dependent %s", dep)
+		}
+
+		// Restart the dependent container
+		log.Printf("UPDATE: Restarting dependent container: %s", dep)
+		err := dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{})
+		if err != nil {
+			log.Printf("UPDATE: Failed to restart dependent %s: %v", dep, err)
+			continue
+		}
+
+		log.Printf("UPDATE: Successfully restarted dependent container: %s", dep)
+	}
+
+	return nil
 }
 
 // waitForHealthy waits for a container to become healthy or confirms it's running.
@@ -1246,6 +1303,12 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 95, "Health check passed")
 	}
 
+	// Restart dependent containers (those with docksmith.restart-depends-on label)
+	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
+		log.Printf("ROLLBACK: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
+		// Don't fail the rollback if dependent restarts fail
+	}
+
 	// Stage 6: Complete (100%)
 	// Update rollback operation status BEFORE publishing complete event
 	// This ensures the database is updated before the CLI sees the event and exits
@@ -1488,4 +1551,27 @@ func (o *UpdateOrchestrator) CancelQueuedOperation(ctx context.Context, operatio
 	}
 
 	return o.storage.UpdateOperationStatus(ctx, operationID, "cancelled", "Cancelled by user")
+}
+
+// runPreUpdateCheck runs a pre-update check script for a container
+func runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
+	if !docker.ValidatePreUpdateScript(scriptPath) {
+		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
+	}
+
+	// Execute the check script with timeout
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.Name)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("script exited with code %d: %s", exitErr.ExitCode(), string(output))
+		}
+		return fmt.Errorf("failed to execute script: %w", err)
+	}
+
+	return nil
 }

@@ -81,8 +81,8 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
       if (response.success && response.data) {
         setDockerConfig(response.data);
       }
-    } catch (err) {
-      console.error('Failed to fetch Docker config:', err);
+    } catch {
+      // Silently fail - UI will show "No authenticated registries found"
     }
   };
 

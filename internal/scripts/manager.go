@@ -26,6 +26,11 @@ const (
 
 	// AllowLatestLabel is the Docker label key to allow :latest tags
 	AllowLatestLabel = "docksmith.allow-latest"
+
+	// RestartDependsOnLabel is the Docker label key for restart dependencies
+	// Comma-separated list of container names that this container depends on
+	// When a dependency restarts, this container will also restart
+	RestartDependsOnLabel = "docksmith.restart-depends-on"
 )
 
 // Manager handles script discovery, validation, and assignment operations.

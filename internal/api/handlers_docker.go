@@ -12,7 +12,7 @@ import (
 
 // DockerConfig represents the structure of docker config.json
 type DockerConfig struct {
-	Auths map[string]interface{} `json:"auths"`
+	Auths map[string]any `json:"auths"`
 }
 
 // DockerRegistryInfo contains information about configured registries

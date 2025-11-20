@@ -15,7 +15,7 @@ import (
 
 // handleHealth returns server health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"status": "healthy",
 		"services": map[string]bool{
 			"docker":  s.dockerService != nil,
@@ -25,11 +25,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCheck performs container discovery and update checking
-// This is the EXACT same logic as: docksmith check --json
+// Triggers a manual check and returns cached results
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Run discovery - same function as CLI
+	// If background checker is available, trigger a manual check
+	if s.backgroundChecker != nil {
+		// Clear cache to force fresh registry queries
+		s.discoveryOrchestrator.ClearCache()
+		s.backgroundChecker.TriggerCheck()
+		// Wait a moment for the check to start
+		time.Sleep(100 * time.Millisecond)
+		// Return cached results (will include the triggered check once it completes)
+		s.handleGetStatus(w, r)
+		return
+	}
+
+	// Fallback to direct discovery if no background checker
 	result, err := s.discoveryOrchestrator.DiscoverAndCheck(ctx)
 	if err != nil {
 		output.WriteJSONError(w, err)
@@ -38,6 +50,28 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	// Return identical JSON structure as CLI
 	output.WriteJSONData(w, result)
+}
+
+// handleTriggerCheck triggers a background check without clearing cache
+// This is used by the "Background Refresh" button to update the discovery
+// using existing cached registry data (respects CACHE_TTL)
+func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
+	if s.backgroundChecker == nil {
+		output.WriteJSONError(w, fmt.Errorf("background checker not available"))
+		return
+	}
+
+	// Trigger check WITHOUT clearing cache
+	// This allows the background check to use cached registry data
+	s.backgroundChecker.TriggerCheck()
+
+	// Wait for check to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Return success
+	output.WriteJSONData(w, map[string]any{
+		"message": "Background check triggered",
+	})
 }
 
 // handleOperations returns update operations history
@@ -73,7 +107,7 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"operations": operations,
 		"count":      len(operations),
 	})
@@ -141,7 +175,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	// Convert to unified format - same as CLI history command
 	entries := mergeHistory(checkHistory, updateLog)
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"history": entries,
 		"count":   len(entries),
 	})
@@ -175,7 +209,7 @@ func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"backups": backups,
 		"count":   len(backups),
 	})
@@ -197,7 +231,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"global_policy": globalPolicy,
 	})
 }
@@ -237,7 +271,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"operation_id":   operationID,
 		"container_name": req.ContainerName,
 		"target_version": req.TargetVersion,
@@ -293,7 +327,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For each stack group, start an update operation
-	operations := make([]map[string]interface{}, 0)
+	operations := make([]map[string]any, 0)
 
 	for stack, containerNames := range stackGroups {
 		if len(containerNames) == 1 {
@@ -301,14 +335,14 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			opID, err := s.updateOrchestrator.UpdateSingleContainer(ctx, containerNames[0], targetVersions[containerNames[0]])
 			if err != nil {
 				log.Printf("Failed to start update for %s: %v", containerNames[0], err)
-				operations = append(operations, map[string]interface{}{
+				operations = append(operations, map[string]any{
 					"stack":      stack,
 					"containers": containerNames,
 					"status":     "failed",
 					"error":      err.Error(),
 				})
 			} else {
-				operations = append(operations, map[string]interface{}{
+				operations = append(operations, map[string]any{
 					"stack":        stack,
 					"containers":   containerNames,
 					"operation_id": opID,
@@ -320,14 +354,14 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			opID, err := s.updateOrchestrator.UpdateBatchContainers(ctx, containerNames, targetVersions)
 			if err != nil {
 				log.Printf("Failed to start batch update for stack %s: %v", stack, err)
-				operations = append(operations, map[string]interface{}{
+				operations = append(operations, map[string]any{
 					"stack":      stack,
 					"containers": containerNames,
 					"status":     "failed",
 					"error":      err.Error(),
 				})
 			} else {
-				operations = append(operations, map[string]interface{}{
+				operations = append(operations, map[string]any{
 					"stack":        stack,
 					"containers":   containerNames,
 					"operation_id": opID,
@@ -337,7 +371,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"operations": operations,
 		"status":     "started",
 	})
@@ -378,7 +412,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]interface{}{
+	output.WriteJSONData(w, map[string]any{
 		"operation_id":          rollbackOpID,
 		"original_operation_id": req.OperationID,
 		"message":               "Rollback initiated",

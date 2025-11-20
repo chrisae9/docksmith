@@ -1,19 +1,29 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Dashboard } from './components/Dashboard'
 import { History } from './components/History'
+import { Settings } from './components/Settings'
 import { TabBar, type TabId } from './components/TabBar'
-import { checkContainers } from './api/client'
+import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
 import './App.css'
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('updates');
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    // Restore last active tab from localStorage
+    const saved = localStorage.getItem('docksmith_active_tab');
+    return (saved as TabId) || 'updates';
+  });
   const [updateCount, setUpdateCount] = useState(0);
   const { lastEvent } = useEventStream(true);
 
+  // Save active tab to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('docksmith_active_tab', activeTab);
+  }, [activeTab]);
+
   const fetchUpdateCount = useCallback(async () => {
     try {
-      const result = await checkContainers();
+      const result = await getContainerStatus();
       if (result.success && result.data) {
         const pinnableCount = result.data.containers.filter(
           c => c.status === 'UP_TO_DATE_PINNABLE'
@@ -47,6 +57,8 @@ function App() {
         return <Dashboard onNavigateToHistory={() => setActiveTab('history')} />;
       case 'history':
         return <History onBack={() => setActiveTab('updates')} />;
+      case 'settings':
+        return <Settings onBack={() => setActiveTab('updates')} />;
       default:
         return null;
     }

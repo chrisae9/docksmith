@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getScripts, getContainerLabels, setLabels, restartContainer } from '../api/client';
+import { getScripts, getContainerLabels, setLabels, restartContainer, checkContainers } from '../api/client';
 import type { ContainerInfo, Script } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
 
@@ -13,22 +13,25 @@ interface ContainerDetailModalProps {
 export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }: ContainerDetailModalProps) {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<React.ReactNode | null>(null);
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [ignoreFlag, setIgnoreFlag] = useState(false);
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
+  const [restartDependsOn, setRestartDependsOn] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string>('');
   const [hasChanges, setHasChanges] = useState(false);
-  const [showForceOption, setShowForceOption] = useState(false);
   const [preCheckFailed, setPreCheckFailed] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartStatus, setRestartStatus] = useState<string>('');
+  const [dependentContainers, setDependentContainers] = useState<string[]>([]);
+  const [showForceRestart, setShowForceRestart] = useState(false);
 
   // Track original values to detect changes
   const [originalScript, setOriginalScript] = useState<string>('');
   const [originalIgnore, setOriginalIgnore] = useState(false);
   const [originalAllowLatest, setOriginalAllowLatest] = useState(false);
+  const [originalRestartDependsOn, setOriginalRestartDependsOn] = useState<string>('');
 
   useEffect(() => {
     fetchData();
@@ -39,16 +42,18 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     const scriptChanged = selectedScript !== originalScript;
     const ignoreChanged = ignoreFlag !== originalIgnore;
     const allowLatestChanged = allowLatestFlag !== originalAllowLatest;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, originalScript, originalIgnore, originalAllowLatest]);
+    const restartDependsOnChanged = restartDependsOn !== originalRestartDependsOn;
+    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || restartDependsOnChanged);
+  }, [selectedScript, ignoreFlag, allowLatestFlag, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalRestartDependsOn]);
 
   const fetchData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [scriptsResponse, labelsResponse] = await Promise.all([
+      const [scriptsResponse, labelsResponse, containersResponse] = await Promise.all([
         getScripts(),
         getContainerLabels(container.container_name),
+        checkContainers(),
       ]);
 
       if (scriptsResponse.success && scriptsResponse.data) {
@@ -61,14 +66,41 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         const scriptPath = labels['docksmith.pre-update-check'] || '';
         const ignore = labels['docksmith.ignore'] === 'true';
         const allowLatest = labels['docksmith.allow-latest'] === 'true';
+        const restartDeps = labels['docksmith.restart-depends-on'] || '';
 
         setSelectedScript(scriptPath);
         setIgnoreFlag(ignore);
         setAllowLatestFlag(allowLatest);
+        setRestartDependsOn(restartDeps);
 
         setOriginalScript(scriptPath);
         setOriginalIgnore(ignore);
         setOriginalAllowLatest(allowLatest);
+        setOriginalRestartDependsOn(restartDeps);
+      }
+
+      // Load all containers and find which ones depend on this container
+      if (containersResponse.success && containersResponse.data) {
+        const containers = containersResponse.data.containers || [];
+
+        // Find containers that have this container in their restart-depends-on label
+        const dependentContainersData = containers.filter(c => {
+          const deps = c.labels?.['docksmith.restart-depends-on'] || '';
+          if (!deps) return false;
+          const depList = deps.split(',').map(d => d.trim());
+          return depList.includes(container.container_name);
+        });
+
+        const dependents = dependentContainersData.map(c => c.container_name);
+        setDependentContainers(dependents);
+
+        // Determine if Force Restart should be shown
+        // Show if this container has a pre-update check OR any dependent has a pre-update check
+        const hasOwnPreCheck = !!(labelsResponse.success && labelsResponse.data?.labels?.['docksmith.pre-update-check']);
+        const hasDependentPreChecks = dependentContainersData.some(c =>
+          c.labels?.['docksmith.pre-update-check']
+        );
+        setShowForceRestart(hasOwnPreCheck || hasDependentPreChecks);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -95,6 +127,15 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         changes.push('Change pre-update script');
       }
     }
+    if (restartDependsOn !== originalRestartDependsOn) {
+      if (restartDependsOn && !originalRestartDependsOn) {
+        changes.push('Add restart dependencies');
+      } else if (!restartDependsOn && originalRestartDependsOn) {
+        changes.push('Remove restart dependencies');
+      } else {
+        changes.push('Update restart dependencies');
+      }
+    }
 
     return changes;
   };
@@ -103,7 +144,6 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     setSaving(true);
     setError(null);
     setSaveStatus('Preparing changes...');
-    setShowForceOption(false);
     setPreCheckFailed(false);
 
     try {
@@ -118,6 +158,9 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
       }
       if (selectedScript !== originalScript) {
         changes.script = selectedScript || '';
+      }
+      if (restartDependsOn !== originalRestartDependsOn) {
+        changes.restart_depends_on = restartDependsOn || '';
       }
 
       if (Object.keys(changes).length === 0) {
@@ -150,6 +193,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         setOriginalIgnore(ignoreFlag);
         setOriginalAllowLatest(allowLatestFlag);
         setOriginalScript(selectedScript);
+        setOriginalRestartDependsOn(restartDependsOn);
 
         // Refresh parent
         if (onRefresh) {
@@ -173,7 +217,6 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
       // Check if it's a pre-update check failure
       if (errorMessage.includes('pre-update check failed') || errorMessage.includes('script exited with code')) {
         setError(errorMessage);
-        setShowForceOption(true);
         setPreCheckFailed(true);
         setSaveStatus('');
       } else {
@@ -188,33 +231,80 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
+    setRestartDependsOn(originalRestartDependsOn);
     setError(null);
-    setShowForceOption(false);
     setPreCheckFailed(false);
   };
 
-  const handleRestart = async () => {
+  const handleRestart = async (force = false) => {
     setRestarting(true);
-    setRestartStatus('Restarting container...');
+    setRestartStatus(force ? 'Force restarting container...' : 'Restarting container...');
     setError(null);
 
     try {
-      const response = await restartContainer(container.container_name);
+      const response = await restartContainer(container.container_name, force);
 
       if (response.success && response.data) {
-        setRestartStatus('Container restarted successfully');
+        let message = 'Container restarted successfully';
+
+        // Show dependent containers that were also restarted
+        if (response.data.dependents_restarted && response.data.dependents_restarted.length > 0) {
+          const deps = response.data.dependents_restarted.join(', ');
+          message = `Container and ${response.data.dependents_restarted.length} dependent(s) restarted: ${deps}`;
+        }
+
+        // Show blocked containers and offer force option
+        if (response.data.dependents_blocked && response.data.dependents_blocked.length > 0) {
+          const blockedDeps = response.data.dependents_blocked.join(', ');
+          const errorMsg = `${response.data.dependents_blocked.length} dependent(s) blocked by pre-update checks: ${blockedDeps}`;
+
+          setError(
+            <div>
+              <p>{errorMsg}</p>
+              <div style={{ marginTop: '8px' }}>
+                <button
+                  className="btn-warning"
+                  onClick={() => handleRestart(true)}
+                  disabled={restarting}
+                  style={{ marginRight: '8px' }}
+                >
+                  <i className="fa-solid fa-bolt"></i> Force Restart All
+                </button>
+              </div>
+            </div>
+          );
+          setRestartStatus('');
+          setRestarting(false);
+          return;
+        }
+
+        // Show any errors from dependent restarts
+        if (response.data.errors && response.data.errors.length > 0) {
+          setError(`Some dependents had issues: ${response.data.errors.join('; ')}`);
+        }
+
+        setRestartStatus(message);
         setTimeout(() => {
           setRestartStatus('');
           if (onRefresh) {
             onRefresh();
           }
-        }, 2000);
+        }, 3000);
       } else {
         setError(response.error || 'Failed to restart container');
         setRestartStatus('');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to restart container');
+      // Improve error message for network/timeout errors
+      if (err instanceof Error) {
+        if (err.message.includes('fetch')) {
+          setError('Request timed out or network error. Check if the container restarted successfully.');
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError('Failed to restart container: Unknown error');
+      }
       setRestartStatus('');
     } finally {
       setRestarting(false);
@@ -358,7 +448,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                       >
                         <option value="">No script</option>
                         {scripts.map(s => (
-                          <option key={s.path} value={s.relative_path} disabled={!s.executable}>
+                          <option key={s.path} value={s.path} disabled={!s.executable}>
                             {s.name} {s.executable ? '' : '(not executable)'}
                           </option>
                         ))}
@@ -381,69 +471,81 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                       </div>
                     )}
                   </div>
-                </div>
 
-                {/* Changes Warning & Actions */}
-                {hasChanges && (
-                  <div className="settings-changes">
-                    <div className="changes-warning">
-                      <div className="warning-header">
-                        <i className="fa-solid fa-exclamation-triangle"></i>
-                        <strong>Container will be restarted</strong>
-                      </div>
-                      <div className="changes-list">
-                        <span>Changes to apply:</span>
-                        <ul>
-                          {getChangeSummary().map((change, i) => (
-                            <li key={i}>{change}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      {originalScript && (
-                        <div className="warning-note">
-                          <i className="fa-solid fa-info-circle"></i>
-                          Pre-update check will run before restart
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="button-group">
-                      <button
-                        className="btn-secondary"
-                        onClick={handleReset}
+                  {/* Restart Dependencies */}
+                  <div className="setting-item full-width">
+                    <label className="select-label">
+                      <strong>Restart When These Restart</strong>
+                      <small>Comma-separated container names</small>
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        value={restartDependsOn}
+                        onChange={(e) => setRestartDependsOn(e.target.value)}
                         disabled={saving}
-                      >
-                        <i className="fa-solid fa-undo"></i> Cancel
-                      </button>
-
-                      {showForceOption && (
+                        placeholder="e.g., vpn, tailscale"
+                        className="setting-select"
+                        style={{ flex: 1 }}
+                      />
+                      {restartDependsOn && (
                         <button
-                          className="btn-warning"
-                          onClick={() => handleSave(true)}
+                          className="btn-clear"
+                          onClick={() => setRestartDependsOn('')}
                           disabled={saving}
+                          title="Clear dependencies"
                         >
-                          <i className="fa-solid fa-bolt"></i> Force Update
+                          <i className="fa-solid fa-times"></i>
                         </button>
                       )}
-
-                      <button
-                        className="btn-primary"
-                        onClick={() => handleSave(false)}
-                        disabled={saving}
-                      >
-                        {saving ? (
-                          <>
-                            <div className="spinner-inline"></div> Updating...
-                          </>
-                        ) : (
-                          <>
-                            <i className="fa-solid fa-save"></i> Save & Restart
-                          </>
-                        )}
-                      </button>
                     </div>
+                    {originalRestartDependsOn && (
+                      <div className="current-script-indicator">
+                        <i className="fa-solid fa-link"></i>
+                        <strong>Current:</strong> {originalRestartDependsOn}
+                      </div>
+                    )}
+
+                    {/* Info: This container will restart when */}
+                    {restartDependsOn && (
+                      <div className="info-box" style={{ marginTop: '8px' }}>
+                        <i className="fa-solid fa-link"></i>
+                        <div>
+                          <strong>This container will restart when:</strong>
+                          <p style={{ marginTop: '4px' }}>
+                            {restartDependsOn.split(',').map((dep, i, arr) => (
+                              <span key={dep}>
+                                <code>{dep.trim()}</code>
+                                {i < arr.length - 1 ? ', ' : ' restarts'}
+                              </span>
+                            ))}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Info: Containers that depend on this one */}
+                    {dependentContainers.length > 0 && (
+                      <div className="info-box warn-box" style={{ marginTop: '8px' }}>
+                        <i className="fa-solid fa-triangle-exclamation"></i>
+                        <div>
+                          <strong>Restarting this container will also restart:</strong>
+                          <p style={{ marginTop: '4px' }}>
+                            {dependentContainers.map((dep, i) => (
+                              <span key={dep}>
+                                <code>{dep}</code>
+                                {i < dependentContainers.length - 1 ? ', ' : ''}
+                              </span>
+                            ))}
+                          </p>
+                          <p style={{ marginTop: '8px', fontSize: '12px', opacity: 0.8 }}>
+                            Pre-update checks will run before restarting dependents. Use Force Restart to bypass.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
 
                 {!hasChanges && (
                   <div className="info-box">
@@ -569,16 +671,80 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           </div>
         )}
 
+        {/* Changes Warning - Anchored near footer */}
+        {hasChanges && (
+          <div className="settings-changes" style={{
+            margin: '0',
+            borderTop: '1px solid var(--border-color)',
+            borderRadius: '0',
+            padding: '12px 20px'
+          }}>
+            <div className="changes-warning">
+              <div className="warning-header">
+                <i className="fa-solid fa-exclamation-triangle"></i>
+                <strong>Container will be restarted</strong>
+              </div>
+              <div className="changes-list">
+                <span>Changes to apply:</span>
+                <ul>
+                  {getChangeSummary().map((change, i) => (
+                    <li key={i}>{change}</li>
+                  ))}
+                </ul>
+              </div>
+              {originalScript && (
+                <div className="warning-note">
+                  <i className="fa-solid fa-info-circle"></i>
+                  Pre-update check will run before restart
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>Close</button>
-          <button
-            className="btn-secondary"
-            onClick={handleRestart}
-            disabled={restarting}
-          >
-            <i className="fa-solid fa-rotate-right"></i> {restarting ? 'Restarting...' : 'Restart'}
-          </button>
-          {container.status === 'UPDATE_AVAILABLE' && onUpdate && (
+
+          {hasChanges && (
+            <button
+              className="btn-secondary"
+              onClick={handleReset}
+              disabled={saving || restarting}
+            >
+              <i className="fa-solid fa-undo"></i> Cancel
+            </button>
+          )}
+
+          {!showForceRestart && (
+            <button
+              className="btn-secondary"
+              onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
+              disabled={saving || restarting}
+            >
+              {saving || restarting ? (
+                <>
+                  <div className="spinner-inline"></div> {hasChanges ? 'Saving...' : 'Restarting...'}
+                </>
+              ) : (
+                <>
+                  <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i> {hasChanges ? 'Save & Restart' : 'Restart'}
+                </>
+              )}
+            </button>
+          )}
+
+          {showForceRestart && (
+            <button
+              className="btn-warning"
+              onClick={() => hasChanges ? handleSave(true) : handleRestart(true)}
+              disabled={saving || restarting}
+              title="Force restart, bypassing pre-update checks"
+            >
+              <i className="fa-solid fa-bolt"></i> Force {hasChanges ? 'Save & ' : ''}Restart
+            </button>
+          )}
+
+          {!hasChanges && container.status === 'UPDATE_AVAILABLE' && onUpdate && (
             <button
               className="btn-primary"
               onClick={() => {

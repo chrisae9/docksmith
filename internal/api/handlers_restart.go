@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/output"
+	"github.com/chis/docksmith/internal/scripts"
 	"github.com/docker/docker/api/types/container"
 )
 
@@ -24,10 +26,82 @@ type RestartStackRequest struct {
 
 // RestartResponse represents the response from a restart operation
 type RestartResponse struct {
-	Success        bool     `json:"success"`
-	Message        string   `json:"message"`
-	ContainerNames []string `json:"container_names"`
-	Errors         []string `json:"errors,omitempty"`
+	Success         bool     `json:"success"`
+	Message         string   `json:"message"`
+	ContainerNames  []string `json:"container_names"`
+	DependentsNames []string `json:"dependents_restarted,omitempty"`
+	BlockedNames    []string `json:"dependents_blocked,omitempty"`
+	Errors          []string `json:"errors,omitempty"`
+}
+
+// restartDependentContainers finds and restarts containers that depend on the given container
+// If force is false, runs pre-update checks before restarting each dependent
+func (s *Server) restartDependentContainers(ctx context.Context, containerName string, force bool) ([]string, []string, []string) {
+	dependents, err := s.dockerService.FindDependentContainers(ctx, containerName, scripts.RestartDependsOnLabel)
+	if err != nil {
+		log.Printf("Failed to find dependent containers for %s: %v", containerName, err)
+		return nil, nil, nil
+	}
+
+	if len(dependents) == 0 {
+		return nil, nil, nil
+	}
+
+	log.Printf("Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
+
+	// Get full container info for pre-update checks
+	containers, err := s.dockerService.ListContainers(ctx)
+	if err != nil {
+		log.Printf("Failed to list containers: %v", err)
+		return nil, nil, nil
+	}
+
+	containerMap := make(map[string]*docker.Container)
+	for i := range containers {
+		containerMap[containers[i].Name] = &containers[i]
+	}
+
+	var restarted []string
+	var blocked []string
+	var errors []string
+
+	for _, dep := range dependents {
+		depContainer := containerMap[dep]
+		if depContainer == nil {
+			errMsg := fmt.Sprintf("Dependent container %s not found", dep)
+			log.Printf("%s", errMsg)
+			errors = append(errors, errMsg)
+			continue
+		}
+
+		// Run pre-update check if not forced
+		if !force {
+			if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+				log.Printf("Running pre-update check for dependent %s", dep)
+				if err := s.runPreUpdateCheck(ctx, depContainer, scriptPath); err != nil {
+					errMsg := fmt.Sprintf("%s: %v", dep, err)
+					log.Printf("Pre-update check failed for %s: %v", dep, err)
+					blocked = append(blocked, dep)
+					errors = append(errors, errMsg)
+					continue
+				}
+				log.Printf("Pre-update check passed for %s", dep)
+			}
+		}
+
+		log.Printf("Restarting dependent container: %s", dep)
+		err := s.dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{})
+		if err != nil {
+			errMsg := fmt.Sprintf("Failed to restart dependent %s: %v", dep, err)
+			log.Printf("%s", errMsg)
+			errors = append(errors, errMsg)
+		} else {
+			log.Printf("Successfully restarted dependent container: %s", dep)
+			restarted = append(restarted, dep)
+		}
+	}
+
+	return restarted, blocked, errors
 }
 
 // handleRestartContainer restarts a single container
@@ -39,7 +113,10 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	log.Printf("Restarting container: %s", containerName)
+	// Check for force parameter
+	force := r.URL.Query().Get("force") == "true"
+
+	log.Printf("Restarting container: %s (force=%v)", containerName, force)
 
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -56,10 +133,24 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 
 	log.Printf("Successfully restarted container: %s", containerName)
 
+	// Restart dependent containers
+	dependents, blocked, depErrors := s.restartDependentContainers(ctx, containerName, force)
+
+	message := fmt.Sprintf("Container %s restarted successfully", containerName)
+	if len(dependents) > 0 {
+		message = fmt.Sprintf("Container %s and %d dependent(s) restarted successfully", containerName, len(dependents))
+	}
+	if len(blocked) > 0 {
+		message += fmt.Sprintf(" (%d blocked by pre-checks)", len(blocked))
+	}
+
 	response := RestartResponse{
-		Success:        true,
-		Message:        fmt.Sprintf("Container %s restarted successfully", containerName),
-		ContainerNames: []string{containerName},
+		Success:         true,
+		Message:         message,
+		ContainerNames:  []string{containerName},
+		DependentsNames: dependents,
+		BlockedNames:    blocked,
+		Errors:          depErrors,
 	}
 
 	output.WriteJSONData(w, response)
@@ -108,6 +199,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	defer restartCancel()
 
 	var errors []string
+	var allDependents []string
 	successCount := 0
 
 	for _, containerName := range stackContainers {
@@ -120,11 +212,22 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 		} else {
 			successCount++
 			log.Printf("Successfully restarted %s", containerName)
+
+			// Restart dependent containers (never force in stack restart)
+			dependents, blocked, depErrors := s.restartDependentContainers(restartCtx, containerName, false)
+			allDependents = append(allDependents, dependents...)
+			if len(blocked) > 0 {
+				errors = append(errors, fmt.Sprintf("%d dependent(s) of %s blocked by pre-checks", len(blocked), containerName))
+			}
+			errors = append(errors, depErrors...)
 		}
 	}
 
 	success := successCount > 0
 	message := fmt.Sprintf("Restarted %d/%d containers in stack %s", successCount, len(stackContainers), stackName)
+	if len(allDependents) > 0 {
+		message = fmt.Sprintf("Restarted %d/%d containers in stack %s and %d dependent(s)", successCount, len(stackContainers), stackName, len(allDependents))
+	}
 
 	if len(errors) > 0 {
 		log.Printf("Stack restart completed with errors: %s", message)
@@ -133,10 +236,11 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := RestartResponse{
-		Success:        success,
-		Message:        message,
-		ContainerNames: stackContainers,
-		Errors:         errors,
+		Success:         success,
+		Message:         message,
+		ContainerNames:  stackContainers,
+		DependentsNames: allDependents,
+		Errors:          errors,
 	}
 
 	if success {
@@ -177,10 +281,24 @@ func (s *Server) handleRestartContainerBody(w http.ResponseWriter, r *http.Reque
 
 	log.Printf("Successfully restarted container: %s", req.ContainerName)
 
+	// Restart dependent containers (never force in body endpoint)
+	dependents, blocked, depErrors := s.restartDependentContainers(ctx, req.ContainerName, false)
+
+	message := fmt.Sprintf("Container %s restarted successfully", req.ContainerName)
+	if len(dependents) > 0 {
+		message = fmt.Sprintf("Container %s and %d dependent(s) restarted successfully", req.ContainerName, len(dependents))
+	}
+	if len(blocked) > 0 {
+		message += fmt.Sprintf(" (%d blocked by pre-checks)", len(blocked))
+	}
+
 	response := RestartResponse{
-		Success:        true,
-		Message:        fmt.Sprintf("Container %s restarted successfully", req.ContainerName),
-		ContainerNames: []string{req.ContainerName},
+		Success:         true,
+		Message:         message,
+		ContainerNames:  []string{req.ContainerName},
+		DependentsNames: dependents,
+		BlockedNames:    blocked,
+		Errors:          depErrors,
 	}
 
 	output.WriteJSONData(w, response)

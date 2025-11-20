@@ -28,6 +28,13 @@ type DiscoveryResult struct {
 	LocalImages        int                 `json:"local_images"`
 	Failed             int                 `json:"failed"`
 	Ignored            int                 `json:"ignored"`
+	// Status endpoint specific fields (populated by background checker)
+	LastCheck          string `json:"last_check,omitempty"`           // ISO 8601 timestamp of when cache was populated
+	LastBackgroundRun  string `json:"last_background_run,omitempty"`  // ISO 8601 timestamp of when background check ran
+	Checking           bool   `json:"checking,omitempty"`             // Whether a check is currently in progress
+	NextCheck          string `json:"next_check,omitempty"`           // ISO 8601 timestamp of next scheduled check
+	CheckInterval      string `json:"check_interval,omitempty"`       // Duration string like "5m0s"
+	CacheTTL           string `json:"cache_ttl,omitempty"`            // Duration string like "1h0m0s"
 }
 
 // ContainerInfo extends ContainerUpdate with additional metadata
@@ -91,6 +98,11 @@ func NewOrchestrator(dockerClient docker.Client, registryManager RegistryClient)
 func (o *Orchestrator) EnableCache(ttl time.Duration) {
 	o.cacheEnabled = true
 	o.cacheTTL = ttl
+}
+
+// GetCacheOldestEntryTime returns when the oldest cache entry was created
+func (o *Orchestrator) GetCacheOldestEntryTime() time.Time {
+	return o.cache.GetOldestEntryTime()
 }
 
 // SetStorage sets the storage service for the orchestrator's checker
@@ -283,49 +295,50 @@ func (o *Orchestrator) publishCheckProgress(stage string, total, checked int, co
 
 // checkContainer checks a single container for updates
 func (o *Orchestrator) checkContainer(ctx context.Context, container docker.Container) ContainerInfo {
-	// Use existing checker logic
-	update := o.checker.checkContainer(ctx, container)
+	// Check cache first if enabled (only for update check results, not container metadata)
+	var update ContainerUpdate
+	if o.cacheEnabled {
+		cacheKey := fmt.Sprintf("%s:%s", container.Image, container.ID[:12])
+		if cached, found := o.cache.Get(cacheKey); found {
+			if cachedUpdate, ok := cached.(ContainerUpdate); ok {
+				update = cachedUpdate
+			} else {
+				// Cache miss or wrong type, do fresh check
+				update = o.checker.checkContainer(ctx, container)
+				if update.Status != LocalImage {
+					o.cache.Set(cacheKey, update, o.cacheTTL)
+				}
+			}
+		} else {
+			// Cache miss, do fresh check
+			update = o.checker.checkContainer(ctx, container)
+			if update.Status != LocalImage {
+				o.cache.Set(cacheKey, update, o.cacheTTL)
+			}
+		}
+	} else {
+		// Cache disabled, always do fresh check
+		update = o.checker.checkContainer(ctx, container)
+	}
 
-	// Extract additional metadata
+	// Always compute container-specific metadata fresh (never cache this)
 	info := ContainerInfo{
 		ContainerUpdate: update,
 		ID:             container.ID,
 		Labels:         container.Labels,
 	}
 
-	// Determine stack
+	// Determine stack (container-specific, always fresh)
 	info.Stack = o.stackManager.DetermineStack(ctx, container)
 
-	// Extract service name
+	// Extract service name (container-specific, always fresh)
 	if service, ok := container.Labels["com.docker.compose.service"]; ok {
 		info.Service = service
 	}
 
-	// Extract dependencies
+	// Extract dependencies (container-specific, always fresh)
 	if deps, ok := container.Labels["com.docker.compose.depends_on"]; ok {
 		info.Dependencies = graph.ParseDependsOn(deps)
-	}
-
-	// Pre-update check is already set by the checker from labels
-
-	// Use cache if enabled
-	if o.cacheEnabled && info.Status != LocalImage {
-		cacheKey := fmt.Sprintf("%s:%s", info.Image, info.CurrentVersion)
-		if cached, found := o.cache.Get(cacheKey); found {
-			if cachedInfo, ok := cached.(ContainerInfo); ok {
-				// Preserve container-specific fields
-				cachedInfo.ID = info.ID
-				cachedInfo.Labels = info.Labels
-				cachedInfo.Stack = info.Stack
-				cachedInfo.Service = info.Service
-				cachedInfo.Dependencies = info.Dependencies
-				cachedInfo.PreUpdateCheck = info.PreUpdateCheck
-				return cachedInfo
-			}
-		}
-
-		// Store in cache
-		o.cache.Set(cacheKey, info, o.cacheTTL)
 	}
 
 	return info
@@ -455,6 +468,7 @@ type Cache struct {
 type CacheEntry struct {
 	Value     interface{}
 	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 // NewCache creates a new cache
@@ -486,9 +500,11 @@ func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
 	c.entries[key] = &CacheEntry{
 		Value:     value,
-		ExpiresAt: time.Now().Add(ttl),
+		ExpiresAt: now.Add(ttl),
+		CreatedAt: now,
 	}
 }
 
@@ -511,4 +527,19 @@ func (c *Cache) Cleanup() {
 			delete(c.entries, key)
 		}
 	}
+}
+
+// GetOldestEntryTime returns the creation time of the oldest cache entry
+// Returns zero time if cache is empty
+func (c *Cache) GetOldestEntryTime() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var oldest time.Time
+	for _, entry := range c.entries {
+		if oldest.IsZero() || entry.CreatedAt.Before(oldest) {
+			oldest = entry.CreatedAt
+		}
+	}
+	return oldest
 }

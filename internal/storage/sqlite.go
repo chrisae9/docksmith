@@ -23,8 +23,8 @@ type SQLiteStorage struct {
 	dbPath string
 }
 
-// Default cache TTL in days
-const defaultCacheTTLDays = 7
+// Default cache TTL for version resolution cache
+const defaultVersionCacheTTL = 1 * time.Hour
 
 // NewSQLiteStorage creates a new SQLite storage instance.
 // Initializes the database connection, enables WAL mode, and runs migrations.
@@ -236,15 +236,16 @@ func (s *SQLiteStorage) SaveVersionCache(ctx context.Context, sha256, imageRef, 
 
 // GetVersionCache implements Storage.GetVersionCache.
 // Retrieves a cached version resolution by composite key (sha256, image_ref, architecture).
-// Checks TTL before returning (default 7 days).
+// Checks TTL before returning (default 1 hour).
 // Returns empty string and false if not found or expired.
 func (s *SQLiteStorage) GetVersionCache(ctx context.Context, sha256, imageRef, arch string) (string, bool, error) {
 	// Get TTL from environment or use default
-	ttlDays := defaultCacheTTLDays
-	if ttlEnv := os.Getenv("CACHE_TTL_DAYS"); ttlEnv != "" {
-		var parsedTTL int
-		if _, err := fmt.Sscanf(ttlEnv, "%d", &parsedTTL); err == nil && parsedTTL > 0 {
-			ttlDays = parsedTTL
+	ttl := defaultVersionCacheTTL
+	if ttlEnv := os.Getenv("CACHE_TTL"); ttlEnv != "" {
+		if parsed, err := time.ParseDuration(ttlEnv); err == nil && parsed > 0 {
+			ttl = parsed
+		} else {
+			log.Printf("Warning: Invalid CACHE_TTL '%s', using default %v", ttlEnv, defaultVersionCacheTTL)
 		}
 	}
 
@@ -267,7 +268,7 @@ func (s *SQLiteStorage) GetVersionCache(ctx context.Context, sha256, imageRef, a
 	}
 
 	// Check if entry is expired based on TTL
-	expirationTime := time.Now().Add(-time.Duration(ttlDays) * 24 * time.Hour)
+	expirationTime := time.Now().Add(-ttl)
 	if resolvedAt.Before(expirationTime) {
 		log.Printf("Version cache expired for %s (%s, %s): resolved at %v", imageRef, sha256, arch, resolvedAt)
 		return "", false, nil
