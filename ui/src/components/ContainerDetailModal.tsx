@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getScripts, getContainerLabels, setLabels } from '../api/client';
+import { getScripts, getContainerLabels, setLabels, restartContainer } from '../api/client';
 import type { ContainerInfo, Script } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
 
@@ -22,6 +22,8 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [hasChanges, setHasChanges] = useState(false);
   const [showForceOption, setShowForceOption] = useState(false);
   const [preCheckFailed, setPreCheckFailed] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [restartStatus, setRestartStatus] = useState<string>('');
 
   // Track original values to detect changes
   const [originalScript, setOriginalScript] = useState<string>('');
@@ -189,6 +191,34 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     setError(null);
     setShowForceOption(false);
     setPreCheckFailed(false);
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    setRestartStatus('Restarting container...');
+    setError(null);
+
+    try {
+      const response = await restartContainer(container.container_name);
+
+      if (response.success && response.data) {
+        setRestartStatus('Container restarted successfully');
+        setTimeout(() => {
+          setRestartStatus('');
+          if (onRefresh) {
+            onRefresh();
+          }
+        }, 2000);
+      } else {
+        setError(response.error || 'Failed to restart container');
+        setRestartStatus('');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to restart container');
+      setRestartStatus('');
+    } finally {
+      setRestarting(false);
+    }
   };
 
   const getStatusBadge = () => {
@@ -533,8 +563,21 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           )}
         </div>
 
+        {restartStatus && (
+          <div className="save-status success">
+            <i className="fa-solid fa-check-circle"></i> {restartStatus}
+          </div>
+        )}
+
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>Close</button>
+          <button
+            className="btn-secondary"
+            onClick={handleRestart}
+            disabled={restarting}
+          >
+            <i className="fa-solid fa-rotate-right"></i> {restarting ? 'Restarting...' : 'Restart'}
+          </button>
           {container.status === 'UPDATE_AVAILABLE' && onUpdate && (
             <button
               className="btn-primary"

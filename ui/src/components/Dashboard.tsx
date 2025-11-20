@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { checkContainers, triggerBatchUpdate } from '../api/client';
+import { checkContainers, triggerBatchUpdate, restartStack } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
@@ -39,6 +39,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     startTime: number;
     logs: Array<{ time: number; message: string }>;
   } | null>(null);
+  const [restartingStack, setRestartingStack] = useState<string | null>(null);
   const elapsedIntervalRef = useRef<number | null>(null);
   const logEntriesRef = useRef<HTMLDivElement>(null);
 
@@ -511,6 +512,31 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     setUpdating(false);
   };
 
+  const handleStackRestart = async (stackName: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Don't trigger stack collapse/expand
+
+    setRestartingStack(stackName);
+    setError(null);
+
+    try {
+      const response = await restartStack(stackName);
+
+      if (response.success && response.data) {
+        // Success - wait a moment then refresh
+        setTimeout(() => {
+          setRestartingStack(null);
+          fetchData();
+        }, 1000);
+      } else {
+        setError(response.error || 'Failed to restart stack');
+        setRestartingStack(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to restart stack');
+      setRestartingStack(null);
+    }
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
@@ -745,6 +771,14 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     <span className="toggle">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
                     {stack.name}
                     {stack.has_updates && <span className="badge-dot"></span>}
+                    <button
+                      className="stack-restart-btn"
+                      onClick={(e) => handleStackRestart(stack.name, e)}
+                      disabled={restartingStack === stack.name}
+                      title={`Restart all containers in ${stack.name}`}
+                    >
+                      <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`}></i>
+                    </button>
                   </h2>
                   {!collapsedStacks.has(stack.name) && (
                     <ul>

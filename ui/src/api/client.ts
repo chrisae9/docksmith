@@ -263,3 +263,25 @@ export async function removeLabels(
     }),
   });
 }
+
+// Restart operations
+export interface RestartResponse {
+  success: boolean;
+  message: string;
+  container_names: string[];
+  errors?: string[];
+}
+
+// Restart a single container
+export async function restartContainer(containerName: string): Promise<APIResponse<RestartResponse>> {
+  return fetchAPI(`/restart/container/${containerName}`, {
+    method: 'POST',
+  });
+}
+
+// Restart all containers in a stack
+export async function restartStack(stackName: string): Promise<APIResponse<RestartResponse>> {
+  return fetchAPI(`/restart/stack/${stackName}`, {
+    method: 'POST',
+  });
+}

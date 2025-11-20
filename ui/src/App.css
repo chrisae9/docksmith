@@ -370,6 +370,42 @@ main {
   margin-left: 4px;
 }
 
+.stack-restart-btn {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-tertiary);
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stack-restart-btn:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-accent);
+}
+
+.stack-restart-btn:active {
+  opacity: 0.7;
+  transform: scale(0.95);
+}
+
+.stack-restart-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stack-restart-btn i.fa-spin {
+  animation: fa-spin 1s infinite linear;
+}
+
 /* Container list */
 ul {
   list-style: none;
