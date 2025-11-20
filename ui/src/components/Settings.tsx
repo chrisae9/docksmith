@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { checkContainers, getContainerStatus, getDockerConfig } from '../api/client';
 import type { DiscoveryResult, DockerRegistryInfo } from '../types/api';
+import { formatTimeAgo } from '../utils/time';
 
 interface SettingsProps {
   onBack: () => void;
@@ -26,29 +27,14 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
   useEffect(() => {
     const interval = setInterval(() => {
       if (lastCheckTime) {
-        setCacheAge(calculateTimeAgo(lastCheckTime));
+        setCacheAge(formatTimeAgo(lastCheckTime));
       }
       if (lastBackgroundRun) {
-        setBackgroundAge(calculateTimeAgo(lastBackgroundRun));
+        setBackgroundAge(formatTimeAgo(lastBackgroundRun));
       }
     }, 10000);
     return () => clearInterval(interval);
   }, [lastCheckTime, lastBackgroundRun]);
-
-  const calculateTimeAgo = (timestamp: string): string => {
-    const now = Date.now();
-    const then = new Date(timestamp).getTime();
-    const diffMs = now - then;
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHr / 24);
-
-    if (diffDay > 0) return `${diffDay}d ago`;
-    if (diffHr > 0) return `${diffHr}h ago`;
-    if (diffMin > 0) return `${diffMin}m ago`;
-    return `${diffSec}s ago`;
-  };
 
   const fetchStatus = async () => {
     setLoading(true);
@@ -59,11 +45,11 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
         setResult(response.data);
         if (response.data.last_check) {
           setLastCheckTime(response.data.last_check);
-          setCacheAge(calculateTimeAgo(response.data.last_check));
+          setCacheAge(formatTimeAgo(response.data.last_check));
         }
         if (response.data.last_background_run) {
           setLastBackgroundRun(response.data.last_background_run);
-          setBackgroundAge(calculateTimeAgo(response.data.last_background_run));
+          setBackgroundAge(formatTimeAgo(response.data.last_background_run));
         }
       } else {
         setError(response.error || 'Failed to fetch status');
@@ -109,11 +95,11 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
         setResult(response.data);
         if (response.data.last_check) {
           setLastCheckTime(response.data.last_check);
-          setCacheAge(calculateTimeAgo(response.data.last_check));
+          setCacheAge(formatTimeAgo(response.data.last_check));
         }
         if (response.data.last_background_run) {
           setLastBackgroundRun(response.data.last_background_run);
-          setBackgroundAge(calculateTimeAgo(response.data.last_background_run));
+          setBackgroundAge(formatTimeAgo(response.data.last_background_run));
         }
       } else {
         setError(response.error || 'Failed to fetch data');
