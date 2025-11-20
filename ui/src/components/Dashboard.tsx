@@ -789,13 +789,32 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           const filteredContainerCount = result.containers.filter(filterContainer).length;
 
           if (filteredContainerCount === 0) {
-            return (
-              <div className="empty-state">
-                <i className="fa-solid fa-circle-check"></i>
-                <h2>All containers are up to date</h2>
-                <p>There are no updates available at this time</p>
-              </div>
-            );
+            // Show different message based on why there are no results
+            if (searchQuery) {
+              return (
+                <div className="empty-state">
+                  <i className="fa-solid fa-magnifying-glass"></i>
+                  <h2>No search results</h2>
+                  <p>No containers match "{searchQuery}"</p>
+                </div>
+              );
+            } else if (filter === 'updates') {
+              return (
+                <div className="empty-state">
+                  <i className="fa-solid fa-circle-check"></i>
+                  <h2>All containers are up to date</h2>
+                  <p>There are no updates available at this time</p>
+                </div>
+              );
+            } else {
+              return (
+                <div className="empty-state">
+                  <i className="fa-solid fa-box-open"></i>
+                  <h2>No containers found</h2>
+                  <p>No containers match the current filter</p>
+                </div>
+              );
+            }
           }
 
           return sort === 'stack' ? (
