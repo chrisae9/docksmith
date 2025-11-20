@@ -537,6 +537,22 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   };
 
+  const toggleAllStacks = () => {
+    if (!result) return;
+
+    // If any stacks are collapsed, expand all; otherwise collapse all
+    if (collapsedStacks.size > 0) {
+      setCollapsedStacks(new Set());
+    } else {
+      const allStackNames = new Set<string>();
+      Object.keys(result.stacks).forEach(stackName => allStackNames.add(stackName));
+      if (result.standalone_containers.length > 0) {
+        allStackNames.add('__standalone__');
+      }
+      setCollapsedStacks(allStackNames);
+    }
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
@@ -733,6 +749,15 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </button>
           </div>
           <div className="toolbar-options">
+            {sort === 'stack' && (
+              <button
+                className="icon-btn"
+                onClick={toggleAllStacks}
+                title={collapsedStacks.size > 0 ? 'Expand all stacks' : 'Collapse all stacks'}
+              >
+                <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`}></i>
+              </button>
+            )}
             <button
               className={`icon-btn ${showIgnored ? 'active' : ''}`}
               onClick={() => setShowIgnored(!showIgnored)}
@@ -759,30 +784,67 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       </header>
 
       <main>
-        {sort === 'stack' ? (
-          <>
-            {Object.values(result.stacks).map((stack: Stack) => {
-              const filteredContainers = stack.containers.filter(filterContainer);
-              if (filteredContainers.length === 0) return null;
+        {(() => {
+          // Check if there are any containers after filtering
+          const filteredContainerCount = result.containers.filter(filterContainer).length;
 
-              return (
-                <section key={stack.name} className="stack">
-                  <h2 onClick={() => toggleStack(stack.name)}>
-                    <span className="toggle">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
-                    {stack.name}
-                    {stack.has_updates && <span className="badge-dot"></span>}
-                    <button
-                      className="stack-restart-btn"
-                      onClick={(e) => handleStackRestart(stack.name, e)}
-                      disabled={restartingStack === stack.name}
-                      title={`Restart all containers in ${stack.name}`}
-                    >
-                      <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`}></i>
-                    </button>
+          if (filteredContainerCount === 0) {
+            return (
+              <div className="empty-state">
+                <i className="fa-solid fa-circle-check"></i>
+                <h2>All containers are up to date</h2>
+                <p>There are no updates available at this time</p>
+              </div>
+            );
+          }
+
+          return sort === 'stack' ? (
+            <>
+              {Object.values(result.stacks).map((stack: Stack) => {
+                const filteredContainers = stack.containers.filter(filterContainer);
+                if (filteredContainers.length === 0) return null;
+
+                return (
+                  <section key={stack.name} className="stack">
+                    <h2 onClick={() => toggleStack(stack.name)}>
+                      <span className="toggle">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
+                      {stack.name}
+                      {stack.has_updates && <span className="badge-dot"></span>}
+                      <button
+                        className="stack-restart-btn"
+                        onClick={(e) => handleStackRestart(stack.name, e)}
+                        disabled={restartingStack === stack.name}
+                        title={`Restart all containers in ${stack.name}`}
+                      >
+                        <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`}></i>
+                      </button>
+                    </h2>
+                    {!collapsedStacks.has(stack.name) && (
+                      <ul>
+                        {filteredContainers.map((container) => (
+                          <ContainerRow
+                            key={container.container_name}
+                            container={container}
+                            selected={selectedContainers.has(container.container_name)}
+                            onToggle={() => toggleContainer(container.container_name)}
+                            onContainerClick={() => setExpandedContainer(container.container_name)}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                );
+              })}
+
+              {result.standalone_containers.filter(filterContainer).length > 0 && (
+                <section className="stack">
+                  <h2 onClick={() => toggleStack('__standalone__')}>
+                    <span className="toggle">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
+                    Standalone
                   </h2>
-                  {!collapsedStacks.has(stack.name) && (
+                  {!collapsedStacks.has('__standalone__') && (
                     <ul>
-                      {filteredContainers.map((container) => (
+                      {result.standalone_containers.filter(filterContainer).map((container) => (
                         <ContainerRow
                           key={container.container_name}
                           container={container}
@@ -794,52 +856,30 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     </ul>
                   )}
                 </section>
-              );
-            })}
-
-            {result.standalone_containers.filter(filterContainer).length > 0 && (
-              <section className="stack">
-                <h2 onClick={() => toggleStack('__standalone__')}>
-                  <span className="toggle">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
-                  Standalone
-                </h2>
-                {!collapsedStacks.has('__standalone__') && (
-                  <ul>
-                    {result.standalone_containers.filter(filterContainer).map((container) => (
-                      <ContainerRow
-                        key={container.container_name}
-                        container={container}
-                        selected={selectedContainers.has(container.container_name)}
-                        onToggle={() => toggleContainer(container.container_name)}
-                        onContainerClick={() => setExpandedContainer(container.container_name)}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </section>
-            )}
-          </>
-        ) : (
-          <section className="stack">
-            <ul>
-              {result.containers
-                .filter(filterContainer)
-                .sort((a, b) => {
-                  if (sort === 'name') return a.container_name.localeCompare(b.container_name);
-                  return 0;
-                })
-                .map((container) => (
-                  <ContainerRow
-                    key={container.container_name}
-                    container={container}
-                    selected={selectedContainers.has(container.container_name)}
-                    onToggle={() => toggleContainer(container.container_name)}
-                    onContainerClick={() => setExpandedContainer(container.container_name)}
-                  />
-                ))}
-            </ul>
-          </section>
-        )}
+              )}
+            </>
+          ) : (
+            <section className="stack">
+              <ul>
+                {result.containers
+                  .filter(filterContainer)
+                  .sort((a, b) => {
+                    if (sort === 'name') return a.container_name.localeCompare(b.container_name);
+                    return 0;
+                  })
+                  .map((container) => (
+                    <ContainerRow
+                      key={container.container_name}
+                      container={container}
+                      selected={selectedContainers.has(container.container_name)}
+                      onToggle={() => toggleContainer(container.container_name)}
+                      onContainerClick={() => setExpandedContainer(container.container_name)}
+                    />
+                  ))}
+              </ul>
+            </section>
+          );
+        })()}
       </main>
 
       {selectedContainers.size > 0 && (
