@@ -4,6 +4,7 @@ import type {
   HistoryResponse,
   BackupsResponse,
   HealthCheckResponse,
+  DockerConfigResponse,
   APIResponse,
   ScriptsResponse,
   ScriptAssignmentsResponse,
@@ -30,9 +31,19 @@ export async function checkHealth(): Promise<HealthCheckResponse> {
   return fetchAPI('/health');
 }
 
+// Docker configuration
+export async function getDockerConfig(): Promise<DockerConfigResponse> {
+  return fetchAPI('/docker-config');
+}
+
 // Container discovery and update checking
 export async function checkContainers(): Promise<CheckResponse> {
   return fetchAPI('/check');
+}
+
+// Get cached container status (from background checker)
+export async function getContainerStatus(): Promise<CheckResponse> {
+  return fetchAPI('/status');
 }
 
 // Operations history
@@ -232,6 +243,7 @@ export async function setLabels(
     ignore?: boolean;
     allow_latest?: boolean;
     script?: string;
+    restart_depends_on?: string;
     no_restart?: boolean;
     force?: boolean;
   }
@@ -269,12 +281,15 @@ export interface RestartResponse {
   success: boolean;
   message: string;
   container_names: string[];
+  dependents_restarted?: string[];
+  dependents_blocked?: string[];
   errors?: string[];
 }
 
 // Restart a single container
-export async function restartContainer(containerName: string): Promise<APIResponse<RestartResponse>> {
-  return fetchAPI(`/restart/container/${containerName}`, {
+export async function restartContainer(containerName: string, force = false): Promise<APIResponse<RestartResponse>> {
+  const url = force ? `/restart/container/${containerName}?force=true` : `/restart/container/${containerName}`;
+  return fetchAPI(url, {
     method: 'POST',
   });
 }

@@ -363,7 +363,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
       <div className="history-page">
         <header>
           <div className="header-top">
-            <h1>History</h1>
           </div>
         </header>
         <div className="loading">
@@ -378,7 +377,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
       <div className="history-page">
         <header>
           <div className="header-top">
-            <h1>History</h1>
           </div>
         </header>
         <div className="error">
@@ -394,11 +392,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
       <header>
         <div className="header-top">
           <h1>History</h1>
-          <div className="header-actions">
-            <button onClick={fetchOperations} className="refresh-btn">
-              Refresh
-            </button>
-          </div>
         </div>
         <div className="search-bar">
           <div className="search-container">

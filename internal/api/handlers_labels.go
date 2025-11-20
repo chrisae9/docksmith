@@ -14,18 +14,17 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
 )
 
 // SetLabelsRequest represents a request to set labels
 type SetLabelsRequest struct {
-	Container   string  `json:"container"`
-	Ignore      *bool   `json:"ignore,omitempty"`
-	AllowLatest *bool   `json:"allow_latest,omitempty"`
-	Script      *string `json:"script,omitempty"`
-	NoRestart   bool    `json:"no_restart,omitempty"`
-	Force       bool    `json:"force,omitempty"`
+	Container        string  `json:"container"`
+	Ignore           *bool   `json:"ignore,omitempty"`
+	AllowLatest      *bool   `json:"allow_latest,omitempty"`
+	Script           *string `json:"script,omitempty"`
+	RestartDependsOn *string `json:"restart_depends_on,omitempty"`
+	NoRestart        bool    `json:"no_restart,omitempty"`
+	Force            bool    `json:"force,omitempty"`
 }
 
 // RemoveLabelsRequest represents a request to remove labels
@@ -94,6 +93,9 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	if val, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok {
 		docksmithLabels[scripts.PreUpdateCheckLabel] = val
 	}
+	if val, ok := container.Labels[scripts.RestartDependsOnLabel]; ok {
+		docksmithLabels[scripts.RestartDependsOnLabel] = val
+	}
 
 	output.WriteJSONData(w, map[string]interface{}{
 		"container": containerName,
@@ -115,7 +117,7 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Ignore == nil && req.AllowLatest == nil && req.Script == nil {
+	if req.Ignore == nil && req.AllowLatest == nil && req.Script == nil && req.RestartDependsOn == nil {
 		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
 		return
 	}
@@ -292,6 +294,23 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 				return nil, fmt.Errorf("failed to set script label: %w", err)
 			}
 			result.LabelsModified[scripts.PreUpdateCheckLabel] = *req.Script
+		}
+	}
+
+	if req.RestartDependsOn != nil {
+		// If restart-depends-on is empty string, remove the label; otherwise set it
+		if *req.RestartDependsOn == "" {
+			if err := service.RemoveLabel(scripts.RestartDependsOnLabel); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to remove restart-depends-on label: %w", err)
+			}
+			result.LabelsModified[scripts.RestartDependsOnLabel] = ""
+		} else {
+			if err := service.SetLabel(scripts.RestartDependsOnLabel, *req.RestartDependsOn); err != nil {
+				compose.RestoreFromBackup(composeFilePath, backupPath)
+				return nil, fmt.Errorf("failed to set restart-depends-on label: %w", err)
+			}
+			result.LabelsModified[scripts.RestartDependsOnLabel] = *req.RestartDependsOn
 		}
 	}
 
@@ -481,58 +500,21 @@ func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeF
 		return fmt.Errorf("container not found for service: %s", serviceName)
 	}
 
-	// Get the Docker client
-	cli := s.dockerService.GetClient()
+	// Get host and container paths for compose
+	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
 
-	// Inspect the container to get its full configuration
-	inspect, err := cli.ContainerInspect(ctx, targetContainer.ID)
-	if err != nil {
-		return fmt.Errorf("failed to inspect container: %w", err)
-	}
-
-	// Stop the container
-	timeout := 10 // 10 seconds
-	stopOptions := container.StopOptions{
-		Timeout: &timeout,
-	}
-	if err := cli.ContainerStop(ctx, targetContainer.ID, stopOptions); err != nil {
-		return fmt.Errorf("failed to stop container: %w", err)
-	}
-
-	// Remove the container
-	removeOptions := container.RemoveOptions{
-		Force: true,
-	}
-	if err := cli.ContainerRemove(ctx, targetContainer.ID, removeOptions); err != nil {
-		return fmt.Errorf("failed to remove container: %w", err)
-	}
-
-	// Update the config by removing specified labels
-	newConfig := inspect.Config
-	if newConfig.Labels != nil {
-		for _, labelName := range removedLabelNames {
-			delete(newConfig.Labels, labelName)
-		}
-	}
-
-	networkingConfig := &network.NetworkingConfig{
-		EndpointsConfig: inspect.NetworkSettings.Networks,
-	}
-
-	if _, err := cli.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, targetContainer.Name); err != nil {
-		return fmt.Errorf("failed to create container: %w", err)
-	}
-
-	// Start the newly created container
-	if err := cli.ContainerStart(ctx, targetContainer.Name, container.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
+	// Use compose-based recreation (preferred method)
+	// This handles all dependencies, network modes, hostname conflicts, etc. automatically
+	recreator := compose.NewRecreator(s.dockerService)
+	if err := recreator.RecreateWithCompose(ctx, targetContainer, hostComposePath, composeFilePath); err != nil {
+		return fmt.Errorf("failed to recreate container with compose: %w", err)
 	}
 
 	return nil
 }
 
-// restartContainer recreates a container to apply new labels using Docker SDK
-func (s *Server) restartContainer(ctx context.Context, composeFilePath, serviceName string, updatedLabels map[string]string) error {
+// restartContainer recreates a container to apply new labels using docker compose
+func (s *Server) restartContainer(ctx context.Context, composeFilePath, serviceName string, _ map[string]string) error {
 	// Find the container by service name
 	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {
@@ -558,53 +540,14 @@ func (s *Server) restartContainer(ctx context.Context, composeFilePath, serviceN
 		return fmt.Errorf("container not found for service: %s", serviceName)
 	}
 
-	// Get the Docker client
-	cli := s.dockerService.GetClient()
+	// Get host and container paths for compose
+	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
 
-	// Inspect the container to get its full configuration
-	inspect, err := cli.ContainerInspect(ctx, targetContainer.ID)
-	if err != nil {
-		return fmt.Errorf("failed to inspect container: %w", err)
-	}
-
-	// Stop the container
-	timeout := 10 // 10 seconds
-	stopOptions := container.StopOptions{
-		Timeout: &timeout,
-	}
-	if err := cli.ContainerStop(ctx, targetContainer.ID, stopOptions); err != nil {
-		return fmt.Errorf("failed to stop container: %w", err)
-	}
-
-	// Remove the container
-	removeOptions := container.RemoveOptions{
-		Force: true,
-	}
-	if err := cli.ContainerRemove(ctx, targetContainer.ID, removeOptions); err != nil {
-		return fmt.Errorf("failed to remove container: %w", err)
-	}
-
-	// Update the config with new labels from the compose file
-	newConfig := inspect.Config
-	if newConfig.Labels == nil {
-		newConfig.Labels = make(map[string]string)
-	}
-	// Merge updated labels into the config
-	for key, value := range updatedLabels {
-		newConfig.Labels[key] = value
-	}
-
-	networkingConfig := &network.NetworkingConfig{
-		EndpointsConfig: inspect.NetworkSettings.Networks,
-	}
-
-	if _, err := cli.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, targetContainer.Name); err != nil {
-		return fmt.Errorf("failed to create container: %w", err)
-	}
-
-	// Start the newly created container
-	if err := cli.ContainerStart(ctx, targetContainer.Name, container.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
+	// Use compose-based recreation (preferred method)
+	// This handles all dependencies, network modes, hostname conflicts, etc. automatically
+	recreator := compose.NewRecreator(s.dockerService)
+	if err := recreator.RecreateWithCompose(ctx, targetContainer, hostComposePath, composeFilePath); err != nil {
+		return fmt.Errorf("failed to recreate container with compose: %w", err)
 	}
 
 	return nil

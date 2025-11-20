@@ -31,6 +31,9 @@ type Server struct {
 	eventBus              *events.Bus
 	httpServer            *http.Server
 	pathTranslator        *docker.PathTranslator
+	backgroundChecker     *update.BackgroundChecker
+	checkInterval         time.Duration
+	cacheTTL              time.Duration
 }
 
 // Config holds configuration for the API server
@@ -48,6 +51,19 @@ func NewServer(cfg Config) *Server {
 
 	discoveryOrchestrator := update.NewOrchestrator(cfg.DockerService, cfg.RegistryManager)
 	discoveryOrchestrator.SetEventBus(eventBus) // Enable check progress events
+
+	// Parse cache TTL from environment variable
+	cacheTTL := 1 * time.Hour // Default to 1 hour
+	if cacheTTLStr := os.Getenv("CACHE_TTL"); cacheTTLStr != "" {
+		if parsed, err := time.ParseDuration(cacheTTLStr); err == nil {
+			cacheTTL = parsed
+			log.Printf("Using CACHE_TTL: %v", cacheTTL)
+		} else {
+			log.Printf("Warning: Invalid CACHE_TTL '%s', using default %v", cacheTTLStr, cacheTTL)
+		}
+	}
+	discoveryOrchestrator.EnableCache(cacheTTL) // Cache registry responses to avoid rate limits
+
 	if cfg.StorageService != nil {
 		discoveryOrchestrator.SetStorage(cfg.StorageService)
 	}
@@ -95,6 +111,21 @@ func NewServer(cfg Config) *Server {
 		scriptManager = scripts.NewManager(cfg.StorageService, appConfig)
 	}
 
+	// Parse check interval from environment variable
+	checkInterval := 5 * time.Minute // Default to 5 minutes
+	if intervalStr := os.Getenv("CHECK_INTERVAL"); intervalStr != "" {
+		if parsed, err := time.ParseDuration(intervalStr); err == nil {
+			checkInterval = parsed
+			log.Printf("Using CHECK_INTERVAL: %v", checkInterval)
+		} else {
+			log.Printf("Warning: Invalid CHECK_INTERVAL '%s', using default %v", intervalStr, checkInterval)
+		}
+	}
+
+	// Create background checker using the discovery orchestrator
+	var backgroundChecker *update.BackgroundChecker
+	backgroundChecker = update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, checkInterval)
+
 	s := &Server{
 		dockerService:         cfg.DockerService,
 		registryManager:       cfg.RegistryManager,
@@ -104,6 +135,9 @@ func NewServer(cfg Config) *Server {
 		scriptManager:         scriptManager,
 		eventBus:              eventBus,
 		pathTranslator:        cfg.DockerService.GetPathTranslator(),
+		backgroundChecker:     backgroundChecker,
+		checkInterval:         checkInterval,
+		cacheTTL:              cacheTTL,
 	}
 
 	// Setup HTTP server
@@ -126,8 +160,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	// Health check
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
+	// Docker configuration
+	mux.HandleFunc("GET /api/docker-config", s.handleDockerConfig)
+
 	// Container discovery and checking
 	mux.HandleFunc("GET /api/check", s.handleCheck)
+	mux.HandleFunc("GET /api/status", s.handleGetStatus)
+	mux.HandleFunc("POST /api/trigger-check", s.handleTriggerCheck)
 
 	// Operations history
 	mux.HandleFunc("GET /api/operations", s.handleOperations)
@@ -183,6 +222,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 
 // Start starts the HTTP server
 func (s *Server) Start() error {
+	// Start background checker
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.Start()
+	}
+
 	log.Printf("Starting API server on %s", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -190,6 +234,12 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Println("Shutting down API server...")
+
+	// Stop background checker
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.Stop()
+	}
+
 	return s.httpServer.Shutdown(ctx)
 }
 

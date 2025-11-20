@@ -59,6 +59,13 @@ export interface DiscoveryResult {
   local_images: number;
   failed: number;
   ignored: number;
+  // Status endpoint specific fields
+  last_check?: string; // ISO timestamp of when cache was populated
+  last_background_run?: string; // ISO timestamp of when background check ran
+  checking?: boolean;
+  next_check?: string; // ISO timestamp
+  check_interval?: string; // Duration string like "5m0s"
+  cache_ttl?: string; // Duration string like "1h0m0s"
 }
 
 // Update Operation (matches storage.UpdateOperation)
@@ -152,6 +159,12 @@ export interface HealthResponse {
   };
 }
 
+// Docker Registry Info
+export interface DockerRegistryInfo {
+  registries: string[];
+  config_path: string;
+}
+
 // Update Status Constants (matches update.UpdateStatus)
 export const UpdateStatus = {
   Unknown: 'UNKNOWN',
@@ -200,3 +213,4 @@ export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; co
 export type HistoryResponse = APIResponse<{ history: HistoryEntry[]; count: number }>;
 export type BackupsResponse = APIResponse<{ backups: ComposeBackup[]; count: number }>;
 export type HealthCheckResponse = APIResponse<HealthResponse>;
+export type DockerConfigResponse = APIResponse<DockerRegistryInfo>;
