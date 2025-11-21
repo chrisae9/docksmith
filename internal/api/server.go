@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/chis/docksmith/internal/config"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
@@ -321,6 +323,17 @@ func spaHandler(staticDir string) http.Handler {
 		// Serve the file
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+// decodeJSONRequest decodes a JSON request body into the provided interface.
+// Returns true if successful. If decoding fails, it writes the error response and returns false.
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
+		return false
+	}
+	return true
 }
 
 // Ensure fs is used (required by imports)

@@ -181,7 +181,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	// Filter containers by stack
 	var stackContainers []string
 	for _, cont := range containers {
-		if stack, ok := cont.Labels["com.docker.compose.project"]; ok && stack == stackName {
+		if stack, ok := cont.Labels[composeProjectLabel]; ok && stack == stackName {
 			stackContainers = append(stackContainers, cont.Name)
 		}
 	}

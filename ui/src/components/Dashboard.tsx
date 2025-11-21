@@ -4,6 +4,8 @@ import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { ContainerDetailModal } from './ContainerDetailModal';
+import { isUpdatable } from '../utils/status';
+import { STORAGE_KEY_FILTER, STORAGE_KEY_INITIAL_SWITCH } from '../utils/constants';
 
 type FilterType = 'all' | 'updates' | 'local';
 type SortType = 'stack' | 'name' | 'status';
@@ -20,13 +22,13 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<FilterType>(() => {
     // Try to restore filter from localStorage, or default to 'updates'
-    const saved = localStorage.getItem('docksmith_filter');
+    const saved = localStorage.getItem(STORAGE_KEY_FILTER);
     return (saved as FilterType) || 'updates';
   });
   const [sort, setSort] = useState<SortType>('stack');
   const [initialAutoSwitchDone, setInitialAutoSwitchDone] = useState(() => {
     // Check if we've already done the initial auto-switch in this session
-    return sessionStorage.getItem('docksmith_initial_switch') === 'done';
+    return sessionStorage.getItem(STORAGE_KEY_INITIAL_SWITCH) === 'done';
   });
   const [showLocalImages, setShowLocalImages] = useState(false);
   const [showIgnored, setShowIgnored] = useState(false);
@@ -608,20 +610,18 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
   // Persist filter changes to localStorage
   useEffect(() => {
-    localStorage.setItem('docksmith_filter', filter);
+    localStorage.setItem(STORAGE_KEY_FILTER, filter);
   }, [filter]);
 
   // Auto-switch to 'all' tab if on 'updates' but no updates available (only once per session)
   useEffect(() => {
     if (result && !initialAutoSwitchDone && filter === 'updates') {
-      const hasUpdates = result.containers.some(
-        c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE'
-      );
+      const hasUpdates = result.containers.some(c => isUpdatable(c.status));
       if (!hasUpdates) {
         setFilter('all');
       }
       // Mark that we've done the initial auto-switch for this session
-      sessionStorage.setItem('docksmith_initial_switch', 'done');
+      sessionStorage.setItem(STORAGE_KEY_INITIAL_SWITCH, 'done');
       setInitialAutoSwitchDone(true);
     }
   }, [result, initialAutoSwitchDone, filter]);
@@ -653,7 +653,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const selectAll = () => {
     if (!result) return;
     const updatableContainers = result.containers
-      .filter(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE')
+      .filter(c => isUpdatable(c.status))
       .filter(filterContainer)
       .map(c => c.container_name);
     setSelectedContainers(new Set(updatableContainers));
@@ -685,7 +685,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
     switch (filter) {
       case 'updates':
-        return container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
+        return isUpdatable(container.status);
       case 'local':
         return container.status === 'LOCAL_IMAGE';
       default:
@@ -762,7 +762,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       <header>
         <div className="header-top">
           <h1>Docksmith</h1>
-          {result && result.containers.some(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE') && (
+          {result && result.containers.some(c => isUpdatable(c.status)) && (
             <button
               onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
               className="select-all-btn"
@@ -1096,7 +1096,7 @@ interface ContainerRowProps {
 }
 
 function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
-  const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
+  const hasUpdate = isUpdatable(container.status);
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 
   // Check restart dependencies

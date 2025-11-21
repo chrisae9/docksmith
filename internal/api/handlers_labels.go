@@ -16,6 +16,13 @@ import (
 	"github.com/chis/docksmith/internal/scripts"
 )
 
+// Docker Compose label names
+const (
+	composeConfigFilesLabel = "com.docker.compose.project.config_files"
+	composeServiceLabel     = "com.docker.compose.service"
+	composeProjectLabel     = "com.docker.compose.project"
+)
+
 // SetLabelsRequest represents a request to set labels
 type SetLabelsRequest struct {
 	Container        string  `json:"container"`
@@ -61,24 +68,10 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// List containers
-	containers, err := s.dockerService.ListContainers(ctx)
-	if err != nil {
-		output.WriteJSONError(w, fmt.Errorf("failed to list containers: %w", err))
-		return
-	}
-
 	// Find the container
-	var container *docker.Container
-	for _, c := range containers {
-		if c.Name == containerName {
-			container = &c
-			break
-		}
-	}
-
-	if container == nil {
-		output.WriteJSONError(w, fmt.Errorf("container not found: %s", containerName))
+	container, err := s.findContainerByName(ctx, containerName)
+	if err != nil {
+		output.WriteJSONError(w, err)
 		return
 	}
 
@@ -177,25 +170,13 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	}
 
 	// Find container
-	containers, err := s.dockerService.ListContainers(ctx)
+	container, err := s.findContainerByName(ctx, req.Container)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	var container *docker.Container
-	for _, c := range containers {
-		if c.Name == req.Container {
-			container = &c
-			break
-		}
-	}
-
-	if container == nil {
-		return nil, fmt.Errorf("container not found: %s", req.Container)
+		return nil, err
 	}
 
 	// Get compose file path
-	composeFilePath, ok := container.Labels["com.docker.compose.project.config_files"]
+	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
 	if !ok || composeFilePath == "" {
 		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
 	}
@@ -204,7 +185,7 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
 
 	result.ComposeFile = composeFilePath
-	serviceName := container.Labels["com.docker.compose.service"]
+	serviceName := container.Labels[composeServiceLabel]
 
 	// Run pre-update check if configured and not forced/no-restart
 	if !req.NoRestart && !req.Force {
@@ -322,7 +303,7 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 
 	// Restart container to apply labels (unless --no-restart)
 	if !req.NoRestart {
-		if err := s.restartContainer(ctx, composeFilePath, serviceName, result.LabelsModified); err != nil {
+		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
 			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
@@ -347,25 +328,13 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	}
 
 	// Find container
-	containers, err := s.dockerService.ListContainers(ctx)
+	container, err := s.findContainerByName(ctx, req.Container)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	var container *docker.Container
-	for _, c := range containers {
-		if c.Name == req.Container {
-			container = &c
-			break
-		}
-	}
-
-	if container == nil {
-		return nil, fmt.Errorf("container not found: %s", req.Container)
+		return nil, err
 	}
 
 	// Get compose file path
-	composeFilePath, ok := container.Labels["com.docker.compose.project.config_files"]
+	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
 	if !ok || composeFilePath == "" {
 		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
 	}
@@ -374,7 +343,7 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
 
 	result.ComposeFile = composeFilePath
-	serviceName := container.Labels["com.docker.compose.service"]
+	serviceName := container.Labels[composeServiceLabel]
 
 	// Run pre-update check if configured and not forced/no-restart
 	if !req.NoRestart && !req.Force {
@@ -429,8 +398,7 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 
 	// Restart container to apply changes (unless --no-restart)
 	if !req.NoRestart {
-		// For remove, we pass empty map and specify which labels to remove separately
-		if err := s.restartContainerWithRemovedLabels(ctx, composeFilePath, serviceName, req.LabelNames); err != nil {
+		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
 			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
@@ -473,8 +441,9 @@ func (s *Server) runPreUpdateCheck(ctx context.Context, container *docker.Contai
 	return nil
 }
 
-// restartContainerWithRemovedLabels recreates a container after removing labels using docker compose
-func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeFilePath, serviceName string, _ []string) error {
+// restartContainerByService recreates a container using docker compose
+// Used for applying label changes (both additions and removals)
+func (s *Server) restartContainerByService(ctx context.Context, composeFilePath, serviceName string) error {
 	// Find the container by service name
 	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {
@@ -483,9 +452,9 @@ func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeF
 
 	var targetContainer *docker.Container
 	for _, c := range containers {
-		if svc, ok := c.Labels["com.docker.compose.service"]; ok && svc == serviceName {
+		if svc, ok := c.Labels[composeServiceLabel]; ok && svc == serviceName {
 			// Also verify it's from the same compose file
-			if cf, ok := c.Labels["com.docker.compose.project.config_files"]; ok {
+			if cf, ok := c.Labels[composeConfigFilesLabel]; ok {
 				// Translate and compare
 				translatedCF := s.pathTranslator.TranslateToContainer(cf)
 				if translatedCF == composeFilePath {
@@ -513,42 +482,18 @@ func (s *Server) restartContainerWithRemovedLabels(ctx context.Context, composeF
 	return nil
 }
 
-// restartContainer recreates a container to apply new labels using docker compose
-func (s *Server) restartContainer(ctx context.Context, composeFilePath, serviceName string, _ map[string]string) error {
-	// Find the container by service name
+// findContainerByName searches for a container by name in the list of running containers
+func (s *Server) findContainerByName(ctx context.Context, containerName string) (*docker.Container, error) {
 	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
+		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	var targetContainer *docker.Container
 	for _, c := range containers {
-		if svc, ok := c.Labels["com.docker.compose.service"]; ok && svc == serviceName {
-			// Also verify it's from the same compose file
-			if cf, ok := c.Labels["com.docker.compose.project.config_files"]; ok {
-				// Translate and compare
-				translatedCF := s.pathTranslator.TranslateToContainer(cf)
-				if translatedCF == composeFilePath {
-					targetContainer = &c
-					break
-				}
-			}
+		if c.Name == containerName {
+			return &c, nil
 		}
 	}
 
-	if targetContainer == nil {
-		return fmt.Errorf("container not found for service: %s", serviceName)
-	}
-
-	// Get host and container paths for compose
-	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
-
-	// Use compose-based recreation (preferred method)
-	// This handles all dependencies, network modes, hostname conflicts, etc. automatically
-	recreator := compose.NewRecreator(s.dockerService)
-	if err := recreator.RecreateWithCompose(ctx, targetContainer, hostComposePath, composeFilePath); err != nil {
-		return fmt.Errorf("failed to recreate container with compose: %w", err)
-	}
-
-	return nil
+	return nil, fmt.Errorf("container not found: %s", containerName)
 }

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -252,9 +251,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		TargetVersion string `json:"target_version"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -299,9 +296,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 		} `json:"containers"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -391,9 +386,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		OperationID string `json:"operation_id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 

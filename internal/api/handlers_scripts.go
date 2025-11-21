@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -68,9 +67,7 @@ func (s *Server) handleScriptsAssign(w http.ResponseWriter, r *http.Request) {
 		ScriptPath    string `json:"script_path"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -143,9 +140,7 @@ func (s *Server) handleSettingsIgnore(w http.ResponseWriter, r *http.Request) {
 		Ignore        bool   `json:"ignore"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -190,9 +185,7 @@ func (s *Server) handleSettingsAllowLatest(w http.ResponseWriter, r *http.Reques
 		AllowLatest   bool   `json:"allow_latest"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 

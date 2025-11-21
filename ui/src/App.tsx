@@ -5,12 +5,13 @@ import { Settings } from './components/Settings'
 import { TabBar, type TabId } from './components/TabBar'
 import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
+import { STORAGE_KEY_TAB } from './utils/constants'
 import './App.css'
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     // Restore last active tab from localStorage
-    const saved = localStorage.getItem('docksmith_active_tab');
+    const saved = localStorage.getItem(STORAGE_KEY_TAB);
     return (saved as TabId) || 'updates';
   });
   const [updateCount, setUpdateCount] = useState(0);
@@ -18,7 +19,7 @@ function App() {
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem('docksmith_active_tab', activeTab);
+    localStorage.setItem(STORAGE_KEY_TAB, activeTab);
   }, [activeTab]);
 
   const fetchUpdateCount = useCallback(async () => {
