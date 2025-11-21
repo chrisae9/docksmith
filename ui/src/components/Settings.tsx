@@ -271,6 +271,14 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
             </div>
           </div>
         </section>
+
+        {/* Footer */}
+        <section className="settings-footer">
+          <div className="footer-content">
+            <img src="/docksmith-title.svg" alt="Docksmith" className="footer-logo" />
+            <p className="footer-text">Made with ❤️ by chis</p>
+          </div>
+        </section>
       </div>
     </div>
   );

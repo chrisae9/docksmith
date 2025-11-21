@@ -761,9 +761,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     <div className="dashboard">
       <header>
         <div className="header-top">
-          <div className="header-title-full">
-            <img src="/docksmith-title.svg" alt="Docksmith" className="title-logo" />
-          </div>
+          <h1>Docksmith</h1>
           {result && result.containers.some(c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE') && (
             <button
               onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
