@@ -65,12 +65,7 @@ func (c *APICommand) Run(ctx context.Context) error {
 
 	// Initialize storage (optional - graceful degradation)
 	var storageService storage.Storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
-	store, err := storage.NewSQLiteStorage(dbPath)
+	store, err := InitializeStorage()
 	if err != nil {
 		log.Printf("Warning: Failed to initialize storage: %v", err)
 		log.Println("Continuing without persistence - some features will be unavailable")

@@ -60,14 +60,9 @@ func (c *RollbackCommand) ParseFlags(args []string) error {
 // Run executes the rollback command
 func (c *RollbackCommand) Run(ctx context.Context) error {
 	// Initialize storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
-	storageService, err := storage.NewSQLiteStorage(dbPath)
+	storageService, err := InitializeStorage()
 	if err != nil {
-		return fmt.Errorf("failed to initialize storage: %w", err)
+		return err
 	}
 	defer storageService.Close()
 
@@ -270,11 +265,11 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 			}
 
 			// Check if complete or failed
-			if stage == "complete" {
+			if stage == storage.StatusComplete {
 				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", terminal.Green(), terminal.Reset())
 				return nil
 			}
-			if stage == "failed" {
+			if stage == storage.StatusFailed {
 				return fmt.Errorf("rollback failed: %s", message)
 			}
 
@@ -289,11 +284,11 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 				continue
 			}
 
-			if op.Status == "complete" {
+			if op.Status == storage.StatusComplete {
 				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", terminal.Green(), terminal.Reset())
 				return nil
 			}
-			if op.Status == "failed" {
+			if op.Status == storage.StatusFailed {
 				errMsg := "unknown error"
 				if op.ErrorMessage != "" {
 					errMsg = op.ErrorMessage

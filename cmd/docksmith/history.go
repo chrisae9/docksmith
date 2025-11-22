@@ -74,14 +74,9 @@ func (c *HistoryCommand) ParseFlags(args []string) error {
 // Run executes the history command
 func (c *HistoryCommand) Run(ctx context.Context) error {
 	// Initialize storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
-	storageService, err := storage.NewSQLiteStorage(dbPath)
+	storageService, err := InitializeStorage()
 	if err != nil {
-		return fmt.Errorf("failed to initialize storage: %w", err)
+		return err
 	}
 	defer storageService.Close()
 
@@ -236,19 +231,19 @@ func (c *HistoryCommand) displayEntry(entry HistoryEntry) {
 	if entry.Type == "check" {
 		icon = "🔍"
 		switch entry.Status {
-		case "update_available":
+		case storage.CheckStatusUpdateAvailable:
 			color = terminal.Yellow()
 			details = fmt.Sprintf("Update available: %s → %s", entry.CurrentVer, entry.LatestVer)
-		case "up_to_date":
+		case storage.CheckStatusUpToDate:
 			color = terminal.Green()
 			details = fmt.Sprintf("Up to date: %s", entry.CurrentVer)
-		case "failed":
+		case storage.CheckStatusFailed:
 			color = terminal.Red()
 			details = "Check failed"
 			if c.verbose && entry.Error != "" {
 				details += fmt.Sprintf(" (%s)", entry.Error)
 			}
-		case "local_image":
+		case storage.CheckStatusLocalImage:
 			color = terminal.Gray()
 			details = "Local image (no remote)"
 		default:

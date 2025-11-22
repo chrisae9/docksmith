@@ -58,14 +58,9 @@ func (c *OperationsCommand) ParseFlags(args []string) error {
 // Run executes the operations command
 func (c *OperationsCommand) Run(ctx context.Context) error {
 	// Initialize storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
-	storageService, err := storage.NewSQLiteStorage(dbPath)
+	storageService, err := InitializeStorage()
 	if err != nil {
-		return fmt.Errorf("failed to initialize storage: %w", err)
+		return err
 	}
 	defer storageService.Close()
 
@@ -193,13 +188,13 @@ func (c *OperationsCommand) displayOperation(op storage.UpdateOperation) {
 	statusIcon := "•"
 	statusColor := ""
 	switch op.Status {
-	case "complete":
+	case storage.StatusComplete:
 		statusIcon = "✓"
 		statusColor = terminal.Green()
-	case "failed":
+	case storage.StatusFailed:
 		statusIcon = "✗"
 		statusColor = terminal.Red()
-	case "queued", "validating", "backup", "pulling_image":
+	case storage.StatusQueued, storage.StatusValidating, storage.StatusBackup, storage.StatusPullingImage:
 		statusIcon = "→"
 		statusColor = terminal.Yellow()
 	}

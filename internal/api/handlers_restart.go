@@ -55,10 +55,7 @@ func (s *Server) restartDependentContainers(ctx context.Context, containerName s
 		return nil, nil, nil
 	}
 
-	containerMap := make(map[string]*docker.Container)
-	for i := range containers {
-		containerMap[containers[i].Name] = &containers[i]
-	}
+	containerMap := docker.CreateContainerMap(containers)
 
 	var restarted []string
 	var blocked []string

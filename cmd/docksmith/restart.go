@@ -257,10 +257,7 @@ func (c *RestartCommand) restartDependentContainers(ctx context.Context, dockerS
 		return nil, nil, nil
 	}
 
-	containerMap := make(map[string]*docker.Container)
-	for i := range containers {
-		containerMap[containers[i].Name] = &containers[i]
-	}
+	containerMap := docker.CreateContainerMap(containers)
 
 	var restarted []string
 	var blocked []string

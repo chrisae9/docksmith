@@ -921,10 +921,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	containerMap := make(map[string]*docker.Container)
-	for i := range containers {
-		containerMap[containers[i].Name] = &containers[i]
-	}
+	containerMap := docker.CreateContainerMap(containers)
 
 	// Restart each dependent
 	for _, dep := range dependents {

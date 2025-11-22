@@ -69,15 +69,10 @@ func (c *ScriptsCommand) ParseFlags(args []string) error {
 // Run executes the scripts command
 func (c *ScriptsCommand) Run(ctx context.Context) error {
 	// Initialize storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
 	var err error
-	c.storage, err = storage.NewSQLiteStorage(dbPath)
+	c.storage, err = InitializeStorage()
 	if err != nil {
-		return fmt.Errorf("failed to initialize storage: %w", err)
+		return err
 	}
 	defer c.storage.Close()
 

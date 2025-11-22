@@ -204,3 +204,13 @@ func (s *Service) FindDependentContainers(ctx context.Context, containerName str
 
 	return dependents, nil
 }
+
+// CreateContainerMap creates a lookup map from container names to container pointers.
+// This is a common pattern used throughout the codebase for quick container lookups.
+func CreateContainerMap(containers []Container) map[string]*Container {
+	containerMap := make(map[string]*Container)
+	for i := range containers {
+		containerMap[containers[i].Name] = &containers[i]
+	}
+	return containerMap
+}
