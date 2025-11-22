@@ -4,16 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/bootstrap"
 	"github.com/chis/docksmith/internal/output"
-	"github.com/chis/docksmith/internal/registry"
-	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
 	"github.com/chis/docksmith/internal/version"
 )
@@ -80,37 +77,21 @@ func (c *CheckCommand) ParseFlags(args []string) error {
 
 // Run executes the check command
 func (c *CheckCommand) Run(ctx context.Context) error {
-	// Initialize Docker client
-	dockerClient, err := docker.NewService()
+	// Initialize services
+	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
+		DefaultDBPath: "/data/docksmith.db",
+		Verbose:       false,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create Docker service: %w", err)
+		return err
 	}
-	defer dockerClient.Close()
-
-	// Initialize storage (optional - graceful degradation)
-	var storageService storage.Storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/docksmith.db"
-	}
-
-	storageService, err = storage.NewSQLiteStorage(dbPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize storage (continuing without persistence): %v", err)
-		storageService = nil
-	} else {
-		defer storageService.Close()
-	}
-
-	// Initialize registry manager
-	token := os.Getenv("GITHUB_TOKEN")
-	registryManager := registry.NewManager(token)
+	defer cleanup()
 
 	// Create orchestrator with storage support
-	c.orchestrator = update.NewOrchestrator(dockerClient, registryManager)
+	c.orchestrator = update.NewOrchestrator(deps.Docker, deps.Registry)
 	c.orchestrator.EnableCache(c.options.CacheTTL)
-	if storageService != nil {
-		c.orchestrator.SetStorage(storageService)
+	if deps.Storage != nil {
+		c.orchestrator.SetStorage(deps.Storage)
 	}
 
 	// Load manual stacks if specified

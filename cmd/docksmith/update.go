@@ -7,11 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/chis/docksmith/internal/docker"
-	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/bootstrap"
 	"github.com/chis/docksmith/internal/output"
-	"github.com/chis/docksmith/internal/registry"
-	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
 )
 
@@ -35,55 +32,32 @@ func runUpdateCommand(args []string) error {
 	}
 
 	// Initialize Docker client
-	log.Println("Initializing Docker client...")
-	dockerService, err := docker.NewService()
+	// Initialize services
+	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
+		DefaultDBPath: "/home/chis/www/docksmith/docksmith.db",
+		Verbose:       true,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create Docker service: %w", err)
+		return err
 	}
-	defer dockerService.Close()
-	log.Println("✓ Docker client connected")
-
-	// Initialize storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/home/chis/www/docksmith/docksmith.db"
-	}
-
-	log.Printf("Initializing storage at %s...", dbPath)
-	storageService, err := storage.NewSQLiteStorage(dbPath)
-	if err != nil {
-		log.Printf("⚠ Warning: Failed to initialize storage: %v", err)
-		log.Println("⚠ Continuing without progress tracking")
-		storageService = nil
-	} else {
-		defer storageService.Close()
-		log.Println("✓ Storage initialized")
-	}
-
-	// Initialize registry manager
-	token := os.Getenv("GITHUB_TOKEN")
-	registryManager := registry.NewManager(token)
-	log.Println("✓ Registry manager initialized")
-
-	// Create event bus (no-op for CLI)
-	eventBus := events.NewBus()
+	defer cleanup()
 
 	// Create update orchestrator
 	log.Println("Creating update orchestrator...")
 	orchestrator := update.NewUpdateOrchestrator(
-		dockerService,
-		dockerService.GetClient(),
-		storageService,
-		eventBus,
-		registryManager,
-		dockerService.GetPathTranslator(),
+		deps.Docker,
+		deps.Docker.GetClient(),
+		deps.Storage,
+		deps.EventBus,
+		deps.Registry,
+		deps.Docker.GetPathTranslator(),
 	)
 	log.Println("✓ Update orchestrator ready")
 
 	// If no target version specified, check for latest
 	if targetVersion == "" {
 		log.Println("\n=== Checking for latest version ===")
-		checker := update.NewChecker(dockerService, registryManager, storageService)
+		checker := update.NewChecker(deps.Docker, deps.Registry, deps.Storage)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
@@ -146,7 +120,7 @@ func runUpdateCommand(args []string) error {
 	log.Println("  • Perform health checks before marking complete")
 	log.Println("  • Auto-rollback if health checks fail (if configured)")
 
-	if storageService == nil {
+	if deps.Storage == nil {
 		log.Println("\n⚠ Storage unavailable - cannot track detailed progress")
 		log.Println("⚠ Update is running in background, check Docker logs for status")
 		log.Printf("⚠ Monitor with: docker logs -f %s", containerName)
@@ -170,7 +144,7 @@ func runUpdateCommand(args []string) error {
 			return fmt.Errorf("update timed out")
 
 		case <-ticker.C:
-			op, found, err := storageService.GetUpdateOperation(ctx, operationID)
+			op, found, err := deps.Storage.GetUpdateOperation(ctx, operationID)
 			if err != nil {
 				log.Printf("⚠ Error checking status: %v", err)
 				continue

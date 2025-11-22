@@ -8,10 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/chis/docksmith/internal/docker"
-	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/bootstrap"
 	"github.com/chis/docksmith/internal/output"
-	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
 	"golang.org/x/term"
@@ -211,31 +209,28 @@ func (c *RollbackCommand) performSimpleRollback(backup storage.ComposeBackup) er
 
 // performFullRollback uses the UpdateOrchestrator for full container recreation
 func (c *RollbackCommand) performFullRollback(ctx context.Context, operation storage.UpdateOperation, storageService *storage.SQLiteStorage) error {
-	// Initialize Docker client
-	dockerService, err := docker.NewService()
+	// Initialize services (storage already initialized, passed as parameter)
+	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
+		DefaultDBPath: "/data/docksmith.db", // Not used since storage already initialized
+		Verbose:       false,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create Docker service: %w", err)
+		return err
 	}
+	defer cleanup()
 
-	// Initialize registry manager
-	token := os.Getenv("GITHUB_TOKEN")
-	registryManager := registry.NewManager(token)
-
-	// Initialize event bus for progress tracking
-	eventBus := events.NewBus()
-
-	// Initialize update orchestrator
+	// Initialize update orchestrator (use passed storage instead of bootstrap's)
 	orchestrator := update.NewUpdateOrchestrator(
-		dockerService,
-		dockerService.GetClient(),
+		deps.Docker,
+		deps.Docker.GetClient(),
 		storageService,
-		eventBus,
-		registryManager,
-		dockerService.GetPathTranslator(),
+		deps.EventBus,
+		deps.Registry,
+		deps.Docker.GetPathTranslator(),
 	)
 
 	// Subscribe to progress events for CLI output
-	progressChan, unsubscribe := eventBus.Subscribe("*")
+	progressChan, unsubscribe := deps.EventBus.Subscribe("*")
 	defer unsubscribe()
 
 	fmt.Printf("\n%sStarting full rollback...%s\n", colorYellow(), colorReset())

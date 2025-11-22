@@ -8,11 +8,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/chis/docksmith/internal/docker"
-	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/bootstrap"
 	"github.com/chis/docksmith/internal/output"
-	"github.com/chis/docksmith/internal/registry"
-	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/tui"
 	"github.com/chis/docksmith/internal/update"
 )
@@ -55,48 +52,29 @@ func (c *ApplyCommand) ParseFlags(args []string) error {
 
 // Run executes the apply command (interactive mode)
 func (c *ApplyCommand) Run(ctx context.Context) error {
-	// Step 1: Initialize Docker service
-	dockerClient, err := docker.NewService()
+	// Initialize services
+	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
+		DefaultDBPath: "/home/chis/www/docksmith/docksmith.db",
+		Verbose:       c.verbose,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create Docker service: %w", err)
+		return err
 	}
-	defer dockerClient.Close()
+	defer cleanup()
 
-	// Step 2: Initialize storage (optional - graceful degradation)
-	var storageService storage.Storage
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/home/chis/www/docksmith/docksmith.db"
-	}
+	// Create discovery orchestrator
+	discoveryOrchestrator := update.NewOrchestrator(deps.Docker, deps.Registry)
 
-	store, err := storage.NewSQLiteStorage(dbPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize storage: %v", err)
-		log.Println("Continuing without progress tracking")
-		storageService = nil
-	} else {
-		defer store.Close()
-		storageService = store
-	}
-
-	// Step 3: Initialize registry manager and event bus
-	token := os.Getenv("GITHUB_TOKEN")
-	registryManager := registry.NewManager(token)
-	eventBus := events.NewBus()
-
-	// Step 4: Create discovery orchestrator
-	discoveryOrchestrator := update.NewOrchestrator(dockerClient, registryManager)
-
-	// Step 5: Create update orchestrator
+	// Create update orchestrator
 	var updateOrchestrator *update.UpdateOrchestrator
-	if storageService != nil {
+	if deps.Storage != nil {
 		updateOrchestrator = update.NewUpdateOrchestrator(
-			dockerClient,
-			dockerClient.GetClient(),
-			storageService,
-			eventBus,
-			registryManager,
-			dockerClient.GetPathTranslator(),
+			deps.Docker,
+			deps.Docker.GetClient(),
+			deps.Storage,
+			deps.EventBus,
+			deps.Registry,
+			deps.Docker.GetPathTranslator(),
 		)
 	}
 
