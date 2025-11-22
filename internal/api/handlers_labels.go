@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
@@ -466,32 +464,8 @@ func (s *Server) executeContainerPreUpdateCheck(ctx context.Context, container *
 
 // runPreUpdateCheck runs a pre-update check script
 func (s *Server) runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
-	// Validate script path
-	if !docker.ValidatePreUpdateScript(scriptPath) {
-		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
-	}
-
-	// Check if script exists
-	if !filepath.IsAbs(scriptPath) {
-		return fmt.Errorf("pre-update script path must be absolute: %s", scriptPath)
-	}
-
-	// Execute the check script with timeout
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.Name)
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Non-zero exit code means check failed
-			return fmt.Errorf("script exited with code %d: %s", exitErr.ExitCode(), string(output))
-		}
-		return fmt.Errorf("failed to execute script: %w", err)
-	}
-
-	return nil
+	// Use shared implementation with path translation disabled (API runs in container)
+	return scripts.ExecutePreUpdateCheck(ctx, container, scriptPath, false)
 }
 
 // restartContainerByService recreates a container using docker compose

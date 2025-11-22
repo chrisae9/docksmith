@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1555,23 +1554,6 @@ func (o *UpdateOrchestrator) CancelQueuedOperation(ctx context.Context, operatio
 
 // runPreUpdateCheck runs a pre-update check script for a container
 func runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
-	if !docker.ValidatePreUpdateScript(scriptPath) {
-		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
-	}
-
-	// Execute the check script with timeout
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.Name)
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("script exited with code %d: %s", exitErr.ExitCode(), string(output))
-		}
-		return fmt.Errorf("failed to execute script: %w", err)
-	}
-
-	return nil
+	// Use shared implementation with path translation disabled (orchestrator runs in container)
+	return scripts.ExecutePreUpdateCheck(ctx, container, scriptPath, false)
 }

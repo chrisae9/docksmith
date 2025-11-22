@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
@@ -610,40 +609,16 @@ func (c *LabelCommand) runPreUpdateCheck(ctx context.Context, container *docker.
 		fmt.Printf("\nRunning pre-update check: %s\n", scriptPath)
 	}
 
-	// Validate script path
-	if !docker.ValidatePreUpdateScript(scriptPath) {
-		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
-	}
-
-	// Check if script exists
-	if !filepath.IsAbs(scriptPath) {
-		return fmt.Errorf("pre-update script path must be absolute: %s", scriptPath)
-	}
-
-	// Execute the check script with timeout
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(checkCtx, scriptPath, container.ID, container.Name)
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Non-zero exit code means check failed
-			if !isJSON {
-				fmt.Printf("Pre-update check failed (exit code %d):\n%s\n", exitErr.ExitCode(), string(output))
-			}
-			return fmt.Errorf("pre-update check failed: script exited with code %d", exitErr.ExitCode())
-		}
-		return fmt.Errorf("failed to execute pre-update check: %w", err)
-	}
+	// Use shared implementation with path translation enabled (CLI runs on host)
+	err := scripts.ExecutePreUpdateCheck(ctx, container, scriptPath, true)
 
 	if !isJSON {
-		fmt.Printf("Pre-update check passed\n")
-		if len(output) > 0 {
-			fmt.Printf("Output: %s\n", string(output))
+		if err != nil {
+			fmt.Printf("Pre-update check failed: %v\n", err)
+		} else {
+			fmt.Printf("Pre-update check passed\n")
 		}
 	}
 
-	return nil
+	return err
 }

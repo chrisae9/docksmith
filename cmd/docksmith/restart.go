@@ -6,10 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/output"
@@ -304,41 +300,6 @@ func (c *RestartCommand) restartDependentContainers(ctx context.Context, dockerS
 
 // runPreUpdateCheck runs a pre-update check script (copied from handlers_labels.go logic)
 func runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
-	if !docker.ValidatePreUpdateScript(scriptPath) {
-		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
-	}
-
-	// Translate container path to host path when running outside Docker
-	// Container path: /scripts/xxx.sh
-	// Host path: $PWD/scripts/xxx.sh
-	translatedPath := scriptPath
-	if strings.HasPrefix(scriptPath, "/scripts/") {
-		// Try to find the script in the working directory
-		scriptName := strings.TrimPrefix(scriptPath, "/scripts/")
-
-		// Get current working directory
-		cwd, err := os.Getwd()
-		if err == nil {
-			hostPath := filepath.Join(cwd, "scripts", scriptName)
-			if _, err := os.Stat(hostPath); err == nil {
-				translatedPath = hostPath
-			}
-		}
-	}
-
-	// Execute the check script with timeout
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(checkCtx, translatedPath, container.ID, container.Name)
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("script exited with code %d: %s", exitErr.ExitCode(), string(output))
-		}
-		return fmt.Errorf("failed to execute script: %w", err)
-	}
-
-	return nil
+	// Use shared implementation with path translation enabled (CLI runs on host)
+	return scripts.ExecutePreUpdateCheck(ctx, container, scriptPath, true)
 }
