@@ -561,52 +561,17 @@ func (s *SQLiteStorage) GetUpdateLog(ctx context.Context, containerName string, 
 	}
 	defer rows.Close()
 
-	var logs []UpdateLogEntry
-	for rows.Next() {
-		var entry UpdateLogEntry
-		var errorMsg sql.NullString
-
-		err := rows.Scan(
-			&entry.ID,
-			&entry.ContainerName,
-			&entry.Operation,
-			&entry.FromVersion,
-			&entry.ToVersion,
-			&entry.Timestamp,
-			&entry.Success,
-			&errorMsg,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan update log entry: %w", err)
-		}
-
-		if errorMsg.Valid {
-			entry.Error = errorMsg.String
-		}
-
-		logs = append(logs, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating update log rows: %w", err)
-	}
-
-	return logs, nil
+	return scanUpdateLogRows(rows)
 }
 
 // GetAllUpdateLog retrieves update log for all containers.
 // Returns entries ordered by timestamp DESC (most recent first).
 func (s *SQLiteStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]UpdateLogEntry, error) {
-	query := `
+	query := appendLimitClause(`
 		SELECT id, container_name, operation, from_version, to_version, timestamp, success, error
 		FROM update_log
 		ORDER BY timestamp DESC
-	`
-
-	// Add limit if specified
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
+	`, limit)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -615,37 +580,7 @@ func (s *SQLiteStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]Updat
 	}
 	defer rows.Close()
 
-	var logs []UpdateLogEntry
-	for rows.Next() {
-		var entry UpdateLogEntry
-		var errorMsg sql.NullString
-
-		err := rows.Scan(
-			&entry.ID,
-			&entry.ContainerName,
-			&entry.Operation,
-			&entry.FromVersion,
-			&entry.ToVersion,
-			&entry.Timestamp,
-			&entry.Success,
-			&errorMsg,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan update log entry: %w", err)
-		}
-
-		if errorMsg.Valid {
-			entry.Error = errorMsg.String
-		}
-
-		logs = append(logs, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating update log rows: %w", err)
-	}
-
-	return logs, nil
+	return scanUpdateLogRows(rows)
 }
 
 // GetConfig implements Storage.GetConfig.
@@ -1056,22 +991,121 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 	return operations, nil
 }
 
+// scanUpdateLogRows scans multiple UpdateLogEntry rows and handles nullable error field
+// This helper consolidates the duplicate row scanning logic used across multiple query methods
+func scanUpdateLogRows(rows *sql.Rows) ([]UpdateLogEntry, error) {
+	logs := make([]UpdateLogEntry, 0)
+
+	for rows.Next() {
+		var entry UpdateLogEntry
+		var errorMsg sql.NullString
+
+		err := rows.Scan(
+			&entry.ID, &entry.ContainerName, &entry.Operation, &entry.FromVersion,
+			&entry.ToVersion, &entry.Timestamp, &entry.Success, &errorMsg,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan update log entry: %w", err)
+		}
+
+		if errorMsg.Valid {
+			entry.Error = errorMsg.String
+		}
+
+		logs = append(logs, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating update log rows: %w", err)
+	}
+
+	return logs, nil
+}
+
+// scanComposeBackupRows scans multiple ComposeBackup rows and handles nullable stack_name field
+// This helper consolidates the duplicate row scanning logic used across multiple query methods
+func scanComposeBackupRows(rows *sql.Rows) ([]ComposeBackup, error) {
+	backups := make([]ComposeBackup, 0)
+
+	for rows.Next() {
+		var backup ComposeBackup
+		var stackName sql.NullString
+
+		err := rows.Scan(
+			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
+			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
+		}
+
+		if stackName.Valid {
+			backup.StackName = stackName.String
+		}
+
+		backups = append(backups, backup)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
+	}
+
+	return backups, nil
+}
+
+// scanScriptAssignmentRows scans multiple ScriptAssignment rows and handles nullable assigned_by field
+// This helper consolidates row scanning logic for script assignment queries
+func scanScriptAssignmentRows(rows *sql.Rows) ([]ScriptAssignment, error) {
+	assignments := make([]ScriptAssignment, 0)
+
+	for rows.Next() {
+		var assignment ScriptAssignment
+		var assignedBy sql.NullString
+
+		err := rows.Scan(
+			&assignment.ID, &assignment.ContainerName, &assignment.ScriptPath,
+			&assignment.Enabled, &assignment.Ignore, &assignment.AllowLatest,
+			&assignment.AssignedAt, &assignedBy, &assignment.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan script assignment: %w", err)
+		}
+
+		if assignedBy.Valid {
+			assignment.AssignedBy = assignedBy.String
+		}
+
+		assignments = append(assignments, assignment)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating script assignments rows: %w", err)
+	}
+
+	return assignments, nil
+}
+
+// appendLimitClause appends a SQL LIMIT clause to the query if limit > 0
+// This helper consolidates the duplicate limit clause building logic
+func appendLimitClause(query string, limit int) string {
+	if limit > 0 {
+		return query + fmt.Sprintf(" LIMIT %d", limit)
+	}
+	return query
+}
+
 // GetUpdateOperationsByStatus implements Storage.GetUpdateOperationsByStatus.
 // Retrieves update operations filtered by status.
 // Returns entries ordered by created_at DESC (most recent first).
 func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]UpdateOperation, error) {
-	query := `
+	query := appendLimitClause(`
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
 		       dependents_affected, rollback_occurred, created_at, updated_at
 		FROM update_operations
 		WHERE status = ?
 		ORDER BY created_at DESC
-	`
-
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
+	`, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, status)
 	if err != nil {
@@ -1265,45 +1299,17 @@ func (s *SQLiteStorage) GetComposeBackupsByContainer(ctx context.Context, contai
 	}
 	defer rows.Close()
 
-	var backups []ComposeBackup
-	for rows.Next() {
-		var backup ComposeBackup
-		var stackName sql.NullString
-
-		err := rows.Scan(
-			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
-			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
-		}
-
-		if stackName.Valid {
-			backup.StackName = stackName.String
-		}
-
-		backups = append(backups, backup)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
-	}
-
-	return backups, nil
+	return scanComposeBackupRows(rows)
 }
 
 // GetAllComposeBackups retrieves all compose backups.
 // Returns entries ordered by backup_timestamp DESC (most recent first).
 func (s *SQLiteStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]ComposeBackup, error) {
-	query := `
+	query := appendLimitClause(`
 		SELECT id, operation_id, container_name, stack_name, compose_file_path, backup_file_path, backup_timestamp, created_at
 		FROM compose_backups
 		ORDER BY backup_timestamp DESC
-	`
-
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
+	`, limit)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -1312,31 +1318,7 @@ func (s *SQLiteStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]
 	}
 	defer rows.Close()
 
-	var backups []ComposeBackup
-	for rows.Next() {
-		var backup ComposeBackup
-		var stackName sql.NullString
-
-		err := rows.Scan(
-			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
-			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
-		}
-
-		if stackName.Valid {
-			backup.StackName = stackName.String
-		}
-
-		backups = append(backups, backup)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
-	}
-
-	return backups, nil
+	return scanComposeBackupRows(rows)
 }
 
 // GetRollbackPolicy implements Storage.GetRollbackPolicy.
@@ -1649,31 +1631,7 @@ func (s *SQLiteStorage) ListScriptAssignments(ctx context.Context, enabledOnly b
 	}
 	defer rows.Close()
 
-	var assignments []ScriptAssignment
-	for rows.Next() {
-		var assignment ScriptAssignment
-		var assignedBy sql.NullString
-
-		err := rows.Scan(
-			&assignment.ID, &assignment.ContainerName, &assignment.ScriptPath,
-			&assignment.Enabled, &assignment.Ignore, &assignment.AllowLatest, &assignment.AssignedAt, &assignedBy, &assignment.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan script assignment: %w", err)
-		}
-
-		if assignedBy.Valid {
-			assignment.AssignedBy = assignedBy.String
-		}
-
-		assignments = append(assignments, assignment)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating script assignments rows: %w", err)
-	}
-
-	return assignments, nil
+	return scanScriptAssignmentRows(rows)
 }
 
 // DeleteScriptAssignment implements Storage.DeleteScriptAssignment.
