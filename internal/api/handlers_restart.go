@@ -74,24 +74,22 @@ func (s *Server) restartDependentContainers(ctx context.Context, containerName s
 		}
 
 		// Run pre-update check if not forced
-		if !force {
-			if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-				log.Printf("Running pre-update check for dependent %s", dep)
-				if err := s.runPreUpdateCheck(ctx, depContainer, scriptPath); err != nil {
-					errMsg := fmt.Sprintf("%s: %v", dep, err)
-					log.Printf("Pre-update check failed for %s: %v", dep, err)
-					blocked = append(blocked, dep)
-					errors = append(errors, errMsg)
-					continue
-				}
-				log.Printf("Pre-update check passed for %s", dep)
+		ran, passed, err := s.executeContainerPreUpdateCheck(ctx, depContainer, force)
+		if ran {
+			log.Printf("Running pre-update check for dependent %s", dep)
+			if !passed {
+				errMsg := fmt.Sprintf("%s: %v", dep, err)
+				log.Printf("Pre-update check failed for %s: %v", dep, err)
+				blocked = append(blocked, dep)
+				errors = append(errors, errMsg)
+				continue
 			}
+			log.Printf("Pre-update check passed for %s", dep)
 		}
 
 		log.Printf("Restarting dependent container: %s", dep)
-		err := s.dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{})
-		if err != nil {
-			errMsg := fmt.Sprintf("Failed to restart dependent %s: %v", dep, err)
+		if restartErr := s.dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{}); restartErr != nil {
+			errMsg := fmt.Sprintf("Failed to restart dependent %s: %v", dep, restartErr)
 			log.Printf("%s", errMsg)
 			errors = append(errors, errMsg)
 		} else {

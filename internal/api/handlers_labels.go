@@ -168,6 +168,33 @@ func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 	RespondSuccess(w, result)
 }
 
+// withComposeBackup wraps a compose file operation with automatic backup and restore
+// It creates a backup before the operation, restores on error, and cleans up on success
+func withComposeBackup(composeFilePath string, operation func(backupPath string) error) error {
+	backupPath, err := compose.BackupComposeFile(composeFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to create backup: %w", err)
+	}
+
+	success := false
+	defer func() {
+		if success {
+			// Clean up backup on success
+			_ = os.Remove(backupPath)
+		}
+	}()
+
+	err = operation(backupPath)
+	if err != nil {
+		// Restore from backup on error
+		compose.RestoreFromBackup(composeFilePath, backupPath)
+		return err
+	}
+
+	success = true
+	return nil
+}
+
 // setLabels implements the label setting logic (atomic: compose update + restart)
 func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
 	result := &LabelOperationResult{
@@ -198,14 +225,12 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	serviceName := container.Labels[composeServiceLabel]
 
 	// Run pre-update check if configured and not forced/no-restart
-	if !req.NoRestart && !req.Force {
-		if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-			result.PreCheckRan = true
-			if err := s.runPreUpdateCheck(ctx, container, scriptPath); err != nil {
-				return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
-			}
-			result.PreCheckPassed = true
-		}
+	skipCheck := req.NoRestart || req.Force
+	ran, passed, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
+	result.PreCheckRan = ran
+	result.PreCheckPassed = passed
+	if err != nil {
+		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
 	}
 
 	// Create backup
@@ -356,14 +381,12 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	serviceName := container.Labels[composeServiceLabel]
 
 	// Run pre-update check if configured and not forced/no-restart
-	if !req.NoRestart && !req.Force {
-		if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-			result.PreCheckRan = true
-			if err := s.runPreUpdateCheck(ctx, container, scriptPath); err != nil {
-				return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
-			}
-			result.PreCheckPassed = true
-		}
+	skipCheck := req.NoRestart || req.Force
+	ran, passed, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
+	result.PreCheckRan = ran
+	result.PreCheckPassed = passed
+	if err != nil {
+		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
 	}
 
 	// Create backup
@@ -419,6 +442,26 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(req.LabelNames))
 
 	return result, nil
+}
+
+// executeContainerPreUpdateCheck runs pre-update check if configured and not skipped.
+// Returns (ran bool, passed bool, err error).
+// The skipCheck parameter should be true when force=true or noRestart=true.
+func (s *Server) executeContainerPreUpdateCheck(ctx context.Context, container *docker.Container, skipCheck bool) (bool, bool, error) {
+	if skipCheck {
+		return false, false, nil
+	}
+
+	scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]
+	if !ok || scriptPath == "" {
+		return false, false, nil
+	}
+
+	if err := s.runPreUpdateCheck(ctx, container, scriptPath); err != nil {
+		return true, false, err
+	}
+
+	return true, true, nil
 }
 
 // runPreUpdateCheck runs a pre-update check script
