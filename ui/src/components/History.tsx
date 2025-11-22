@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
-import { getOperations } from '../api/client';
+import { useState, useEffect } from 'react';
+import { getOperations, checkContainers } from '../api/client';
 import type { UpdateOperation } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { formatTimeWithDate } from '../utils/time';
+import { useElapsedTime } from '../hooks/useElapsedTime';
+import { useAutoScrollLogs } from '../hooks/useAutoScrollLogs';
+import { useProgressEventLogger } from '../hooks/useProgressEventLogger';
+import { useAutoRefreshOnClose } from '../hooks/useAutoRefreshOnClose';
+import { ProgressModal } from './ProgressModal';
+import type { ProgressModalStatCard } from './ProgressModal';
 
 interface HistoryProps {
   onBack: () => void;
@@ -32,60 +38,12 @@ export function History({ onBack: _onBack }: HistoryProps) {
     startTime: number;
     logs: Array<{ time: number; message: string }>;
   } | null>(null);
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const elapsedIntervalRef = useRef<number | null>(null);
-  const logEntriesRef = useRef<HTMLDivElement>(null);
 
   const { lastEvent: progressEvent, clearEvents } = useEventStream(true);
 
   useEffect(() => {
     fetchOperations();
   }, []);
-
-  // Update elapsed time during rollback
-  useEffect(() => {
-    if (rollbackProgress && rollbackProgress.status === 'in_progress') {
-      elapsedIntervalRef.current = window.setInterval(() => {
-        setElapsedTime(Math.floor((Date.now() - rollbackProgress.startTime) / 1000));
-      }, 1000);
-    } else if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
-    return () => {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-      }
-    };
-  }, [rollbackProgress]);
-
-  // Auto-scroll logs to bottom when new entries are added
-  useEffect(() => {
-    if (logEntriesRef.current && rollbackProgress?.logs) {
-      logEntriesRef.current.scrollTop = logEntriesRef.current.scrollHeight;
-    }
-  }, [rollbackProgress?.logs]);
-
-  // Add SSE progress events to rollback log
-  useEffect(() => {
-    if (progressEvent && rollbackProgress && rollbackProgress.status === 'in_progress') {
-      setRollbackProgress(prev => {
-        if (!prev) return prev;
-        const newLog = {
-          time: progressEvent.timestamp ? progressEvent.timestamp * 1000 : Date.now(),
-          message: `${progressEvent.container_name}: ${progressEvent.message}`,
-        };
-        const lastLog = prev.logs[prev.logs.length - 1];
-        if (lastLog && lastLog.message === newLog.message) {
-          return prev;
-        }
-        return {
-          ...prev,
-          logs: [...prev.logs.slice(-19), newLog],
-        };
-      });
-    }
-  }, [progressEvent, rollbackProgress]);
 
   const fetchOperations = async () => {
     setLoading(true);
@@ -136,7 +94,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
       startTime: Date.now(),
       logs: [{ time: Date.now(), message: `Starting rollback of ${containerName}...` }],
     });
-    setElapsedTime(0);
 
     try {
       const response = await fetch('/api/rollback', {
@@ -258,6 +215,16 @@ export function History({ onBack: _onBack }: HistoryProps) {
       });
     }
   };
+
+  // Custom hooks to replace duplicate patterns
+  const isRollingBack = !!(rollbackProgress && rollbackProgress.status === 'in_progress');
+  const elapsedTime = useElapsedTime(rollbackProgress?.startTime ?? null, isRollingBack);
+  const logEntriesRef = useAutoScrollLogs(rollbackProgress?.logs);
+  useProgressEventLogger(progressEvent, rollbackProgress, setRollbackProgress);
+  useAutoRefreshOnClose(!!rollbackProgress, () => {
+    fetchOperations();
+    checkContainers();
+  });
 
   const getStageIcon = (stage: string): React.ReactNode => {
     switch (stage) {
@@ -558,87 +525,67 @@ export function History({ onBack: _onBack }: HistoryProps) {
       )}
 
       {/* Rollback Progress Modal */}
-      {rollbackProgress && (
-        <div className="update-progress-overlay">
-          <div className="update-progress-modal tui-style">
-            <div className="update-progress-header">
-              <h3>Rolling Back Container</h3>
-            </div>
+      {rollbackProgress && (() => {
+        const inProgress = rollbackProgress.status === 'in_progress';
+        const allSuccess = rollbackProgress.status === 'success';
+        const allFailed = rollbackProgress.status === 'failed';
 
-            <div className="update-overall-stats">
-              <span>Container: {rollbackProgress.containerName}</span>
-              <span>Status: {rollbackProgress.status}</span>
-              <span>Elapsed: {elapsedTime}s</span>
-            </div>
-
-            <div className="update-container-list">
-              <div className={`update-container-item status-${rollbackProgress.status}`}>
-                <span className="status-icon">
-                  {rollbackProgress.status === 'pending' && <i className="fa-regular fa-circle"></i>}
-                  {rollbackProgress.status === 'in_progress' && <i className="fa-solid fa-spinner fa-spin"></i>}
-                  {rollbackProgress.status === 'success' && <i className="fa-solid fa-check"></i>}
-                  {rollbackProgress.status === 'failed' && <i className="fa-solid fa-xmark"></i>}
-                </span>
-                <span className="container-name">{rollbackProgress.containerName}</span>
-                {rollbackProgress.message && (
-                  <span className="container-message">- {rollbackProgress.message}</span>
-                )}
-                {rollbackProgress.error && (
-                  <div className="container-error">Error: {rollbackProgress.error}</div>
-                )}
-              </div>
-            </div>
-
-            {/* Real-time SSE progress */}
-            {progressEvent && rollbackProgress.status === 'in_progress' && (
-              <div className="current-operation-progress">
-                <div className="update-progress-bar">
-                  <div
-                    className="update-progress-bar-fill"
-                    style={{ width: `${progressEvent.progress ?? progressEvent.percent ?? 0}%` }}
-                  />
-                  <span className="update-progress-bar-text">{progressEvent.progress ?? progressEvent.percent ?? 0}%</span>
-                </div>
-                <div className="update-progress-stage">
-                  {getStageIcon(progressEvent.stage)} {progressEvent.message}
-                </div>
-              </div>
-            )}
-
-            {/* Activity log */}
-            <div className="update-activity-log">
-              <div className="log-header">Recent Activity:</div>
-              <div className="log-entries" ref={logEntriesRef}>
-                {rollbackProgress.logs.slice(-10).map((log, i) => (
-                  <div key={i} className="log-entry">
-                    <span className="log-time">
-                      [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
-                    </span>
-                    <span className="log-message">{log.message}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Completion message */}
-            {(rollbackProgress.status === 'success' || rollbackProgress.status === 'failed') && (
-              <div className="update-completion">
-                {rollbackProgress.status === 'success' ? (
-                  <div className="completion-success"><i className="fa-solid fa-check"></i> Rollback completed successfully!</div>
-                ) : (
-                  <div className="completion-error"><i className="fa-solid fa-xmark"></i> Rollback failed</div>
-                )}
-                <button className="close-btn" onClick={() => {
-                  setRollbackProgress(null);
-                  fetchOperations();
-                }}>
-                  Close
-                </button>
-              </div>
-            )}
+        const stageIcon = inProgress ? (
+          <div className="stage-icon-wrapper">
+            <i className="fa-solid fa-rotate-left"></i>
+            <div className="spinner-ring"></div>
           </div>
-        </div>
-      )}
+        ) : allSuccess ? (
+          <i className="fa-solid fa-circle-check"></i>
+        ) : (
+          <i className="fa-solid fa-circle-xmark"></i>
+        );
+
+        const stageVariant = inProgress ? 'in-progress' : allSuccess ? 'complete' : 'complete-with-errors';
+
+        const stageMessage = inProgress
+          ? `Rolling back ${rollbackProgress.containerName}...`
+          : allSuccess
+          ? 'Rollback completed successfully!'
+          : 'Rollback failed';
+
+        const stats: ProgressModalStatCard[] = [
+          {
+            label: 'Container',
+            value: rollbackProgress.containerName,
+          },
+          {
+            label: 'Status',
+            value: rollbackProgress.status.replace('_', ' ').charAt(0).toUpperCase() + rollbackProgress.status.replace('_', ' ').slice(1),
+            variant: allSuccess ? 'success' : allFailed ? 'error' : 'default',
+          },
+          {
+            label: 'Elapsed',
+            value: `${elapsedTime}s`,
+          },
+        ];
+
+        const currentProgress = progressEvent && inProgress ? {
+          event: progressEvent,
+          getStageIcon,
+        } : undefined;
+
+        return (
+          <ProgressModal
+            title="Rolling Back Container"
+            stageIcon={stageIcon}
+            stageVariant={stageVariant}
+            stageMessage={stageMessage}
+            stats={stats}
+            currentProgress={currentProgress}
+            logs={rollbackProgress.logs}
+            logEntriesRef={logEntriesRef}
+            buttonText={inProgress ? 'Rolling back...' : 'Close'}
+            buttonDisabled={inProgress}
+            onClose={() => setRollbackProgress(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

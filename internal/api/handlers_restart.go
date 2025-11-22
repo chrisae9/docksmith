@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/chis/docksmith/internal/docker"
-	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/docker/docker/api/types/container"
 )
@@ -108,8 +107,7 @@ func (s *Server) restartDependentContainers(ctx context.Context, containerName s
 func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
 	containerName := r.PathValue("name")
 	if containerName == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSONError(w, fmt.Errorf("container name is required"))
+		RespondBadRequest(w, fmt.Errorf("container name is required"))
 		return
 	}
 
@@ -126,8 +124,7 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 	err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, container.StopOptions{})
 	if err != nil {
 		log.Printf("Failed to restart container %s: %v", containerName, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		output.WriteJSONError(w, fmt.Errorf("failed to restart container: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return
 	}
 
@@ -153,15 +150,14 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 		Errors:          depErrors,
 	}
 
-	output.WriteJSONData(w, response)
+	RespondSuccess(w, response)
 }
 
 // handleRestartStack restarts all containers in a stack
 func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	stackName := r.PathValue("name")
 	if stackName == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSONError(w, fmt.Errorf("stack name is required"))
+		RespondBadRequest(w, fmt.Errorf("stack name is required"))
 		return
 	}
 
@@ -173,8 +169,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 
 	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		output.WriteJSONError(w, fmt.Errorf("failed to list containers: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to list containers: %w", err))
 		return
 	}
 
@@ -187,8 +182,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(stackContainers) == 0 {
-		w.WriteHeader(http.StatusNotFound)
-		output.WriteJSONError(w, fmt.Errorf("no containers found in stack: %s", stackName))
+		RespondNotFound(w, fmt.Errorf("no containers found in stack: %s", stackName))
 		return
 	}
 
@@ -244,10 +238,9 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if success {
-		output.WriteJSONData(w, response)
+		RespondSuccess(w, response)
 	} else {
-		w.WriteHeader(http.StatusInternalServerError)
-		output.WriteJSONData(w, response)
+		RespondInternalError(w, fmt.Errorf("%s", message))
 	}
 }
 
@@ -255,14 +248,12 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRestartContainerBody(w http.ResponseWriter, r *http.Request) {
 	var req RestartContainerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSONError(w, fmt.Errorf("invalid request body: %w", err))
+		RespondBadRequest(w, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
 
 	if req.ContainerName == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSONError(w, fmt.Errorf("container_name is required"))
+		RespondBadRequest(w, fmt.Errorf("container_name is required"))
 		return
 	}
 
@@ -274,8 +265,7 @@ func (s *Server) handleRestartContainerBody(w http.ResponseWriter, r *http.Reque
 	err := s.dockerService.GetClient().ContainerRestart(ctx, req.ContainerName, container.StopOptions{})
 	if err != nil {
 		log.Printf("Failed to restart container %s: %v", req.ContainerName, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		output.WriteJSONError(w, fmt.Errorf("failed to restart container: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return
 	}
 
@@ -301,5 +291,5 @@ func (s *Server) handleRestartContainerBody(w http.ResponseWriter, r *http.Reque
 		Errors:          depErrors,
 	}
 
-	output.WriteJSONData(w, response)
+	RespondSuccess(w, response)
 }

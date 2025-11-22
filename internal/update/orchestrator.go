@@ -105,6 +105,11 @@ func (o *Orchestrator) GetCacheOldestEntryTime() time.Time {
 	return o.cache.GetOldestEntryTime()
 }
 
+// CleanupCache removes expired cache entries
+func (o *Orchestrator) CleanupCache() {
+	o.cache.Cleanup()
+}
+
 // SetStorage sets the storage service for the orchestrator's checker
 func (o *Orchestrator) SetStorage(store storage.Storage) {
 	if o.checker != nil {

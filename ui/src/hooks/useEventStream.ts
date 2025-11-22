@@ -20,11 +20,21 @@ export interface CheckProgressEvent {
   message: string;
 }
 
+export interface ContainerUpdatedEvent {
+  container_id?: string;
+  container_name?: string;
+  operation_id?: string;
+  status?: string;
+  source?: string;
+  timestamp?: number;
+}
+
 export interface EventStreamState {
   connected: boolean;
   events: UpdateProgressEvent[];
   lastEvent: UpdateProgressEvent | null;
   checkProgress: CheckProgressEvent | null;
+  containerUpdated: ContainerUpdatedEvent | null; // Last container update event with full details
 }
 
 export function useEventStream(enabled: boolean = true) {
@@ -33,6 +43,7 @@ export function useEventStream(enabled: boolean = true) {
     events: [],
     lastEvent: null,
     checkProgress: null,
+    containerUpdated: null,
   });
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -80,8 +91,25 @@ export function useEventStream(enabled: boolean = true) {
     });
 
     // Listen for container updated events
-    eventSource.addEventListener('container.updated', () => {
-      // Event acknowledged, no action needed
+    eventSource.addEventListener('container.updated', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const event: ContainerUpdatedEvent = {
+          ...data.payload,
+          timestamp: data.payload?.timestamp || Date.now(),
+        };
+
+        setState(prev => ({
+          ...prev,
+          containerUpdated: event,
+        }));
+      } catch {
+        // Silently ignore parsing errors - still trigger with minimal event
+        setState(prev => ({
+          ...prev,
+          containerUpdated: { timestamp: Date.now() },
+        }));
+      }
     });
 
     // Listen for check progress events

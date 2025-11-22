@@ -65,5 +65,5 @@ func (s *Server) handleDockerConfig(w http.ResponseWriter, r *http.Request) {
 		ConfigPath: configPath,
 	}
 
-	output.WriteJSONData(w, info)
+	RespondSuccess(w, info)
 }

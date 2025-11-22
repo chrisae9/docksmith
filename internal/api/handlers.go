@@ -14,7 +14,7 @@ import (
 
 // handleHealth returns server health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"status": "healthy",
 		"services": map[string]bool{
 			"docker":  s.dockerService != nil,
@@ -48,7 +48,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return identical JSON structure as CLI
-	output.WriteJSONData(w, result)
+	RespondSuccess(w, result)
 }
 
 // handleTriggerCheck triggers a background check without clearing cache
@@ -68,7 +68,7 @@ func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Return success
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"message": "Background check triggered",
 	})
 }
@@ -106,7 +106,7 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Same JSON structure as CLI
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"operations": operations,
 		"count":      len(operations),
 	})
@@ -134,7 +134,7 @@ func (s *Server) handleOperationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, operation)
+	RespondSuccess(w, operation)
 }
 
 // handleHistory returns unified check and update history
@@ -174,7 +174,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	// Convert to unified format - same as CLI history command
 	entries := mergeHistory(checkHistory, updateLog)
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"history": entries,
 		"count":   len(entries),
 	})
@@ -208,7 +208,7 @@ func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"backups": backups,
 		"count":   len(backups),
 	})
@@ -230,7 +230,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"global_policy": globalPolicy,
 	})
 }
@@ -268,7 +268,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"operation_id":   operationID,
 		"container_name": req.ContainerName,
 		"target_version": req.TargetVersion,
@@ -366,7 +366,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"operations": operations,
 		"status":     "started",
 	})
@@ -405,7 +405,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"operation_id":          rollbackOpID,
 		"original_operation_id": req.OperationID,
 		"message":               "Rollback initiated",

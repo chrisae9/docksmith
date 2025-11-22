@@ -3,7 +3,13 @@ import { checkContainers, getContainerStatus, triggerBatchUpdate, restartStack }
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
+import { useElapsedTime } from '../hooks/useElapsedTime';
+import { useAutoScrollLogs } from '../hooks/useAutoScrollLogs';
+import { useProgressEventLogger } from '../hooks/useProgressEventLogger';
+import { useAutoRefreshOnClose } from '../hooks/useAutoRefreshOnClose';
 import { ContainerDetailModal } from './ContainerDetailModal';
+import { ProgressModal } from './ProgressModal';
+import type { ProgressModalStatCard, ProgressModalContainer } from './ProgressModal';
 import { isUpdatable } from '../utils/status';
 import { STORAGE_KEY_FILTER, STORAGE_KEY_INITIAL_SWITCH } from '../utils/constants';
 
@@ -35,7 +41,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [searchQuery, setSearchQuery] = useState('');
   const [updating, setUpdating] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [elapsedTime, setElapsedTime] = useState(0);
   const [expandedContainer, setExpandedContainer] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<{
     containers: Array<{
@@ -50,57 +55,14 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     logs: Array<{ time: number; message: string }>;
   } | null>(null);
   const [restartingStack, setRestartingStack] = useState<string | null>(null);
-  const elapsedIntervalRef = useRef<number | null>(null);
-  const logEntriesRef = useRef<HTMLDivElement>(null);
+
+  // Pull-to-refresh state
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const pullStartY = useRef<number | null>(null);
 
   // Connect to SSE for real-time progress (always connected for check progress)
-  const { lastEvent: progressEvent, checkProgress, clearEvents } = useEventStream(true);
-
-  // Update elapsed time every second when update is in progress
-  useEffect(() => {
-    if (updateProgress && !updateProgress.containers.every(c => c.status === 'success' || c.status === 'failed')) {
-      elapsedIntervalRef.current = window.setInterval(() => {
-        setElapsedTime(Math.floor((Date.now() - updateProgress.startTime) / 1000));
-      }, 1000);
-    } else if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
-    return () => {
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-      }
-    };
-  }, [updateProgress]);
-
-  // Auto-scroll logs to bottom when new entries are added
-  useEffect(() => {
-    if (logEntriesRef.current && updateProgress?.logs) {
-      logEntriesRef.current.scrollTop = logEntriesRef.current.scrollHeight;
-    }
-  }, [updateProgress?.logs]);
-
-  // Add SSE progress events to activity log
-  useEffect(() => {
-    if (progressEvent && updateProgress) {
-      setUpdateProgress(prev => {
-        if (!prev) return prev;
-        const newLog = {
-          time: progressEvent.timestamp ? progressEvent.timestamp * 1000 : Date.now(),
-          message: `${progressEvent.container_name}: ${progressEvent.message}`,
-        };
-        // Avoid duplicate logs
-        const lastLog = prev.logs[prev.logs.length - 1];
-        if (lastLog && lastLog.message === newLog.message) {
-          return prev;
-        }
-        return {
-          ...prev,
-          logs: [...prev.logs.slice(-19), newLog], // Keep last 20 logs
-        };
-      });
-    }
-  }, [progressEvent, updateProgress]);
+  const { lastEvent: progressEvent, checkProgress, clearEvents, containerUpdated } = useEventStream(true);
 
   // Calculate time ago from ISO timestamp
   // Fetch cached status (for initial load)
@@ -140,6 +102,13 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       setLoading(false);
     }
   };
+
+  // Use custom hooks for progress modal management
+  const isUpdating = !!(updateProgress && !updateProgress.containers.every(c => c.status === 'success' || c.status === 'failed'));
+  const elapsedTime = useElapsedTime(updateProgress?.startTime ?? null, isUpdating);
+  const logEntriesRef = useAutoScrollLogs(updateProgress?.logs);
+  useProgressEventLogger(progressEvent, updateProgress, setUpdateProgress);
+  useAutoRefreshOnClose(!!updateProgress, backgroundRefresh);
 
   // Cache refresh - clears cache and triggers fresh registry queries
   const cacheRefresh = async () => {
@@ -608,6 +577,21 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     fetchCachedStatus();
   }, []);
 
+  // Auto-refresh when container.updated event is received
+  // Only refresh if not viewing a modal to avoid screen flashing
+  useEffect(() => {
+    if (!containerUpdated || expandedContainer || updateProgress) return;
+
+    // If this is from an update completion, trigger a background check first
+    // to ensure we get fresh status showing the container is now up-to-date
+    if (containerUpdated.status === 'updated') {
+      backgroundRefresh();
+    } else {
+      // For background check completions, just fetch cached status
+      fetchCachedStatus();
+    }
+  }, [containerUpdated, expandedContainer, updateProgress]);
+
   // Persist filter changes to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_FILTER, filter);
@@ -757,8 +741,75 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   };
 
+  // Pull-to-refresh handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    // Only allow pull-to-refresh when at the top of the page
+    if (window.scrollY === 0 && !loading) {
+      pullStartY.current = e.touches[0].clientY;
+      setIsPulling(true);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isPulling || pullStartY.current === null) return;
+
+    const currentY = e.touches[0].clientY;
+    const distance = currentY - pullStartY.current;
+
+    // Only track downward pulls
+    if (distance > 0) {
+      setPullDistance(Math.min(distance, 100)); // Cap at 100px
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (pullDistance > 60) {
+      // Trigger refresh if pulled more than 60px
+      cacheRefresh();
+    }
+
+    // Reset pull state
+    setIsPulling(false);
+    setPullDistance(0);
+    pullStartY.current = null;
+  };
+
   return (
-    <div className="dashboard">
+    <div
+      className="dashboard"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Pull-to-refresh indicator */}
+      {pullDistance > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: `${pullDistance}px`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--color-bg-secondary)',
+            transition: isPulling ? 'none' : 'height 0.2s ease-out',
+            zIndex: 1000,
+          }}
+        >
+          <i
+            className="fa-solid fa-rotate"
+            style={{
+              fontSize: '1.5rem',
+              color: 'var(--color-text-secondary)',
+              transform: `rotate(${pullDistance * 3.6}deg)`,
+              opacity: pullDistance / 100,
+            }}
+          ></i>
+        </div>
+      )}
+
       <header>
         <div className="header-top">
           <h1>Docksmith</h1>
@@ -979,100 +1030,90 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         </div>
       )}
 
-      {updateProgress && (
-        <div className="update-progress-overlay">
-          <div className="update-progress-modal tui-style">
-            <div className="update-progress-header">
-              <h3>Updating Containers</h3>
-            </div>
+      {updateProgress && (() => {
+        const allComplete = updateProgress.containers.every(c => c.status === 'success' || c.status === 'failed');
+        const allSuccess = updateProgress.containers.every(c => c.status === 'success');
+        const allFailed = updateProgress.containers.every(c => c.status === 'failed');
+        const inProgress = updateProgress.containers.some(c => c.status === 'in_progress');
 
-            {/* Overall progress stats */}
-            <div className="update-overall-stats">
-              <span>
-                Progress: {updateProgress.containers.filter(c => c.status === 'success' || c.status === 'failed').length}/{updateProgress.containers.length} containers
-              </span>
-              <span>
-                Successful: {updateProgress.containers.filter(c => c.status === 'success').length} |
-                Failed: {updateProgress.containers.filter(c => c.status === 'failed').length}
-              </span>
-              <span>
-                Elapsed: {elapsedTime}s
-              </span>
-            </div>
-
-            {/* Container list with status icons */}
-            <div className="update-container-list">
-              {updateProgress.containers.map((container, index) => (
-                <div key={container.name} className={`update-container-item status-${container.status}`}>
-                  <span className="status-icon">
-                    {container.status === 'pending' && <i className="fa-regular fa-circle"></i>}
-                    {container.status === 'in_progress' && <i className="fa-solid fa-spinner fa-spin"></i>}
-                    {container.status === 'success' && <i className="fa-solid fa-check"></i>}
-                    {container.status === 'failed' && <i className="fa-solid fa-xmark"></i>}
-                  </span>
-                  <span className="container-index">{index + 1}.</span>
-                  <span className="container-name">{container.name}</span>
-                  {container.message && (
-                    <span className="container-message">- {container.message}</span>
-                  )}
-                  {container.error && (
-                    <div className="container-error">Error: {container.error}</div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Real-time SSE progress for current operation */}
-            {progressEvent && updateProgress.containers.some(c => c.status === 'in_progress') && (
-              <div className="current-operation-progress">
-                <div className="update-progress-bar">
-                  <div
-                    className="update-progress-bar-fill"
-                    style={{ width: `${progressEvent.progress ?? progressEvent.percent ?? 0}%` }}
-                  />
-                  <span className="update-progress-bar-text">{progressEvent.progress ?? progressEvent.percent ?? 0}%</span>
-                </div>
-                <div className="update-progress-stage">
-                  {getStageIcon(progressEvent.stage)} {progressEvent.message}
-                </div>
-              </div>
-            )}
-
-            {/* Activity log */}
-            <div className="update-activity-log">
-              <div className="log-header">Recent Activity:</div>
-              <div className="log-entries" ref={logEntriesRef}>
-                {updateProgress.logs.slice(-10).map((log, i) => (
-                  <div key={i} className="log-entry">
-                    <span className="log-time">
-                      [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
-                    </span>
-                    <span className="log-message">{log.message}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Completion message */}
-            {!updateProgress.containers.some(c => c.status === 'pending' || c.status === 'in_progress') && (
-              <div className="update-completion">
-                {updateProgress.containers.every(c => c.status === 'success') ? (
-                  <div className="completion-success"><i className="fa-solid fa-check"></i> All updates completed successfully!</div>
-                ) : (
-                  <div className="completion-error"><i className="fa-solid fa-xmark"></i> Updates completed with errors</div>
-                )}
-                <button className="close-btn" onClick={() => {
-                  setUpdateProgress(null);
-                  setUpdating(false);
-                  backgroundRefresh();
-                }}>
-                  Close
-                </button>
-              </div>
-            )}
+        const stageIcon = inProgress ? (
+          <div className="stage-icon-wrapper">
+            <i className="fa-solid fa-arrow-up"></i>
+            <div className="spinner-ring"></div>
           </div>
-        </div>
-      )}
+        ) : allSuccess ? (
+          <i className="fa-solid fa-circle-check"></i>
+        ) : allFailed ? (
+          <i className="fa-solid fa-circle-xmark"></i>
+        ) : (
+          <i className="fa-solid fa-exclamation-triangle"></i>
+        );
+
+        const stageVariant = allComplete
+          ? (allSuccess ? 'complete' : 'complete-with-errors')
+          : 'in-progress';
+
+        const stageMessage = inProgress
+          ? 'Updating containers...'
+          : allSuccess
+          ? 'All updates completed successfully!'
+          : allFailed
+          ? 'All updates failed'
+          : 'Updates completed with some errors';
+
+        const stats: ProgressModalStatCard[] = [
+          {
+            label: 'Progress',
+            value: `${updateProgress.containers.filter(c => c.status === 'success' || c.status === 'failed').length}/${updateProgress.containers.length}`,
+          },
+          {
+            label: 'Successful',
+            value: updateProgress.containers.filter(c => c.status === 'success').length,
+            variant: 'success',
+          },
+          {
+            label: 'Failed',
+            value: updateProgress.containers.filter(c => c.status === 'failed').length,
+            variant: 'error',
+          },
+          {
+            label: 'Elapsed',
+            value: `${elapsedTime}s`,
+          },
+        ];
+
+        const containers: ProgressModalContainer[] = updateProgress.containers.map(c => ({
+          name: c.name,
+          status: c.status,
+          message: c.message,
+          error: c.error,
+        }));
+
+        const currentProgress = (progressEvent && inProgress) ? {
+          event: progressEvent,
+          getStageIcon,
+        } : undefined;
+
+        return (
+          <ProgressModal
+            title="Updating Containers"
+            stageIcon={stageIcon}
+            stageVariant={stageVariant}
+            stageMessage={stageMessage}
+            stats={stats}
+            containers={containers}
+            currentProgress={currentProgress}
+            logs={updateProgress.logs}
+            logEntriesRef={logEntriesRef}
+            buttonText={inProgress ? 'Updating...' : 'Close'}
+            buttonDisabled={!allComplete}
+            onClose={() => {
+              setUpdateProgress(null);
+              setUpdating(false);
+            }}
+          />
+        );
+      })()}
 
       {expandedContainer && result && (
         <ContainerDetailModal

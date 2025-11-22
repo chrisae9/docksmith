@@ -15,7 +15,7 @@ function App() {
     return (saved as TabId) || 'updates';
   });
   const [updateCount, setUpdateCount] = useState(0);
-  const { lastEvent } = useEventStream(true);
+  const { lastEvent, containerUpdated } = useEventStream(true);
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
@@ -51,6 +51,14 @@ function App() {
       setTimeout(fetchUpdateCount, 1000);
     }
   }, [lastEvent, fetchUpdateCount]);
+
+  // Refresh badge count when container status changes (from background check, rollback, etc.)
+  useEffect(() => {
+    if (containerUpdated) {
+      // Delay slightly to ensure cache is updated
+      setTimeout(fetchUpdateCount, 500);
+    }
+  }, [containerUpdated, fetchUpdateCount]);
 
   const renderTabContent = () => {
     switch (activeTab) {

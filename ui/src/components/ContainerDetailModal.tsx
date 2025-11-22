@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getScripts, getContainerLabels, setLabels, restartContainer, checkContainers } from '../api/client';
 import type { ContainerInfo, Script } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
+import { useElapsedTime } from '../hooks/useElapsedTime';
 
 interface ContainerDetailModalProps {
   container: ContainerInfo;
@@ -19,13 +20,21 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
   const [restartDependsOn, setRestartDependsOn] = useState<string>('');
   const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<string>('');
   const [hasChanges, setHasChanges] = useState(false);
   const [preCheckFailed, setPreCheckFailed] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [restartStatus, setRestartStatus] = useState<string>('');
   const [dependentContainers, setDependentContainers] = useState<string[]>([]);
   const [showForceRestart, setShowForceRestart] = useState(false);
+  const [restartProgress, setRestartProgress] = useState<{
+    stage: 'stopping' | 'starting' | 'checking' | 'dependents' | 'complete' | 'failed';
+    message: string;
+    startTime: number;
+    logs: Array<{ time: number; message: string; type: 'info' | 'success' | 'error' }>;
+    dependentsRestarted?: string[];
+    dependentsBlocked?: string[];
+    errors?: string[];
+  } | null>(null);
+  const restartTimeoutsRef = useRef<number[]>([]);
 
   // Track original values to detect changes
   const [originalScript, setOriginalScript] = useState<string>('');
@@ -45,6 +54,10 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     const restartDependsOnChanged = restartDependsOn !== originalRestartDependsOn;
     setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || restartDependsOnChanged);
   }, [selectedScript, ignoreFlag, allowLatestFlag, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalRestartDependsOn]);
+
+  // Use custom hook for elapsed time tracking
+  const isRestarting = !!(restartProgress && restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed');
+  const restartElapsed = useElapsedTime(restartProgress?.startTime ?? null, isRestarting);
 
   const fetchData = async () => {
     setLoading(true);
@@ -143,8 +156,39 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const handleSave = async (force = false) => {
     setSaving(true);
     setError(null);
-    setSaveStatus('Preparing changes...');
     setPreCheckFailed(false);
+
+    // Clear any existing timeouts
+    restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+    restartTimeoutsRef.current = [];
+
+    // Initialize progress tracking
+    const startTime = Date.now();
+    const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+      setRestartProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          logs: [...prev.logs, { time: Date.now(), message, type }],
+        };
+      });
+    };
+
+    // Start progress view
+    setRestartProgress({
+      stage: 'stopping',
+      message: 'Saving settings and restarting...',
+      startTime,
+      logs: [
+        {
+          time: startTime,
+          message: force
+            ? `Saving settings with force restart for ${container.container_name}`
+            : `Saving settings for ${container.container_name}`,
+          type: 'info'
+        }
+      ],
+    });
 
     try {
       // Build label changes
@@ -165,11 +209,27 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
       if (Object.keys(changes).length === 0) {
         setSaving(false);
+        setRestartProgress(null);
         return;
       }
 
-      // Show what's happening
-      setSaveStatus('Updating compose file...');
+      addLog('Updating compose file...', 'info');
+
+      // Simulate stages for visual feedback
+      const timeout1 = window.setTimeout(() => {
+        setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Updating compose file...' } : null);
+      }, 300);
+      restartTimeoutsRef.current.push(timeout1);
+
+      const timeout2 = window.setTimeout(() => {
+        setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Restarting container...' } : null);
+      }, 800);
+      restartTimeoutsRef.current.push(timeout2);
+
+      const timeout3 = window.setTimeout(() => {
+        setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Verifying changes...' } : null);
+      }, 1200);
+      restartTimeoutsRef.current.push(timeout3);
 
       // Call atomic API
       const result = await setLabels(container.container_name, {
@@ -177,16 +237,22 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         force,
       });
 
+      // Clear all pending timeouts since API completed
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
+
       if (result.success && result.data) {
         const data = result.data;
 
-        // Update status based on what happened
+        // Log what happened
+        addLog('✓ Compose file updated', 'success');
+
         if (data.pre_check_ran && data.pre_check_passed) {
-          setSaveStatus('Pre-update check passed ✓');
+          addLog('✓ Pre-update check passed', 'success');
         }
 
         if (data.restarted) {
-          setSaveStatus('Container restarted successfully ✓');
+          addLog('✓ Container restarted successfully', 'success');
         }
 
         // Update originals
@@ -195,34 +261,49 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         setOriginalScript(selectedScript);
         setOriginalRestartDependsOn(restartDependsOn);
 
-        // Refresh parent
-        if (onRefresh) {
-          setTimeout(() => {
-            onRefresh();
-          }, 500);
-        }
+        // Mark as complete
+        setRestartProgress(prev => prev ? {
+          ...prev,
+          stage: 'complete',
+          message: 'Settings saved and container restarted',
+        } : null);
 
-        // Show success briefly
-        setTimeout(() => {
-          setSaveStatus('');
-          setSaving(false);
-        }, 2000);
+        addLog('✓ Settings saved successfully', 'success');
 
+        // Don't auto-refresh - let user close the modal first
       } else {
         throw new Error(result.error || 'Failed to update labels');
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
 
+      // Clear all pending timeouts on error
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
+
       // Check if it's a pre-update check failure
       if (errorMessage.includes('pre-update check failed') || errorMessage.includes('script exited with code')) {
-        setError(errorMessage);
+        setRestartProgress(prev => prev ? {
+          ...prev,
+          stage: 'failed',
+          message: 'Pre-update check failed',
+          errors: [errorMessage],
+        } : null);
+        addLog(`✗ Pre-update check failed: ${errorMessage}`, 'error');
         setPreCheckFailed(true);
-        setSaveStatus('');
       } else {
-        setError(errorMessage);
-        setSaveStatus('');
+        setRestartProgress(prev => prev ? {
+          ...prev,
+          stage: 'failed',
+          message: 'Save failed',
+          errors: [errorMessage],
+        } : null);
+        addLog(`✗ Save failed: ${errorMessage}`, 'error');
       }
+    } finally {
+      // Ensure all timeouts are cleared
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
       setSaving(false);
     }
   };
@@ -238,76 +319,162 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
   const handleRestart = async (force = false) => {
     setRestarting(true);
-    setRestartStatus(force ? 'Force restarting container...' : 'Restarting container...');
     setError(null);
+
+    // Clear any existing timeouts
+    restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+    restartTimeoutsRef.current = [];
+
+    // Initialize progress tracking
+    const startTime = Date.now();
+    const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+      setRestartProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          logs: [...prev.logs, { time: Date.now(), message, type }],
+        };
+      });
+    };
+
+    setRestartProgress({
+      stage: 'stopping',
+      message: force ? 'Force restarting container...' : 'Restarting container...',
+      startTime,
+      logs: [
+        {
+          time: startTime,
+          message: force
+            ? `Force restarting ${container.container_name} (bypassing pre-checks)`
+            : `Restarting ${container.container_name}`,
+          type: 'info'
+        }
+      ],
+    });
+
+    // Simulate stages since backend doesn't emit events - store timeout IDs
+    const timeout1 = window.setTimeout(() => {
+      setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Stopping container...' } : null);
+      addLog('Stopping container...', 'info');
+    }, 300);
+    restartTimeoutsRef.current.push(timeout1);
+
+    const timeout2 = window.setTimeout(() => {
+      setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Starting container...' } : null);
+      addLog('Starting container...', 'info');
+    }, 800);
+    restartTimeoutsRef.current.push(timeout2);
+
+    const timeout3 = window.setTimeout(() => {
+      setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Checking container status...' } : null);
+    }, 1200);
+    restartTimeoutsRef.current.push(timeout3);
 
     try {
       const response = await restartContainer(container.container_name, force);
 
+      // Clear all pending timeouts since API completed
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
+
       if (response.success && response.data) {
-        let message = 'Container restarted successfully';
+        addLog(`✓ Container restarted successfully`, 'success');
 
-        // Show dependent containers that were also restarted
-        if (response.data.dependents_restarted && response.data.dependents_restarted.length > 0) {
-          const deps = response.data.dependents_restarted.join(', ');
-          message = `Container and ${response.data.dependents_restarted.length} dependent(s) restarted: ${deps}`;
+        // Handle dependents
+        const hasDependents = dependentContainers.length > 0;
+        const dependentsRestarted = response.data.dependents_restarted || [];
+        const dependentsBlocked = response.data.dependents_blocked || [];
+        const errors = response.data.errors || [];
+
+        if (hasDependents) {
+          setRestartProgress(prev => prev ? { ...prev, stage: 'dependents', message: 'Processing dependent containers...' } : null);
+          addLog(`Processing ${dependentContainers.length} dependent container(s)...`, 'info');
         }
 
-        // Show blocked containers and offer force option
-        if (response.data.dependents_blocked && response.data.dependents_blocked.length > 0) {
-          const blockedDeps = response.data.dependents_blocked.join(', ');
-          const errorMsg = `${response.data.dependents_blocked.length} dependent(s) blocked by pre-update checks: ${blockedDeps}`;
-
-          setError(
-            <div>
-              <p>{errorMsg}</p>
-              <div style={{ marginTop: '8px' }}>
-                <button
-                  className="btn-warning"
-                  onClick={() => handleRestart(true)}
-                  disabled={restarting}
-                  style={{ marginRight: '8px' }}
-                >
-                  <i className="fa-solid fa-bolt"></i> Force Restart All
-                </button>
-              </div>
-            </div>
-          );
-          setRestartStatus('');
-          setRestarting(false);
-          return;
+        // Show which dependents were restarted
+        if (dependentsRestarted.length > 0) {
+          dependentsRestarted.forEach(dep => {
+            addLog(`✓ Dependent restarted: ${dep}`, 'success');
+          });
         }
 
-        // Show any errors from dependent restarts
-        if (response.data.errors && response.data.errors.length > 0) {
-          setError(`Some dependents had issues: ${response.data.errors.join('; ')}`);
+        // Show which dependents were blocked
+        if (dependentsBlocked.length > 0) {
+          dependentsBlocked.forEach(dep => {
+            addLog(`⚠ Dependent blocked by pre-check: ${dep}`, 'error');
+          });
         }
 
-        setRestartStatus(message);
-        setTimeout(() => {
-          setRestartStatus('');
-          if (onRefresh) {
-            onRefresh();
-          }
-        }, 3000);
+        // Show any errors
+        if (errors.length > 0) {
+          errors.forEach(err => {
+            addLog(`✗ ${err}`, 'error');
+          });
+        }
+
+        // Mark as complete
+        const hasErrors = dependentsBlocked.length > 0 || errors.length > 0;
+        setRestartProgress(prev => prev ? {
+          ...prev,
+          stage: 'complete',
+          message: hasErrors
+            ? 'Restart completed with warnings'
+            : 'Restart completed successfully',
+          dependentsRestarted,
+          dependentsBlocked,
+          errors,
+        } : null);
+
+        addLog(
+          hasErrors
+            ? '⚠ Restart completed with warnings - some dependents may not have restarted'
+            : '✓ Restart completed successfully',
+          hasErrors ? 'error' : 'success'
+        );
+
+        // Don't auto-refresh - let user close the modal first
       } else {
-        setError(response.error || 'Failed to restart container');
-        setRestartStatus('');
+        throw new Error(response.error || 'Failed to restart container');
       }
     } catch (err) {
-      // Improve error message for network/timeout errors
-      if (err instanceof Error) {
-        if (err.message.includes('fetch')) {
-          setError('Request timed out or network error. Check if the container restarted successfully.');
-        } else {
-          setError(err.message);
-        }
-      } else {
-        setError('Failed to restart container: Unknown error');
-      }
-      setRestartStatus('');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+
+      // Clear all pending timeouts on error
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
+
+      setRestartProgress(prev => prev ? {
+        ...prev,
+        stage: 'failed',
+        message: 'Restart failed',
+        errors: [errorMessage],
+      } : null);
+
+      addLog(`✗ Restart failed: ${errorMessage}`, 'error');
     } finally {
+      // Ensure all timeouts are cleared
+      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
+      restartTimeoutsRef.current = [];
       setRestarting(false);
+    }
+  };
+
+  const getRestartStageIcon = (stage: string) => {
+    switch (stage) {
+      case 'stopping':
+        return <i className="fa-solid fa-circle-stop"></i>;
+      case 'starting':
+        return <i className="fa-solid fa-circle-play"></i>;
+      case 'checking':
+        return <i className="fa-solid fa-heartbeat"></i>;
+      case 'dependents':
+        return <i className="fa-solid fa-link"></i>;
+      case 'complete':
+        return <i className="fa-solid fa-circle-check"></i>;
+      case 'failed':
+        return <i className="fa-solid fa-circle-xmark"></i>;
+      default:
+        return <i className="fa-solid fa-rotate-right"></i>;
     }
   };
 
@@ -372,18 +539,97 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           </div>
         )}
 
-        {saveStatus && (
-          <div className="status-banner">
-            <div className="status-content">
-              {saving && <div className="spinner-small"></div>}
-              <span>{saveStatus}</span>
-            </div>
-          </div>
-        )}
-
         <div className="modal-body">
-          {/* Container Settings */}
-          <div className="detail-section settings-section">
+          {/* Restart Progress View - replaces modal content during restart */}
+          {restartProgress ? (
+            <div className="restart-progress-view">
+              {/* Container info */}
+              <div className="restart-container-info">
+                <div className="container-name-display">
+                  <i className="fa-solid fa-box"></i>
+                  <span>{container.container_name}</span>
+                </div>
+                <div className="restart-stats">
+                  <span>Elapsed: {restartElapsed}s</span>
+                  {dependentContainers.length > 0 && (
+                    <span>Dependents: {dependentContainers.length}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Current stage indicator */}
+              <div className="restart-stage-display">
+                <div className={`restart-stage-icon ${restartProgress.stage === 'failed' ? 'failed' : restartProgress.stage === 'complete' ? 'complete' : 'in-progress'}`}>
+                  {restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed' ? (
+                    <div className="stage-icon-wrapper">
+                      {getRestartStageIcon(restartProgress.stage)}
+                      <div className="spinner-ring"></div>
+                    </div>
+                  ) : (
+                    getRestartStageIcon(restartProgress.stage)
+                  )}
+                </div>
+                <div className="restart-stage-message">{restartProgress.message}</div>
+              </div>
+
+              {/* Activity log */}
+              <div className="update-activity-log">
+                <div className="log-header">Activity Log:</div>
+                <div className="log-entries" style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                  {restartProgress.logs.map((log, i) => (
+                    <div key={i} className={`log-entry log-${log.type}`}>
+                      <span className="log-time">
+                        [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
+                      </span>
+                      <span className="log-message">{log.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Completion summary */}
+              {(restartProgress.stage === 'complete' || restartProgress.stage === 'failed') && (
+                <div className="restart-completion">
+                  {restartProgress.stage === 'complete' ? (
+                    <>
+                      <div className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'completion-warning' : 'completion-success'}>
+                        <i className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check'}></i>
+                        {' '}
+                        {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0
+                          ? 'Restart completed with warnings'
+                          : 'Container restarted successfully!'}
+                      </div>
+                      {restartProgress.dependentsRestarted && restartProgress.dependentsRestarted.length > 0 && (
+                        <div className="dependents-summary success">
+                          <i className="fa-solid fa-check-circle"></i> {restartProgress.dependentsRestarted.length} dependent(s) restarted
+                        </div>
+                      )}
+                      {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 && (
+                        <div className="dependents-summary warning">
+                          <i className="fa-solid fa-exclamation-circle"></i> {restartProgress.dependentsBlocked.length} dependent(s) blocked by pre-checks
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="completion-error">
+                      <i className="fa-solid fa-xmark"></i> Restart failed
+                      {restartProgress.errors && restartProgress.errors.length > 0 && (
+                        <div style={{ marginTop: '8px', fontSize: '0.9em' }}>
+                          {restartProgress.errors.map((err, i) => (
+                            <div key={i}>{err}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Normal modal content */}
+              {/* Container Settings */}
+              <div className="detail-section settings-section">
             <h3 className="section-title">
               <i className="fa-solid fa-cog"></i> Container Settings
             </h3>
@@ -663,13 +909,9 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
               </div>
             </div>
           )}
+            </>
+          )}
         </div>
-
-        {restartStatus && (
-          <div className="save-status success">
-            <i className="fa-solid fa-check-circle"></i> {restartStatus}
-          </div>
-        )}
 
         {/* Changes Warning - Anchored near footer */}
         {hasChanges && (
@@ -703,59 +945,84 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         )}
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>Close</button>
-
-          {hasChanges && (
-            <button
-              className="btn-secondary"
-              onClick={handleReset}
-              disabled={saving || restarting}
-            >
-              <i className="fa-solid fa-undo"></i> Cancel
-            </button>
-          )}
-
-          {!showForceRestart && (
-            <button
-              className="btn-secondary"
-              onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
-              disabled={saving || restarting}
-            >
-              {saving || restarting ? (
-                <>
-                  <div className="spinner-inline"></div> {hasChanges ? 'Saving...' : 'Restarting...'}
-                </>
-              ) : (
-                <>
-                  <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i> {hasChanges ? 'Save & Restart' : 'Restart'}
-                </>
-              )}
-            </button>
-          )}
-
-          {showForceRestart && (
-            <button
-              className="btn-warning"
-              onClick={() => hasChanges ? handleSave(true) : handleRestart(true)}
-              disabled={saving || restarting}
-              title="Force restart, bypassing pre-update checks"
-            >
-              <i className="fa-solid fa-bolt"></i> Force {hasChanges ? 'Save & ' : ''}Restart
-            </button>
-          )}
-
-          {!hasChanges && container.status === 'UPDATE_AVAILABLE' && onUpdate && (
+          {restartProgress ? (
+            // Show simple close button during restart (disabled until complete)
             <button
               className="btn-primary"
               onClick={() => {
-                onUpdate(container.container_name);
+                setRestartProgress(null);
+                // Refresh and close modal when user dismisses restart view
+                if (onRefresh) {
+                  onRefresh();
+                }
                 onClose();
               }}
+              disabled={restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed'}
+              style={{ width: '100%' }}
             >
-              <i className="fa-solid fa-arrow-up"></i> Update Now
+              {restartProgress.stage === 'complete' || restartProgress.stage === 'failed'
+                ? 'Close'
+                : 'Restarting...'}
             </button>
+          ) : (
+            // Normal footer buttons
+            <>
+              <button className="btn-secondary" onClick={onClose}>Close</button>
+
+              {hasChanges && (
+                <button
+                  className="btn-secondary"
+                  onClick={handleReset}
+                  disabled={saving || restarting}
+                >
+                  <i className="fa-solid fa-undo"></i> Cancel
+                </button>
+              )}
+
+              {!showForceRestart && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
+                  disabled={saving || restarting}
+                >
+                  {saving || restarting ? (
+                    <>
+                      <div className="spinner-inline"></div> {hasChanges ? 'Saving...' : 'Restarting...'}
+                    </>
+                  ) : (
+                    <>
+                      <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i> {hasChanges ? 'Save & Restart' : 'Restart'}
+                    </>
+                  )}
+                </button>
+              )}
+
+              {showForceRestart && (
+                <button
+                  className="btn-warning"
+                  onClick={() => hasChanges ? handleSave(true) : handleRestart(true)}
+                  disabled={saving || restarting}
+                  title="Force restart, bypassing pre-update checks"
+                >
+                  <i className="fa-solid fa-bolt"></i> Force {hasChanges ? 'Save & ' : ''}Restart
+                </button>
+              )}
+
+              {!hasChanges && container.status === 'UPDATE_AVAILABLE' && onUpdate && (
+                <button
+                  className="btn-primary"
+                  onClick={() => {
+                    onUpdate(container.container_name);
+                    onClose();
+                  }}
+                >
+                  <i className="fa-solid fa-arrow-up"></i> Update Now
+                </button>
+              )}
+            </>
           )}
         </div>
+
       </div>
     </div>
   );

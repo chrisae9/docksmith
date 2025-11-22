@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/update"
 )
 
@@ -75,5 +74,5 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	result.CheckInterval = s.checkInterval.String()
 	result.CacheTTL = s.cacheTTL.String()
 
-	output.WriteJSONData(w, result)
+	RespondSuccess(w, result)
 }

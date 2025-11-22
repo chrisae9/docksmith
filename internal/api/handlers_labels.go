@@ -90,7 +90,7 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 		docksmithLabels[scripts.RestartDependsOnLabel] = val
 	}
 
-	output.WriteJSONData(w, map[string]any{
+	RespondSuccess(w, map[string]any{
 		"container": containerName,
 		"labels":    docksmithLabels,
 	})
@@ -124,7 +124,12 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, result)
+	// Trigger background check to update container status after label change
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.TriggerCheck()
+	}
+
+	RespondSuccess(w, result)
 }
 
 // handleLabelsRemove removes labels from a container
@@ -155,7 +160,12 @@ func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output.WriteJSONData(w, result)
+	// Trigger background check to update container status after label change
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.TriggerCheck()
+	}
+
+	RespondSuccess(w, result)
 }
 
 // setLabels implements the label setting logic (atomic: compose update + restart)

@@ -115,6 +115,9 @@ func (bc *BackgroundChecker) runCheck() {
 	log.Printf("BACKGROUND_CHECKER: Running check")
 	startTime := time.Now()
 
+	// Clean up expired cache entries before check
+	bc.orchestrator.CleanupCache()
+
 	ctx := context.Background()
 	result, err := bc.orchestrator.DiscoverAndCheck(ctx)
 	if err != nil {
@@ -127,24 +130,17 @@ func (bc *BackgroundChecker) runCheck() {
 		return
 	}
 
-	// Get the oldest cache entry time (represents when we last queried registries)
-	oldestCacheTime := bc.orchestrator.GetCacheOldestEntryTime()
-	if oldestCacheTime.IsZero() {
-		// No cache entries, use current time (just queried everything)
-		oldestCacheTime = time.Now()
-	}
-
-	// Update cache
+	// Update cache with current check time
+	now := time.Now()
 	bc.cache.mu.Lock()
 	bc.cache.result = result
-	bc.cache.lastCheck = oldestCacheTime
-	bc.cache.lastBackgroundRun = time.Now()
+	bc.cache.lastCheck = now
+	bc.cache.lastBackgroundRun = now
 	bc.cache.mu.Unlock()
 
 	duration := time.Since(startTime)
-	cacheAge := time.Since(oldestCacheTime)
-	log.Printf("BACKGROUND_CHECKER: Check completed in %v, found %d containers, oldest cache entry: %v ago",
-		duration, result.TotalChecked, cacheAge)
+	log.Printf("BACKGROUND_CHECKER: Check completed in %v, found %d containers",
+		duration, result.TotalChecked)
 
 	// Publish event to notify UI
 	if bc.eventBus != nil {
