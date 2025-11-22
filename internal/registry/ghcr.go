@@ -40,11 +40,11 @@ func NewGHCRClient(githubPAT string) *GHCRClient {
 
 	return &GHCRClient{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: DefaultHTTPTimeout,
 		},
 		githubPAT:   githubPAT,
 		tokenCache:  make(map[string]tokenCacheEntry),
-		rateLimiter: time.NewTicker(100 * time.Millisecond), // 10 requests per second max
+		rateLimiter: time.NewTicker(DefaultRateLimitInterval), // 10 requests per second max
 	}
 }
 
@@ -247,9 +247,9 @@ func (c *GHCRClient) listTagsV2(ctx context.Context, repository string) ([]strin
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			err := handleHTTPError(resp, "GHCR tags request")
 			resp.Body.Close()
-			return nil, fmt.Errorf("GHCR returned status %d: %s", resp.StatusCode, string(body))
+			return nil, err
 		}
 
 		var tagList ghcrTagList
@@ -458,7 +458,7 @@ func (c *GHCRClient) GetTagDigest(ctx context.Context, repository, tag string) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GHCR returned status %d for tag %s", resp.StatusCode, tag)
+		return "", handleHTTPError(resp, fmt.Sprintf("GHCR manifest request for tag %s", tag))
 	}
 
 	// The digest is in the Docker-Content-Digest header
@@ -543,8 +543,7 @@ func (c *GHCRClient) ListTagsWithDigests(ctx context.Context, repository string)
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("GitHub Packages API returned %d: %s", resp.StatusCode, string(body))
+			return nil, handleHTTPError(resp, "GitHub Packages API request")
 		}
 
 		var versions []githubPackageVersion

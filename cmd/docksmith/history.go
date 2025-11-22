@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chis/docksmith/cmd/docksmith/terminal"
 	"context"
 	"flag"
 	"fmt"
@@ -236,19 +237,19 @@ func (c *HistoryCommand) displayEntry(entry HistoryEntry) {
 		icon = "🔍"
 		switch entry.Status {
 		case "update_available":
-			color = colorYellow()
+			color = terminal.Yellow()
 			details = fmt.Sprintf("Update available: %s → %s", entry.CurrentVer, entry.LatestVer)
 		case "up_to_date":
-			color = colorGreen()
+			color = terminal.Green()
 			details = fmt.Sprintf("Up to date: %s", entry.CurrentVer)
 		case "failed":
-			color = colorRed()
+			color = terminal.Red()
 			details = "Check failed"
 			if c.verbose && entry.Error != "" {
 				details += fmt.Sprintf(" (%s)", entry.Error)
 			}
 		case "local_image":
-			color = colorGray()
+			color = terminal.Gray()
 			details = "Local image (no remote)"
 		default:
 			color = ""
@@ -258,11 +259,11 @@ func (c *HistoryCommand) displayEntry(entry HistoryEntry) {
 		// Update entry
 		if entry.Success {
 			icon = "✓"
-			color = colorGreen()
+			color = terminal.Green()
 			details = fmt.Sprintf("Updated: %s → %s", entry.FromVer, entry.ToVer)
 		} else {
 			icon = "✗"
-			color = colorRed()
+			color = terminal.Red()
 			details = fmt.Sprintf("Update failed: %s", entry.Operation)
 			if c.verbose && entry.Error != "" {
 				details += fmt.Sprintf(" (%s)", entry.Error)
@@ -271,7 +272,7 @@ func (c *HistoryCommand) displayEntry(entry HistoryEntry) {
 	}
 
 	fmt.Printf("  %s%s%s [%s] %s: %s\n",
-		color, icon, colorReset(),
+		color, icon, terminal.Reset(),
 		timeStr,
 		entry.ContainerName,
 		details,

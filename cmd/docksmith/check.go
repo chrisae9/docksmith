@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chis/docksmith/cmd/docksmith/terminal"
 	"context"
 	"flag"
 	"fmt"
@@ -79,7 +80,7 @@ func (c *CheckCommand) ParseFlags(args []string) error {
 func (c *CheckCommand) Run(ctx context.Context) error {
 	// Initialize services
 	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
-		DefaultDBPath: "/data/docksmith.db",
+		DefaultDBPath: DefaultDBPath,
 		Verbose:       false,
 	})
 	if err != nil {
@@ -272,7 +273,7 @@ func (c *CheckCommand) outputTable(result *update.DiscoveryResult) error {
 	fmt.Println("\n=== Summary ===")
 	fmt.Printf("Total containers: %d\n", len(result.Containers))
 	if result.UpdatesFound > 0 {
-		fmt.Printf("%sUpdates available: %d%s\n", colorYellow(), result.UpdatesFound, colorReset())
+		fmt.Printf("%sUpdates available: %d%s\n", terminal.Yellow(), result.UpdatesFound, terminal.Reset())
 	} else {
 		fmt.Printf("Updates available: %d\n", result.UpdatesFound)
 	}
@@ -282,7 +283,7 @@ func (c *CheckCommand) outputTable(result *update.DiscoveryResult) error {
 	}
 	fmt.Printf("Local images: %d\n", result.LocalImages)
 	if result.Failed > 0 {
-		fmt.Printf("%sFailed checks: %d%s\n", colorRed(), result.Failed, colorReset())
+		fmt.Printf("%sFailed checks: %d%s\n", terminal.Red(), result.Failed, terminal.Reset())
 	}
 	fmt.Println()
 
@@ -293,7 +294,7 @@ func (c *CheckCommand) outputTable(result *update.DiscoveryResult) error {
 func (c *CheckCommand) displayStack(stack *update.Stack) {
 	header := fmt.Sprintf("Stack: %s", stack.Name)
 	if stack.HasUpdates {
-		header += fmt.Sprintf(" %s[Updates Available]%s", colorYellow(), colorReset())
+		header += fmt.Sprintf(" %s[Updates Available]%s", terminal.Yellow(), terminal.Reset())
 	}
 	fmt.Println(header)
 
@@ -356,29 +357,29 @@ func (c *CheckCommand) formatStatus(container update.ContainerInfo) string {
 	switch container.Status {
 	case update.UpdateAvailable:
 		changeStr := "unknown"
-		color := colorYellow()
+		color := terminal.Yellow()
 		switch container.ChangeType {
 		case version.MajorChange:
 			changeStr = "major"
-			color = colorRed()
+			color = terminal.Red()
 		case version.MinorChange:
 			changeStr = "minor"
-			color = colorYellow()
+			color = terminal.Yellow()
 		case version.PatchChange:
 			changeStr = "patch"
-			color = colorGreen()
+			color = terminal.Green()
 		case version.Downgrade:
 			changeStr = "downgrade"
-			color = colorRed()
+			color = terminal.Red()
 		case version.NoChange:
 			changeStr = "rebuild"
-			color = colorGreen()
+			color = terminal.Green()
 		}
 		// Show current → new version
 		if container.CurrentVersion != "" && container.LatestVersion != "" {
-			return fmt.Sprintf("%sUPDATE AVAILABLE%s (%s → %s, %s)", color, colorReset(), container.CurrentVersion, container.LatestVersion, changeStr)
+			return fmt.Sprintf("%sUPDATE AVAILABLE%s (%s → %s, %s)", color, terminal.Reset(), container.CurrentVersion, container.LatestVersion, changeStr)
 		}
-		return fmt.Sprintf("%sUPDATE AVAILABLE (%s)%s", color, changeStr, colorReset())
+		return fmt.Sprintf("%sUPDATE AVAILABLE (%s)%s", color, changeStr, terminal.Reset())
 	case update.UpdateAvailableBlocked:
 		changeStr := "unknown"
 		switch container.ChangeType {
@@ -395,74 +396,39 @@ func (c *CheckCommand) formatStatus(container update.ContainerInfo) string {
 		}
 		// Show that update is blocked
 		if container.CurrentVersion != "" && container.LatestVersion != "" {
-			return fmt.Sprintf("%sUPDATE AVAILABLE - BLOCKED%s (%s → %s, %s)", colorYellow(), colorReset(), container.CurrentVersion, container.LatestVersion, changeStr)
+			return fmt.Sprintf("%sUPDATE AVAILABLE - BLOCKED%s (%s → %s, %s)", terminal.Yellow(), terminal.Reset(), container.CurrentVersion, container.LatestVersion, changeStr)
 		}
-		return fmt.Sprintf("%sUPDATE AVAILABLE - BLOCKED%s", colorYellow(), colorReset())
+		return fmt.Sprintf("%sUPDATE AVAILABLE - BLOCKED%s", terminal.Yellow(), terminal.Reset())
 	case update.UpToDate:
 		// Show current version
 		if container.CurrentVersion != "" {
-			return fmt.Sprintf("%sUP TO DATE%s (%s)", colorGreen(), colorReset(), container.CurrentVersion)
+			return fmt.Sprintf("%sUP TO DATE%s (%s)", terminal.Green(), terminal.Reset(), container.CurrentVersion)
 		}
-		return fmt.Sprintf("%sUP TO DATE%s", colorGreen(), colorReset())
+		return fmt.Sprintf("%sUP TO DATE%s", terminal.Green(), terminal.Reset())
 	case update.UpToDatePinnable:
 		// Show current version and indicate migration needed
 		if container.CurrentVersion != "" {
-			return fmt.Sprintf("%sUP TO DATE - MIGRATE TO SEMVER%s (%s)", colorYellow(), colorReset(), container.CurrentVersion)
+			return fmt.Sprintf("%sUP TO DATE - MIGRATE TO SEMVER%s (%s)", terminal.Yellow(), terminal.Reset(), container.CurrentVersion)
 		}
-		return fmt.Sprintf("%sUP TO DATE - MIGRATE TO SEMVER%s", colorYellow(), colorReset())
+		return fmt.Sprintf("%sUP TO DATE - MIGRATE TO SEMVER%s", terminal.Yellow(), terminal.Reset())
 	case update.LocalImage:
 		return "LOCAL IMAGE"
 	case update.Ignored:
-		return fmt.Sprintf("%sIGNORED%s", colorGray(), colorReset())
+		return fmt.Sprintf("%sIGNORED%s", terminal.Gray(), terminal.Reset())
 	case update.CheckFailed:
-		return fmt.Sprintf("%sCHECK FAILED%s", colorRed(), colorReset())
+		return fmt.Sprintf("%sCHECK FAILED%s", terminal.Red(), terminal.Reset())
 	case update.MetadataUnavailable:
-		return fmt.Sprintf("%sMETADATA UNAVAILABLE%s (use -v for details)", colorYellow(), colorReset())
+		return fmt.Sprintf("%sMETADATA UNAVAILABLE%s (use -v for details)", terminal.Yellow(), terminal.Reset())
 	case update.ComposeMismatch:
-		return fmt.Sprintf("%sCOMPOSE MISMATCH%s (container image differs from compose file)", colorRed(), colorReset())
+		return fmt.Sprintf("%sCOMPOSE MISMATCH%s (container image differs from compose file)", terminal.Red(), terminal.Reset())
 	case update.Unknown:
 		// Show more helpful message for UNKNOWN status
 		if container.Error != "" {
-			return fmt.Sprintf("%sUNKNOWN%s (use -v for details)", colorYellow(), colorReset())
+			return fmt.Sprintf("%sUNKNOWN%s (use -v for details)", terminal.Yellow(), terminal.Reset())
 		}
-		return fmt.Sprintf("%sUNKNOWN%s", colorYellow(), colorReset())
+		return fmt.Sprintf("%sUNKNOWN%s", terminal.Yellow(), terminal.Reset())
 	default:
 		return string(container.Status)
 	}
 }
 
-// Color codes for terminal output
-func colorRed() string {
-	if os.Getenv("NO_COLOR") != "" {
-		return ""
-	}
-	return "\033[31m"
-}
-
-func colorGreen() string {
-	if os.Getenv("NO_COLOR") != "" {
-		return ""
-	}
-	return "\033[32m"
-}
-
-func colorYellow() string {
-	if os.Getenv("NO_COLOR") != "" {
-		return ""
-	}
-	return "\033[33m"
-}
-
-func colorGray() string {
-	if os.Getenv("NO_COLOR") != "" {
-		return ""
-	}
-	return "\033[90m"
-}
-
-func colorReset() string {
-	if os.Getenv("NO_COLOR") != "" {
-		return ""
-	}
-	return "\033[0m"
-}

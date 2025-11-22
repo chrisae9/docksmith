@@ -139,7 +139,7 @@ func (s *Service) Close() error {
 // convertContainer transforms the Docker SDK container type into our domain model.
 func (s *Service) convertContainer(c types.Container) Container {
 	// Container names start with '/', so we trim it
-	name := strings.TrimPrefix(c.Names[0], "/")
+	name := ""
 	if len(c.Names) > 0 {
 		name = strings.TrimPrefix(c.Names[0], "/")
 	}

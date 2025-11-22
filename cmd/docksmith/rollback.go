@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chis/docksmith/cmd/docksmith/terminal"
 	"context"
 	"flag"
 	"fmt"
@@ -118,7 +119,7 @@ func (c *RollbackCommand) Run(ctx context.Context) error {
 	fmt.Printf("Backup timestamp: %s\n", backup.BackupTimestamp.Format("2006-01-02 15:04:05"))
 
 	if c.dryRun {
-		fmt.Printf("\n%s[DRY RUN]%s Would restore compose file and recreate container\n", colorYellow(), colorReset())
+		fmt.Printf("\n%s[DRY RUN]%s Would restore compose file and recreate container\n", terminal.Yellow(), terminal.Reset())
 		fmt.Println("No changes will be made.")
 		return nil
 	}
@@ -127,10 +128,10 @@ func (c *RollbackCommand) Run(ctx context.Context) error {
 	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
 	if !c.force && !GlobalJSONMode && isInteractive {
 		if c.noRecreate {
-			fmt.Printf("\n%sWarning: This will restore the compose file from the backup.%s\n", colorYellow(), colorReset())
+			fmt.Printf("\n%sWarning: This will restore the compose file from the backup.%s\n", terminal.Yellow(), terminal.Reset())
 			fmt.Println("You will need to manually restart the containers after rollback.")
 		} else {
-			fmt.Printf("\n%sWarning: This will restore the compose file and recreate the container.%s\n", colorYellow(), colorReset())
+			fmt.Printf("\n%sWarning: This will restore the compose file and recreate the container.%s\n", terminal.Yellow(), terminal.Reset())
 			fmt.Println("The container will be stopped, removed, and recreated with the old image.")
 		}
 		fmt.Print("\nContinue with rollback? (yes/no): ")
@@ -143,7 +144,7 @@ func (c *RollbackCommand) Run(ctx context.Context) error {
 		}
 	} else if !c.force && !GlobalJSONMode && !isInteractive {
 		// Non-interactive mode without --force, proceed automatically
-		fmt.Printf("\n%sNon-interactive mode: proceeding with rollback automatically%s\n", colorYellow(), colorReset())
+		fmt.Printf("\n%sNon-interactive mode: proceeding with rollback automatically%s\n", terminal.Yellow(), terminal.Reset())
 	}
 
 	// Perform rollback
@@ -159,7 +160,7 @@ func (c *RollbackCommand) Run(ctx context.Context) error {
 			fmt.Printf("Warning: Failed to log rollback operation: %v\n", err)
 		}
 
-		fmt.Printf("\n%s✓ Compose file restored successfully%s\n", colorGreen(), colorReset())
+		fmt.Printf("\n%s✓ Compose file restored successfully%s\n", terminal.Green(), terminal.Reset())
 		fmt.Printf("\nCompose file restored to: %s\n", backup.ComposeFilePath)
 		fmt.Println("\nNext steps:")
 		fmt.Printf("  1. Review the restored compose file\n")
@@ -211,7 +212,7 @@ func (c *RollbackCommand) performSimpleRollback(backup storage.ComposeBackup) er
 func (c *RollbackCommand) performFullRollback(ctx context.Context, operation storage.UpdateOperation, storageService *storage.SQLiteStorage) error {
 	// Initialize services (storage already initialized, passed as parameter)
 	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
-		DefaultDBPath: "/data/docksmith.db", // Not used since storage already initialized
+		DefaultDBPath: DefaultDBPath, // Not used since storage already initialized
 		Verbose:       false,
 	})
 	if err != nil {
@@ -233,7 +234,7 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 	progressChan, unsubscribe := deps.EventBus.Subscribe("*")
 	defer unsubscribe()
 
-	fmt.Printf("\n%sStarting full rollback...%s\n", colorYellow(), colorReset())
+	fmt.Printf("\n%sStarting full rollback...%s\n", terminal.Yellow(), terminal.Reset())
 
 	// Start the rollback operation
 	rollbackOpID, err := orchestrator.RollbackOperation(ctx, c.operationID)
@@ -270,7 +271,7 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 
 			// Check if complete or failed
 			if stage == "complete" {
-				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", colorGreen(), colorReset())
+				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", terminal.Green(), terminal.Reset())
 				return nil
 			}
 			if stage == "failed" {
@@ -289,7 +290,7 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 			}
 
 			if op.Status == "complete" {
-				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", colorGreen(), colorReset())
+				fmt.Printf("\n%s✓ Rollback completed successfully%s\n", terminal.Green(), terminal.Reset())
 				return nil
 			}
 			if op.Status == "failed" {

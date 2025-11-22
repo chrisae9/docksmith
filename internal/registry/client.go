@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
@@ -19,12 +18,12 @@ type HTTPClient struct {
 func NewHTTPClient(config *RegistryConfig) *HTTPClient {
 	if config == nil {
 		config = &RegistryConfig{
-			TimeoutSeconds: 30,
+			TimeoutSeconds: DefaultTimeoutSeconds,
 		}
 	}
 
 	if config.TimeoutSeconds == 0 {
-		config.TimeoutSeconds = 30
+		config.TimeoutSeconds = DefaultTimeoutSeconds
 	}
 
 	return &HTTPClient{
@@ -67,8 +66,7 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("registry returned %d: %s", resp.StatusCode, string(body))
+		return nil, handleHTTPError(resp, "fetch tags")
 	}
 
 	// Parse response

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chis/docksmith/cmd/docksmith/terminal"
 	"context"
 	"flag"
 	"fmt"
@@ -175,9 +176,9 @@ func (c *BackupsCommand) displayBackup(backup storage.ComposeBackup) {
 
 		// Check if backup file exists
 		if _, err := os.Stat(backup.BackupFilePath); err == nil {
-			fmt.Printf("    Status: %s✓ File exists%s\n", colorGreen(), colorReset())
+			fmt.Printf("    Status: %s✓ File exists%s\n", terminal.Green(), terminal.Reset())
 		} else {
-			fmt.Printf("    Status: %s✗ File not found%s\n", colorRed(), colorReset())
+			fmt.Printf("    Status: %s✗ File not found%s\n", terminal.Red(), terminal.Reset())
 		}
 	}
 }

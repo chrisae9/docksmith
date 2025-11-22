@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"time"
 )
 
 // DockerHubClient implements the Client interface for Docker Hub.
@@ -18,7 +16,7 @@ type DockerHubClient struct {
 func NewDockerHubClient() *DockerHubClient {
 	return &DockerHubClient{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: DefaultHTTPTimeout,
 		},
 	}
 }
@@ -69,8 +67,7 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("docker hub returned %d: %s", resp.StatusCode, string(body))
+			return nil, handleHTTPError(resp, "docker hub tags request")
 		}
 
 		var tagsResp dockerHubTagsResponse
@@ -146,7 +143,7 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 	defer tokenResp.Body.Close()
 
 	if tokenResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("auth token request failed with status %d", tokenResp.StatusCode)
+		return "", handleHTTPError(tokenResp, "docker hub auth token request")
 	}
 
 	var tokenData struct {
@@ -174,7 +171,7 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 	defer manifestResp.Body.Close()
 
 	if manifestResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("manifest request failed with status %d", manifestResp.StatusCode)
+		return "", handleHTTPError(manifestResp, "docker hub manifest request")
 	}
 
 	// The digest is in the Docker-Content-Digest header
@@ -207,8 +204,7 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("docker hub returned %d: %s", resp.StatusCode, string(body))
+			return nil, handleHTTPError(resp, "docker hub tags request")
 		}
 
 		var tagsResp dockerHubTagsResponse

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chis/docksmith/cmd/docksmith/terminal"
 	"context"
 	"flag"
 	"fmt"
@@ -194,13 +195,13 @@ func (c *OperationsCommand) displayOperation(op storage.UpdateOperation) {
 	switch op.Status {
 	case "complete":
 		statusIcon = "✓"
-		statusColor = colorGreen()
+		statusColor = terminal.Green()
 	case "failed":
 		statusIcon = "✗"
-		statusColor = colorRed()
+		statusColor = terminal.Red()
 	case "queued", "validating", "backup", "pulling_image":
 		statusIcon = "→"
-		statusColor = colorYellow()
+		statusColor = terminal.Yellow()
 	}
 
 	// Build container info
@@ -219,7 +220,7 @@ func (c *OperationsCommand) displayOperation(op storage.UpdateOperation) {
 
 	// Basic line
 	fmt.Printf("  %s%s%s [%s] %s%s\n",
-		statusColor, statusIcon, colorReset(),
+		statusColor, statusIcon, terminal.Reset(),
 		timeStr,
 		containerInfo,
 		versionInfo,
@@ -244,12 +245,12 @@ func (c *OperationsCommand) displayOperation(op storage.UpdateOperation) {
 
 	// Show error if failed
 	if op.Status == "failed" && op.ErrorMessage != "" {
-		fmt.Printf("    %sError: %s%s\n", colorRed(), op.ErrorMessage, colorReset())
+		fmt.Printf("    %sError: %s%s\n", terminal.Red(), op.ErrorMessage, terminal.Reset())
 	}
 
 	// Show rollback indicator
 	if op.RollbackOccurred {
-		fmt.Printf("    %s⚠ Rollback occurred%s\n", colorYellow(), colorReset())
+		fmt.Printf("    %s⚠ Rollback occurred%s\n", terminal.Yellow(), terminal.Reset())
 	}
 }
 

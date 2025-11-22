@@ -54,7 +54,7 @@ func (c *ApplyCommand) ParseFlags(args []string) error {
 func (c *ApplyCommand) Run(ctx context.Context) error {
 	// Initialize services
 	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
-		DefaultDBPath: "/home/chis/www/docksmith/docksmith.db",
+		DefaultDBPath: DefaultDBPath,
 		Verbose:       c.verbose,
 	})
 	if err != nil {

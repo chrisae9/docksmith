@@ -34,7 +34,7 @@ func runUpdateCommand(args []string) error {
 	// Initialize Docker client
 	// Initialize services
 	deps, cleanup, err := bootstrap.InitializeServices(bootstrap.InitOptions{
-		DefaultDBPath: "/home/chis/www/docksmith/docksmith.db",
+		DefaultDBPath: DefaultDBPath,
 		Verbose:       true,
 	})
 	if err != nil {
