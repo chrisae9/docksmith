@@ -382,25 +382,9 @@ func (s *SQLiteStorage) LogCheckBatch(ctx context.Context, checks []CheckHistory
 	})
 }
 
-// GetCheckHistory retrieves check history for a specific container.
-// Returns entries ordered by check_time DESC (most recent first).
-// Supports pagination via limit parameter.
-func (s *SQLiteStorage) GetCheckHistory(ctx context.Context, containerName string, limit int) ([]CheckHistoryEntry, error) {
-	query := `
-		SELECT id, container_name, image, check_time, current_version, latest_version, status, error
-		FROM check_history
-		WHERE container_name = ?
-		ORDER BY check_time DESC
-		LIMIT ?
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, containerName, limit)
-	if err != nil {
-		log.Printf("Failed to query check history for %s: %v", containerName, err)
-		return nil, fmt.Errorf("failed to query check history: %w", err)
-	}
-	defer rows.Close()
-
+// scanCheckHistoryRows is a helper function that scans check history rows into a slice.
+// It handles the nullable error field and ensures consistent error handling.
+func scanCheckHistoryRows(rows *sql.Rows) ([]CheckHistoryEntry, error) {
 	var history []CheckHistoryEntry
 	for rows.Next() {
 		var entry CheckHistoryEntry
@@ -434,6 +418,28 @@ func (s *SQLiteStorage) GetCheckHistory(ctx context.Context, containerName strin
 	return history, nil
 }
 
+// GetCheckHistory retrieves check history for a specific container.
+// Returns entries ordered by check_time DESC (most recent first).
+// Supports pagination via limit parameter.
+func (s *SQLiteStorage) GetCheckHistory(ctx context.Context, containerName string, limit int) ([]CheckHistoryEntry, error) {
+	query := `
+		SELECT id, container_name, image, check_time, current_version, latest_version, status, error
+		FROM check_history
+		WHERE container_name = ?
+		ORDER BY check_time DESC
+		LIMIT ?
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, containerName, limit)
+	if err != nil {
+		log.Printf("Failed to query check history for %s: %v", containerName, err)
+		return nil, fmt.Errorf("failed to query check history: %w", err)
+	}
+	defer rows.Close()
+
+	return scanCheckHistoryRows(rows)
+}
+
 // GetCheckHistoryByTimeRange retrieves check history within a time range.
 // Returns entries ordered by check_time DESC (most recent first).
 func (s *SQLiteStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, end time.Time) ([]CheckHistoryEntry, error) {
@@ -451,37 +457,7 @@ func (s *SQLiteStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, e
 	}
 	defer rows.Close()
 
-	var history []CheckHistoryEntry
-	for rows.Next() {
-		var entry CheckHistoryEntry
-		var errorMsg sql.NullString
-
-		err := rows.Scan(
-			&entry.ID,
-			&entry.ContainerName,
-			&entry.Image,
-			&entry.CheckTime,
-			&entry.CurrentVersion,
-			&entry.LatestVersion,
-			&entry.Status,
-			&errorMsg,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan check history entry: %w", err)
-		}
-
-		if errorMsg.Valid {
-			entry.Error = errorMsg.String
-		}
-
-		history = append(history, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating check history rows: %w", err)
-	}
-
-	return history, nil
+	return scanCheckHistoryRows(rows)
 }
 
 // GetAllCheckHistory retrieves check history for all containers.
@@ -505,37 +481,7 @@ func (s *SQLiteStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]Ch
 	}
 	defer rows.Close()
 
-	var history []CheckHistoryEntry
-	for rows.Next() {
-		var entry CheckHistoryEntry
-		var errorMsg sql.NullString
-
-		err := rows.Scan(
-			&entry.ID,
-			&entry.ContainerName,
-			&entry.Image,
-			&entry.CheckTime,
-			&entry.CurrentVersion,
-			&entry.LatestVersion,
-			&entry.Status,
-			&errorMsg,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan check history entry: %w", err)
-		}
-
-		if errorMsg.Valid {
-			entry.Error = errorMsg.String
-		}
-
-		history = append(history, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating check history rows: %w", err)
-	}
-
-	return history, nil
+	return scanCheckHistoryRows(rows)
 }
 
 // GetCheckHistorySince retrieves check history since a specific time.
@@ -555,37 +501,7 @@ func (s *SQLiteStorage) GetCheckHistorySince(ctx context.Context, since time.Tim
 	}
 	defer rows.Close()
 
-	var history []CheckHistoryEntry
-	for rows.Next() {
-		var entry CheckHistoryEntry
-		var errorMsg sql.NullString
-
-		err := rows.Scan(
-			&entry.ID,
-			&entry.ContainerName,
-			&entry.Image,
-			&entry.CheckTime,
-			&entry.CurrentVersion,
-			&entry.LatestVersion,
-			&entry.Status,
-			&errorMsg,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan check history entry: %w", err)
-		}
-
-		if errorMsg.Valid {
-			entry.Error = errorMsg.String
-		}
-
-		history = append(history, entry)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating check history rows: %w", err)
-	}
-
-	return history, nil
+	return scanCheckHistoryRows(rows)
 }
 
 // LogUpdate implements Storage.LogUpdate.
