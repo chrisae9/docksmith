@@ -1078,31 +1078,11 @@ func (s *SQLiteStorage) GetUpdateOperation(ctx context.Context, operationID stri
 	return op, true, nil
 }
 
-// GetUpdateOperationsByStatus implements Storage.GetUpdateOperationsByStatus.
-// Retrieves update operations filtered by status.
-// Returns entries ordered by created_at DESC (most recent first).
-func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]UpdateOperation, error) {
-	query := `
-		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
-		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
-		FROM update_operations
-		WHERE status = ?
-		ORDER BY created_at DESC
-	`
-
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, status)
-	if err != nil {
-		log.Printf("Failed to query update operations by status %s: %v", status, err)
-		return nil, fmt.Errorf("failed to query update operations by status: %w", err)
-	}
-	defer rows.Close()
-
+// scanUpdateOperationRows scans multiple UpdateOperation rows and handles nullable fields
+// This helper consolidates the duplicate row scanning logic used across multiple query methods
+func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 	operations := make([]UpdateOperation, 0)
+
 	for rows.Next() {
 		var op UpdateOperation
 		var dependentsJSON string
@@ -1158,6 +1138,33 @@ func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status 
 	}
 
 	return operations, nil
+}
+
+// GetUpdateOperationsByStatus implements Storage.GetUpdateOperationsByStatus.
+// Retrieves update operations filtered by status.
+// Returns entries ordered by created_at DESC (most recent first).
+func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]UpdateOperation, error) {
+	query := `
+		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
+		       old_version, new_version, started_at, completed_at, error_message,
+		       dependents_affected, rollback_occurred, created_at, updated_at
+		FROM update_operations
+		WHERE status = ?
+		ORDER BY created_at DESC
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, status)
+	if err != nil {
+		log.Printf("Failed to query update operations by status %s: %v", status, err)
+		return nil, fmt.Errorf("failed to query update operations by status: %w", err)
+	}
+	defer rows.Close()
+
+	return scanUpdateOperationRows(rows)
 }
 
 // GetUpdateOperations implements Storage.GetUpdateOperations.
@@ -1185,62 +1192,7 @@ func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]U
 	}
 	defer rows.Close()
 
-	operations := make([]UpdateOperation, 0)
-	for rows.Next() {
-		var op UpdateOperation
-		var dependentsJSON string
-		var startedAt, completedAt sql.NullTime
-		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
-
-		err := rows.Scan(
-			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
-			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan update operation: %w", err)
-		}
-
-		// Handle nullable fields
-		if containerID.Valid {
-			op.ContainerID = containerID.String
-		}
-		if stackName.Valid {
-			op.StackName = stackName.String
-		}
-		if oldVersion.Valid {
-			op.OldVersion = oldVersion.String
-		}
-		if newVersion.Valid {
-			op.NewVersion = newVersion.String
-		}
-		if errorMessage.Valid {
-			op.ErrorMessage = errorMessage.String
-		}
-		if startedAt.Valid {
-			op.StartedAt = &startedAt.Time
-		}
-		if completedAt.Valid {
-			op.CompletedAt = &completedAt.Time
-		}
-
-		// Deserialize dependents affected from JSON
-		if dependentsJSON != "" {
-			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
-			if err != nil {
-				log.Printf("Failed to deserialize dependents affected: %v", err)
-				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
-			}
-		}
-
-		operations = append(operations, op)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating update operations rows: %w", err)
-	}
-
-	return operations, nil
+	return scanUpdateOperationRows(rows)
 }
 
 // GetUpdateOperationsByContainer retrieves update operations for a specific container.
@@ -1266,62 +1218,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByContainer(ctx context.Context, cont
 	}
 	defer rows.Close()
 
-	operations := make([]UpdateOperation, 0)
-	for rows.Next() {
-		var op UpdateOperation
-		var dependentsJSON string
-		var startedAt, completedAt sql.NullTime
-		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
-
-		err := rows.Scan(
-			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
-			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan update operation: %w", err)
-		}
-
-		// Handle nullable fields
-		if containerID.Valid {
-			op.ContainerID = containerID.String
-		}
-		if stackName.Valid {
-			op.StackName = stackName.String
-		}
-		if oldVersion.Valid {
-			op.OldVersion = oldVersion.String
-		}
-		if newVersion.Valid {
-			op.NewVersion = newVersion.String
-		}
-		if errorMessage.Valid {
-			op.ErrorMessage = errorMessage.String
-		}
-		if startedAt.Valid {
-			op.StartedAt = &startedAt.Time
-		}
-		if completedAt.Valid {
-			op.CompletedAt = &completedAt.Time
-		}
-
-		// Deserialize dependents affected from JSON
-		if dependentsJSON != "" {
-			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
-			if err != nil {
-				log.Printf("Failed to deserialize dependents affected: %v", err)
-				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
-			}
-		}
-
-		operations = append(operations, op)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating update operations rows: %w", err)
-	}
-
-	return operations, nil
+	return scanUpdateOperationRows(rows)
 }
 
 // GetUpdateOperationsByTimeRange retrieves update operations within a time range.
@@ -1343,62 +1240,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByTimeRange(ctx context.Context, star
 	}
 	defer rows.Close()
 
-	operations := make([]UpdateOperation, 0)
-	for rows.Next() {
-		var op UpdateOperation
-		var dependentsJSON string
-		var startedAt, completedAt sql.NullTime
-		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
-
-		err := rows.Scan(
-			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
-			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan update operation: %w", err)
-		}
-
-		// Handle nullable fields
-		if containerID.Valid {
-			op.ContainerID = containerID.String
-		}
-		if stackName.Valid {
-			op.StackName = stackName.String
-		}
-		if oldVersion.Valid {
-			op.OldVersion = oldVersion.String
-		}
-		if newVersion.Valid {
-			op.NewVersion = newVersion.String
-		}
-		if errorMessage.Valid {
-			op.ErrorMessage = errorMessage.String
-		}
-		if startedAt.Valid {
-			op.StartedAt = &startedAt.Time
-		}
-		if completedAt.Valid {
-			op.CompletedAt = &completedAt.Time
-		}
-
-		// Deserialize dependents affected from JSON
-		if dependentsJSON != "" {
-			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
-			if err != nil {
-				log.Printf("Failed to deserialize dependents affected: %v", err)
-				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
-			}
-		}
-
-		operations = append(operations, op)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating update operations rows: %w", err)
-	}
-
-	return operations, nil
+	return scanUpdateOperationRows(rows)
 }
 
 // UpdateOperationStatus implements Storage.UpdateOperationStatus.
