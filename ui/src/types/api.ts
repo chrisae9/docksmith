@@ -60,12 +60,20 @@ export interface DiscoveryResult {
   failed: number;
   ignored: number;
   // Status endpoint specific fields
-  last_check?: string; // ISO timestamp of when cache was populated
-  last_background_run?: string; // ISO timestamp of when background check ran
+  last_cache_refresh?: string; // ISO timestamp of when cache was last cleared (cache refresh)
+  last_background_run?: string; // ISO timestamp of when background check last ran
   checking?: boolean;
   next_check?: string; // ISO timestamp
   check_interval?: string; // Duration string like "5m0s"
   cache_ttl?: string; // Duration string like "1h0m0s"
+}
+
+// Batch Container Detail (matches storage.BatchContainerDetail)
+export interface BatchContainerDetail {
+  container_name: string;
+  stack_name?: string;
+  old_version: string;
+  new_version: string;
 }
 
 // Update Operation (matches storage.UpdateOperation)
@@ -84,6 +92,7 @@ export interface UpdateOperation {
   error_message?: string;
   dependents_affected?: string[];
   rollback_occurred: boolean;
+  batch_details?: BatchContainerDetail[];
   created_at: string;
   updated_at: string;
 }

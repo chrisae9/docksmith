@@ -240,7 +240,7 @@ func (c *RestartCommand) restartStack(ctx context.Context, dockerService *docker
 
 // restartDependentContainers finds and restarts containers that depend on the given container
 func (c *RestartCommand) restartDependentContainers(ctx context.Context, dockerService *docker.Service, containerName string) ([]string, []string, []string) {
-	dependents, err := dockerService.FindDependentContainers(ctx, containerName, scripts.RestartDependsOnLabel)
+	dependents, err := dockerService.FindDependentContainers(ctx, containerName, scripts.RestartAfterLabel)
 	if err != nil {
 		log.Printf("Failed to find dependent containers for %s: %v", containerName, err)
 		return nil, nil, nil

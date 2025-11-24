@@ -1,0 +1,41 @@
+{
+  "name": "redis",
+  "description": "Redis with multi-level version tracking (major, minor, patch)",
+  "docker_hub_url": "https://hub.docker.com/_/redis",
+  "test_cases": [
+    {
+      "image": "redis",
+      "current_tag": "7.2.3-alpine",
+      "available_tags": [
+        "7",
+        "7.2",
+        "7.2.3",
+        "7.2.3-alpine",
+        "7.2.4-alpine",
+        "7.2.4-alpine3.19",
+        "7.4.0-alpine"
+      ],
+      "expected_latest": "7.4.0-alpine",
+      "expected_version": "7.4.0",
+      "notes": "Should match alpine suffix and find latest within major 7"
+    },
+    {
+      "image": "redis",
+      "current_tag": "7.2",
+      "available_tags": [
+        "7.2",
+        "7.2.3",
+        "7.2.4",
+        "7.4",
+        "7.4.0",
+        "8.0.0"
+      ],
+      "expected_latest": "7.4",
+      "expected_version": "7.4",
+      "notes": "Major.minor tag should track latest minor within major 7 (requires docksmith.version-pin-major=true)",
+      "labels": {
+        "docksmith.version-pin-major": "true"
+      }
+    }
+  ]
+}

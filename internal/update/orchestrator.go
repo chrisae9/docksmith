@@ -29,8 +29,8 @@ type DiscoveryResult struct {
 	Failed             int                 `json:"failed"`
 	Ignored            int                 `json:"ignored"`
 	// Status endpoint specific fields (populated by background checker)
-	LastCheck          string `json:"last_check,omitempty"`           // ISO 8601 timestamp of when cache was populated
-	LastBackgroundRun  string `json:"last_background_run,omitempty"`  // ISO 8601 timestamp of when background check ran
+	LastCacheRefresh   string `json:"last_cache_refresh,omitempty"`   // ISO 8601 timestamp of when cache was last cleared (cache refresh)
+	LastBackgroundRun  string `json:"last_background_run,omitempty"`  // ISO 8601 timestamp of when background check last ran
 	Checking           bool   `json:"checking,omitempty"`             // Whether a check is currently in progress
 	NextCheck          string `json:"next_check,omitempty"`           // ISO 8601 timestamp of next scheduled check
 	CheckInterval      string `json:"check_interval,omitempty"`       // Duration string like "5m0s"

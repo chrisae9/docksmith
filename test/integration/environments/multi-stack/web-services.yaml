@@ -1,0 +1,12 @@
+services:
+  nginx-test:
+    image: nginx:1.27.0
+    container_name: rooday2-nginx
+    restart: unless-stopped
+  traefik-test:
+    image: traefik:3.2.0
+    container_name: rooday2-traefik
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=false"
+    restart: unless-stopped

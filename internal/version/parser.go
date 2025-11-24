@@ -8,10 +8,12 @@ import (
 )
 
 var (
-	// Semantic version pattern: matches 1.2.3, v1.2.3, 1.2, only core version components
-	// Requires at least major.minor (e.g., "1243" alone is NOT a valid semver)
+	// Semantic version pattern: matches version formats
+	// - Major only: 15, v20
+	// - Major.minor: 7.2, v3.1
+	// - Major.minor.patch: 1.2.3, v2.10.5
 	// Does NOT match prerelease or build - those are handled separately
-	semverPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)(?:\.(\d+))?`)
+	semverPattern = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
 
 	// Prerelease/suffix pattern - anything after the version
 	suffixPattern = regexp.MustCompile(`^v?\d+(?:\.\d+)?(?:\.\d+)?(.*)$`)
@@ -279,7 +281,8 @@ func (p *Parser) normalizeSuffix(suffix string) string {
 
 	// Patterns to remove (build metadata, not variants)
 	buildPatterns := []string{
-		`-ls\d+`,           // LinuxServer build numbers: -ls286, -ls27
+		`^ls\d+$`,          // LinuxServer build numbers (after dash stripped): ls286, ls250
+		`-ls\d+`,           // LinuxServer build numbers with dash: -ls286, -ls27
 		`-r\d+`,            // Revision numbers: -r3, -r12
 		`-\d{8}`,           // Date stamps: -20250413
 		`-\d{12,}`,         // Long numbers/timestamps
@@ -288,7 +291,7 @@ func (p *Parser) normalizeSuffix(suffix string) string {
 		`-ubuntu[\d.]+`,    // Ubuntu version: -ubuntu18.04.1
 		`-\d+$`,            // Trailing numbers: -1, -2
 		`_\d+$`,            // Trailing numbers with underscore: _1, _2
-		`^\.\d+`,           // Leading dot with numbers: .2946 (LinuxServer build numbers)
+		`^\.\d{4}$`,        // 4-digit LinuxServer build numbers: .2946 (keep longer ones like .10274)
 	}
 
 	normalized := suffix

@@ -1,0 +1,78 @@
+{
+  "name": "node",
+  "description": "Node.js with LTS codenames and combined variant tags",
+  "docker_hub_url": "https://hub.docker.com/_/node",
+  "test_cases": [
+    {
+      "image": "node",
+      "current_tag": "20.10.0-alpine",
+      "available_tags": [
+        "20.10.0",
+        "20.10.0-alpine",
+        "20.10.0-alpine3.18",
+        "20.11.0-alpine3.19",
+        "20.11.1-alpine3.19",
+        "21.0.0-alpine"
+      ],
+      "expected_latest": "20.11.1-alpine3.19",
+      "expected_version": "20.11.1",
+      "notes": "Should match alpine* suffix and stay in major 20 (requires docksmith.version-pin-major=true)",
+      "labels": {
+        "docksmith.version-pin-major": "true"
+      }
+    },
+    {
+      "image": "node",
+      "current_tag": "20.10.0-iron",
+      "available_tags": [
+        "20.10.0-iron",
+        "20.11.0-iron",
+        "20.11.1-iron",
+        "20.11.1-iron-alpine"
+      ],
+      "expected_latest": "20.11.1-iron",
+      "expected_version": "20.11.1",
+      "notes": "LTS codename (iron) should be treated as suffix"
+    },
+    {
+      "image": "node",
+      "current_tag": "20-iron-alpine",
+      "available_tags": [
+        "20-iron-alpine",
+        "20.10-iron-alpine",
+        "20.11-iron-alpine",
+        "21-alpine"
+      ],
+      "expected_latest": "20.11-iron-alpine",
+      "expected_version": "20.11",
+      "notes": "Combined variant tags with major-only version"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "LTS codenames change meaning over time",
+      "example": "iron (Node 20 LTS) vs hydrogen (Node 18 LTS)",
+      "expected_behavior": "Codenames treated as suffixes, matched exactly",
+      "notes": "20.x-iron should not upgrade to 21.x-hydrogen"
+    },
+    {
+      "issue": "Combined variant tags",
+      "example": "20-iron-alpine combines LTS codename + platform",
+      "expected_behavior": "Treated as single compound suffix",
+      "notes": "Cannot filter by individual components currently"
+    },
+    {
+      "issue": "Meta tags for release channels",
+      "example": "lts, current, latest",
+      "expected_behavior": "Ignored as meta tags",
+      "pattern": "^(lts|current|latest)$"
+    }
+  ],
+  "lts_codenames": {
+    "22": "jod",
+    "20": "iron",
+    "18": "hydrogen",
+    "16": "gallium",
+    "14": "fermium"
+  }
+}

@@ -27,10 +27,19 @@ const (
 	// AllowLatestLabel is the Docker label key to allow :latest tags
 	AllowLatestLabel = "docksmith.allow-latest"
 
-	// RestartDependsOnLabel is the Docker label key for restart dependencies
-	// Comma-separated list of container names that this container depends on
-	// When a dependency restarts, this container will also restart
-	RestartDependsOnLabel = "docksmith.restart-depends-on"
+	// RestartAfterLabel is the Docker label key for restart dependencies
+	// Comma-separated list of container names. When any of those containers restart,
+	// this container will also restart after them.
+	// Example: torrent container has "docksmith.restart-after=gluetun"
+	//          When gluetun restarts, torrent will restart too
+	RestartAfterLabel = "docksmith.restart-after"
+
+	// VersionPinMajorLabel is the Docker label key to pin updates within the current major version
+	// When set to "true", the container will only update to newer versions within the same major version.
+	// Example: Container on Node 20.10.0 will update to 20.11.x but not to 21.x
+	//          Container on Redis 7.2 will update to 7.4 but not to 8.x
+	// Default: false (allow major version upgrades)
+	VersionPinMajorLabel = "docksmith.version-pin-major"
 )
 
 // Manager handles script discovery, validation, and assignment operations.
@@ -252,10 +261,11 @@ func (m *Manager) SetAllowLatest(ctx context.Context, containerName string, allo
 
 // findComposeFileForContainer finds the compose file that defines a container.
 // Scans all configured compose file paths and returns the first match.
+// Supports include-based compose setups by searching through included files.
 func (m *Manager) findComposeFileForContainer(containerName string) (string, error) {
 	for _, composePath := range m.config.ComposeFilePaths {
-		// Load compose file
-		composeFile, err := compose.LoadComposeFile(composePath)
+		// Load compose file (handles include-based setups)
+		composeFile, err := compose.LoadComposeFileOrIncluded(composePath, containerName)
 		if err != nil {
 			// Skip files that can't be loaded
 			continue
@@ -264,8 +274,8 @@ func (m *Manager) findComposeFileForContainer(containerName string) (string, err
 		// Try to find service in this file
 		_, err = composeFile.FindServiceByContainerName(containerName)
 		if err == nil {
-			// Found it!
-			return composePath, nil
+			// Found it! Return the actual file path (might be an included file)
+			return composeFile.Path, nil
 		}
 	}
 

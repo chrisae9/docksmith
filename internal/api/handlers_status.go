@@ -62,7 +62,9 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add status-specific fields to the result
-	result.LastCheck = lastCheck.Format(time.RFC3339)
+	if !lastCheck.IsZero() {
+		result.LastCacheRefresh = lastCheck.Format(time.RFC3339)
+	}
 	if !lastBackgroundRun.IsZero() {
 		result.LastBackgroundRun = lastBackgroundRun.Format(time.RFC3339)
 	}

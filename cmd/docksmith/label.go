@@ -255,26 +255,15 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 		fmt.Println("Skipping pre-update check (--force flag set)")
 	}
 
-	// Create backup
-	backupPath, err := compose.BackupComposeFile(composeFilePath)
+	// Load compose file (handles include-based setups)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, serviceName)
 	if err != nil {
-		return fmt.Errorf("failed to create backup: %w", err)
-	}
-	if !isJSON {
-		fmt.Printf("Created backup: %s\n", backupPath)
-	}
-
-	// Load compose file
-	composeFile, err := compose.LoadComposeFile(composeFilePath)
-	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to load compose file: %w", err)
 	}
 
 	// Find service
 	service, err := composeFile.FindServiceByContainerName(serviceName)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to find service: %w", err)
 	}
 
@@ -285,7 +274,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 			value = "true"
 		}
 		if err := service.SetLabel(scripts.IgnoreLabel, value); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to set ignore label: %w", err)
 		}
 		result.LabelsModified[scripts.IgnoreLabel] = value
@@ -297,7 +285,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 			value = "true"
 		}
 		if err := service.SetLabel(scripts.AllowLatestLabel, value); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to set allow-latest label: %w", err)
 		}
 		result.LabelsModified[scripts.AllowLatestLabel] = value
@@ -305,7 +292,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 
 	if c.options.Script != "" {
 		if err := service.SetLabel(scripts.PreUpdateCheckLabel, c.options.Script); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to set script label: %w", err)
 		}
 		result.LabelsModified[scripts.PreUpdateCheckLabel] = c.options.Script
@@ -313,7 +299,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 
 	// Save compose file
 	if err := composeFile.Save(); err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to save compose file: %w", err)
 	}
 	if !isJSON {
@@ -326,8 +311,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 			fmt.Println("\nRestarting container to apply labels...")
 		}
 		if err := c.restartContainer(ctx, composeFilePath, serviceName); err != nil {
-			// Restore backup on error
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true
@@ -352,7 +335,6 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 	}
 
 	// Clean up backup
-	os.Remove(backupPath)
 
 	result.Success = true
 	result.Message = fmt.Sprintf("%d label(s) set successfully", len(result.LabelsModified))
@@ -425,50 +407,37 @@ func (c *LabelCommand) removeLabel(ctx context.Context) error {
 		fmt.Println("Skipping pre-update check (--force flag set)")
 	}
 
-	// Create backup
-	backupPath, err := compose.BackupComposeFile(composeFilePath)
+	// Load compose file (handles include-based setups)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, serviceName)
 	if err != nil {
-		return fmt.Errorf("failed to create backup: %w", err)
-	}
-
-	// Load compose file
-	composeFile, err := compose.LoadComposeFile(composeFilePath)
-	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to load compose file: %w", err)
 	}
 
 	// Find service
 	service, err := composeFile.FindServiceByContainerName(serviceName)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to find service: %w", err)
 	}
 
 	// Remove all specified labels
 	for _, labelName := range c.options.LabelNames {
 		if err := service.RemoveLabel(labelName); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to remove label %s: %w", labelName, err)
 		}
 	}
 
 	// Save compose file
 	if err := composeFile.Save(); err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return fmt.Errorf("failed to save compose file: %w", err)
 	}
 
 	// Restart container
 	if !c.options.NoRestart {
 		if err := c.restartContainer(ctx, composeFilePath, serviceName); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true
 	}
-
-	os.Remove(backupPath)
 
 	result.Success = true
 	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(c.options.LabelNames))

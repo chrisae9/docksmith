@@ -291,6 +291,51 @@ func parseLabelKey(label string) string {
 	return label
 }
 
+// parseLabelValue extracts the value from a "key=value" label string.
+func parseLabelValue(label string) string {
+	for i, c := range label {
+		if c == '=' {
+			return label[i+1:]
+		}
+	}
+	return ""
+}
+
+// GetAllLabels returns all labels from the service as a map.
+// Handles both sequence (array) and mapping (object) style labels.
+func (s *Service) GetAllLabels() (map[string]string, error) {
+	labels := make(map[string]string)
+
+	// First try to find the labels node if not already set
+	if s.Labels == nil {
+		_, _ = s.GetOrCreateLabelsNode()
+	}
+
+	if s.Labels == nil {
+		return labels, nil
+	}
+
+	if s.Labels.Kind == yaml.SequenceNode {
+		// Array-style labels: ["key=value", "key2=value2"]
+		for _, node := range s.Labels.Content {
+			if node.Kind == yaml.ScalarNode {
+				key := parseLabelKey(node.Value)
+				value := parseLabelValue(node.Value)
+				labels[key] = value
+			}
+		}
+	} else if s.Labels.Kind == yaml.MappingNode {
+		// Object-style labels: {key: value, key2: value2}
+		for i := 0; i < len(s.Labels.Content); i += 2 {
+			keyNode := s.Labels.Content[i]
+			valueNode := s.Labels.Content[i+1]
+			labels[keyNode.Value] = valueNode.Value
+		}
+	}
+
+	return labels, nil
+}
+
 // Save saves the compose file with preserved formatting and comments.
 // Overwrites the original file.
 func (cf *ComposeFile) Save() error {
@@ -362,6 +407,117 @@ func RestoreFromBackup(composePath, backupPath string) error {
 	}
 
 	return nil
+}
+
+// GetIncludePaths extracts the list of included files from a compose file.
+// Returns nil if there are no includes.
+func GetIncludePaths(composePath string) ([]string, error) {
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read compose file: %w", err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil, nil
+	}
+
+	mappingNode := root.Content[0]
+	if mappingNode.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+
+	// Look for "include" key
+	for i := 0; i < len(mappingNode.Content); i += 2 {
+		keyNode := mappingNode.Content[i]
+		if keyNode.Value == "include" {
+			includeNode := mappingNode.Content[i+1]
+
+			// Include can be a sequence (array) of file paths
+			if includeNode.Kind == yaml.SequenceNode {
+				var includes []string
+				for _, item := range includeNode.Content {
+					if item.Kind == yaml.ScalarNode {
+						// Resolve relative paths
+						includePath := item.Value
+						if !filepath.IsAbs(includePath) {
+							baseDir := filepath.Dir(composePath)
+							includePath = filepath.Join(baseDir, includePath)
+						}
+						includes = append(includes, includePath)
+					}
+				}
+				return includes, nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+// FindServiceInIncludes searches through included compose files to find which file contains a service.
+// Returns the path to the file containing the service, or an error if not found.
+func FindServiceInIncludes(composePath, containerName string) (string, error) {
+	includes, err := GetIncludePaths(composePath)
+	if err != nil {
+		return "", err
+	}
+
+	if len(includes) == 0 {
+		return "", nil // No includes, use main file
+	}
+
+	// Search each included file
+	for _, includePath := range includes {
+		// Try to load the included file
+		cf, err := LoadComposeFile(includePath)
+		if err != nil {
+			// Skip files that can't be loaded (might not have services section)
+			continue
+		}
+
+		// Check if this file contains the service
+		_, err = cf.FindServiceByContainerName(containerName)
+		if err == nil {
+			// Found it!
+			return includePath, nil
+		}
+	}
+
+	return "", fmt.Errorf("service not found in any included files: %s", containerName)
+}
+
+// LoadComposeFileOrIncluded loads a compose file, automatically finding the correct included file
+// if the main compose file uses includes.
+func LoadComposeFileOrIncluded(composePath, containerName string) (*ComposeFile, error) {
+	// First, try to load the compose file normally
+	cf, err := LoadComposeFile(composePath)
+	if err == nil {
+		return cf, nil
+	}
+
+	// If we got an error about no services section, check if this file uses includes
+	if err != nil && err.Error() == "no services section found in compose file" {
+		// Try to find the service in included files
+		includedFile, findErr := FindServiceInIncludes(composePath, containerName)
+		if findErr != nil {
+			return nil, fmt.Errorf("main file has no services and service not found in includes: %w", findErr)
+		}
+
+		if includedFile == "" {
+			return nil, err // No includes found, return original error
+		}
+
+		// Load the included file that contains the service
+		return LoadComposeFile(includedFile)
+	}
+
+	// Some other error, return it
+	return nil, err
 }
 
 // Ensure writeBuffer implements io.Writer

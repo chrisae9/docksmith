@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chis/docksmith/internal/docker"
@@ -36,10 +37,27 @@ type RestartResponse struct {
 // restartDependentContainers finds and restarts containers that depend on the given container
 // If force is false, runs pre-update checks before restarting each dependent
 func (s *Server) restartDependentContainers(ctx context.Context, containerName string, force bool) ([]string, []string, []string) {
-	dependents, err := s.dockerService.FindDependentContainers(ctx, containerName, scripts.RestartDependsOnLabel)
+	// Get all containers to find those that depend on the restarted container
+	containers, err := s.dockerService.ListContainers(ctx)
 	if err != nil {
-		log.Printf("Failed to find dependent containers for %s: %v", containerName, err)
+		log.Printf("Failed to list containers: %v", err)
 		return nil, nil, nil
+	}
+
+	// Find all containers that have containerName in their restart-after label
+	var dependents []string
+	for _, c := range containers {
+		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+			// Parse comma-separated list of dependencies
+			dependencies := strings.Split(restartAfter, ",")
+			for _, dep := range dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == containerName {
+					dependents = append(dependents, c.Name)
+					break
+				}
+			}
+		}
 	}
 
 	if len(dependents) == 0 {
@@ -48,13 +66,7 @@ func (s *Server) restartDependentContainers(ctx context.Context, containerName s
 
 	log.Printf("Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
 
-	// Get full container info for pre-update checks
-	containers, err := s.dockerService.ListContainers(ctx)
-	if err != nil {
-		log.Printf("Failed to list containers: %v", err)
-		return nil, nil, nil
-	}
-
+	// Create container map for lookups
 	containerMap := docker.CreateContainerMap(containers)
 
 	var restarted []string

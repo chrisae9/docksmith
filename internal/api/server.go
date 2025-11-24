@@ -126,7 +126,7 @@ func NewServer(cfg Config) *Server {
 
 	// Create background checker using the discovery orchestrator
 	var backgroundChecker *update.BackgroundChecker
-	backgroundChecker = update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, checkInterval)
+	backgroundChecker = update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
 
 	s := &Server{
 		dockerService:         cfg.DockerService,
@@ -295,6 +295,8 @@ func spaHandler(staticDir string) http.Handler {
 			// File doesn't exist, serve index.html for SPA routing
 			indexPath := filepath.Join(staticDir, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
+				// HTML files: always validate (allows 304 responses for better mobile performance)
+				w.Header().Set("Cache-Control", "no-cache")
 				http.ServeFile(w, r, indexPath)
 				return
 			}
@@ -311,13 +313,29 @@ func spaHandler(staticDir string) http.Handler {
 			// Try to serve index.html in the directory
 			indexPath := filepath.Join(fullPath, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
+				// HTML files: always validate (allows 304 responses for better mobile performance)
+				w.Header().Set("Cache-Control", "no-cache")
 				http.ServeFile(w, r, indexPath)
 				return
 			}
 			// Otherwise serve root index.html for SPA routing
 			rootIndex := filepath.Join(staticDir, "index.html")
+			// HTML files: always validate (allows 304 responses for better mobile performance)
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, rootIndex)
 			return
+		}
+
+		// Set cache headers based on file type
+		if strings.HasSuffix(path, ".html") {
+			// HTML files: always validate (allows 304 responses for better mobile performance)
+			w.Header().Set("Cache-Control", "no-cache")
+		} else if strings.HasPrefix(path, "/assets/") {
+			// Versioned assets (JS/CSS with hashes): cache forever
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			// Other static files (images, fonts): cache for 1 hour
+			w.Header().Set("Cache-Control", "public, max-age=3600")
 		}
 
 		// Serve the file

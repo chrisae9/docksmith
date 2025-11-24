@@ -13,8 +13,8 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
   const [lastBackgroundRun, setLastBackgroundRun] = useState<string | null>(null);
-  const [cacheAge, setCacheAge] = useState<string>('');
-  const [backgroundAge, setBackgroundAge] = useState<string>('');
+  const [cacheAge, setCacheAge] = useState<string>('Loading...');
+  const [backgroundAge, setBackgroundAge] = useState<string>('Loading...');
   const [dockerConfig, setDockerConfig] = useState<DockerRegistryInfo | null>(null);
 
   // Fetch initial status
@@ -43,13 +43,19 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
       const response = await getContainerStatus();
       if (response.success && response.data) {
         setResult(response.data);
-        if (response.data.last_check) {
-          setLastCheckTime(response.data.last_check);
-          setCacheAge(formatTimeAgo(response.data.last_check));
+        if (response.data.last_cache_refresh) {
+          setLastCheckTime(response.data.last_cache_refresh);
+          setCacheAge(formatTimeAgo(response.data.last_cache_refresh));
+        } else {
+          setLastCheckTime(null);
+          setCacheAge('Never');
         }
         if (response.data.last_background_run) {
           setLastBackgroundRun(response.data.last_background_run);
           setBackgroundAge(formatTimeAgo(response.data.last_background_run));
+        } else {
+          setLastBackgroundRun(null);
+          setBackgroundAge('Never');
         }
       } else {
         setError(response.error || 'Failed to fetch status');
@@ -77,6 +83,7 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
     setError(null);
     try {
       await fetch('/api/trigger-check', { method: 'POST' });
+      // Wait for background check to start and update timestamps
       await new Promise(resolve => setTimeout(resolve, 500));
       await fetchStatus();
     } catch (err) {
@@ -93,13 +100,19 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
       const response = await checkContainers();
       if (response.success && response.data) {
         setResult(response.data);
-        if (response.data.last_check) {
-          setLastCheckTime(response.data.last_check);
-          setCacheAge(formatTimeAgo(response.data.last_check));
+        if (response.data.last_cache_refresh) {
+          setLastCheckTime(response.data.last_cache_refresh);
+          setCacheAge(formatTimeAgo(response.data.last_cache_refresh));
+        } else {
+          setLastCheckTime(null);
+          setCacheAge('Never');
         }
         if (response.data.last_background_run) {
           setLastBackgroundRun(response.data.last_background_run);
           setBackgroundAge(formatTimeAgo(response.data.last_background_run));
+        } else {
+          setLastBackgroundRun(null);
+          setBackgroundAge('Never');
         }
       } else {
         setError(response.error || 'Failed to fetch data');

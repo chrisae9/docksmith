@@ -18,6 +18,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [ignoreFlag, setIgnoreFlag] = useState(false);
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
+  const [versionPinMajor, setVersionPinMajor] = useState(false);
   const [restartDependsOn, setRestartDependsOn] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -40,6 +41,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [originalScript, setOriginalScript] = useState<string>('');
   const [originalIgnore, setOriginalIgnore] = useState(false);
   const [originalAllowLatest, setOriginalAllowLatest] = useState(false);
+  const [originalVersionPinMajor, setOriginalVersionPinMajor] = useState(false);
   const [originalRestartDependsOn, setOriginalRestartDependsOn] = useState<string>('');
 
   useEffect(() => {
@@ -51,9 +53,10 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     const scriptChanged = selectedScript !== originalScript;
     const ignoreChanged = ignoreFlag !== originalIgnore;
     const allowLatestChanged = allowLatestFlag !== originalAllowLatest;
+    const versionPinMajorChanged = versionPinMajor !== originalVersionPinMajor;
     const restartDependsOnChanged = restartDependsOn !== originalRestartDependsOn;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || restartDependsOnChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalRestartDependsOn]);
+    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinMajorChanged || restartDependsOnChanged);
+  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPinMajor, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalVersionPinMajor, originalRestartDependsOn]);
 
   // Use custom hook for elapsed time tracking
   const isRestarting = !!(restartProgress && restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed');
@@ -79,16 +82,19 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         const scriptPath = labels['docksmith.pre-update-check'] || '';
         const ignore = labels['docksmith.ignore'] === 'true';
         const allowLatest = labels['docksmith.allow-latest'] === 'true';
+        const pinMajor = labels['docksmith.version-pin-major'] === 'true';
         const restartDeps = labels['docksmith.restart-depends-on'] || '';
 
         setSelectedScript(scriptPath);
         setIgnoreFlag(ignore);
         setAllowLatestFlag(allowLatest);
+        setVersionPinMajor(pinMajor);
         setRestartDependsOn(restartDeps);
 
         setOriginalScript(scriptPath);
         setOriginalIgnore(ignore);
         setOriginalAllowLatest(allowLatest);
+        setOriginalVersionPinMajor(pinMajor);
         setOriginalRestartDependsOn(restartDeps);
       }
 
@@ -130,6 +136,9 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     }
     if (allowLatestFlag !== originalAllowLatest) {
       changes.push(`${allowLatestFlag ? 'Allow' : 'Disallow'} :latest tag`);
+    }
+    if (versionPinMajor !== originalVersionPinMajor) {
+      changes.push(`${versionPinMajor ? 'Pin' : 'Unpin'} to major version`);
     }
     if (selectedScript !== originalScript) {
       if (selectedScript && !originalScript) {
@@ -200,6 +209,9 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
       if (allowLatestFlag !== originalAllowLatest) {
         changes.allow_latest = allowLatestFlag;
       }
+      if (versionPinMajor !== originalVersionPinMajor) {
+        changes.version_pin_major = versionPinMajor;
+      }
       if (selectedScript !== originalScript) {
         changes.script = selectedScript || '';
       }
@@ -258,6 +270,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         // Update originals
         setOriginalIgnore(ignoreFlag);
         setOriginalAllowLatest(allowLatestFlag);
+        setOriginalVersionPinMajor(versionPinMajor);
         setOriginalScript(selectedScript);
         setOriginalRestartDependsOn(restartDependsOn);
 
@@ -312,6 +325,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
+    setVersionPinMajor(originalVersionPinMajor);
     setRestartDependsOn(originalRestartDependsOn);
     setError(null);
     setPreCheckFailed(false);
@@ -674,6 +688,24 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                       <span className="toggle-text">
                         <strong>Allow :latest Tag</strong>
                         <small>Don't suggest semver migration</small>
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Pin to Major Version */}
+                  <div className="setting-item">
+                    <label className="toggle-label">
+                      <input
+                        type="checkbox"
+                        checked={versionPinMajor}
+                        onChange={(e) => setVersionPinMajor(e.target.checked)}
+                        disabled={saving}
+                        className="toggle-input"
+                      />
+                      <span className="toggle-switch"></span>
+                      <span className="toggle-text">
+                        <strong>Pin to Major Version</strong>
+                        <small>Only allow minor/patch updates</small>
                       </span>
                     </label>
                   </div>

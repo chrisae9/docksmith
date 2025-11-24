@@ -1,0 +1,75 @@
+{
+  "name": "postgres",
+  "description": "PostgreSQL with multiple platform suffix variations",
+  "docker_hub_url": "https://hub.docker.com/_/postgres",
+  "test_cases": [
+    {
+      "image": "postgres",
+      "current_tag": "16.1-alpine3.18",
+      "available_tags": [
+        "16",
+        "16.1",
+        "16.1-alpine",
+        "16.1-alpine3.18",
+        "16.1-alpine3.19",
+        "16.2",
+        "16.2-alpine3.19",
+        "latest"
+      ],
+      "expected_latest": "16.2-alpine3.19",
+      "expected_version": "16.2",
+      "notes": "Should match suffix alpine3.* and find latest"
+    },
+    {
+      "image": "postgres",
+      "current_tag": "16.1-bullseye",
+      "available_tags": [
+        "16.1-bullseye",
+        "16.1-bookworm",
+        "16.2-bullseye",
+        "16.2-bookworm"
+      ],
+      "expected_latest": "16.2-bullseye",
+      "expected_version": "16.2",
+      "notes": "Should match Debian codename suffix exactly"
+    },
+    {
+      "image": "postgres",
+      "current_tag": "15",
+      "available_tags": [
+        "15",
+        "15.5",
+        "15.6",
+        "16",
+        "16.1",
+        "16.2"
+      ],
+      "expected_latest": "15.6",
+      "expected_version": "15.6",
+      "notes": "Major-only tag should track latest patch in same major (requires docksmith.version-pin-major=true)",
+      "labels": {
+        "docksmith.version-pin-major": "true"
+      }
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Multiple Alpine versions",
+      "example": "alpine3.18 vs alpine3.19 vs alpine3.20",
+      "expected_behavior": "Treat as different suffixes, match exactly",
+      "notes": "alpine (without version) is generic, alpine3.19 is specific"
+    },
+    {
+      "issue": "Debian codenames",
+      "example": "bullseye, bookworm, sid",
+      "expected_behavior": "Each codename is a distinct suffix",
+      "notes": "User on bullseye should not auto-upgrade to bookworm"
+    },
+    {
+      "issue": "Major-only tracking",
+      "example": "16 should update to 16.x but not 17.x",
+      "expected_behavior": "Implied suffix matching - stay within major version",
+      "notes": "This requires special handling for tags without dots"
+    }
+  ]
+}

@@ -294,23 +294,32 @@ type ConfigSnapshot struct {
 
 // UpdateOperation represents a container update operation with full state tracking.
 // Tracks progress through all stages of the update workflow.
+// BatchContainerDetail stores version info for a single container in a batch update
+type BatchContainerDetail struct {
+	ContainerName string `json:"container_name"`
+	StackName     string `json:"stack_name,omitempty"`
+	OldVersion    string `json:"old_version"`
+	NewVersion    string `json:"new_version"`
+}
+
 type UpdateOperation struct {
-	ID                 int64      `json:"id"`
-	OperationID        string     `json:"operation_id"`
-	ContainerID        string     `json:"container_id"`
-	ContainerName      string     `json:"container_name"`
-	StackName          string     `json:"stack_name,omitempty"`
-	OperationType      string     `json:"operation_type"` // single, batch, stack
-	Status             string     `json:"status"`         // queued, validating, backup, updating_compose, pulling_image, stopping, starting, health_check, restarting_dependents, complete, failed, rolling_back, cancelled
-	OldVersion         string     `json:"old_version,omitempty"`
-	NewVersion         string     `json:"new_version"`
-	StartedAt          *time.Time `json:"started_at,omitempty"`
-	CompletedAt        *time.Time `json:"completed_at,omitempty"`
-	ErrorMessage       string     `json:"error_message,omitempty"`
-	DependentsAffected []string   `json:"dependents_affected,omitempty"` // JSON array of container names
-	RollbackOccurred   bool       `json:"rollback_occurred"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 int64                   `json:"id"`
+	OperationID        string                  `json:"operation_id"`
+	ContainerID        string                  `json:"container_id"`
+	ContainerName      string                  `json:"container_name"`
+	StackName          string                  `json:"stack_name,omitempty"`
+	OperationType      string                  `json:"operation_type"` // single, batch, stack
+	Status             string                  `json:"status"`         // queued, validating, backup, updating_compose, pulling_image, stopping, starting, health_check, restarting_dependents, complete, failed, rolling_back, cancelled
+	OldVersion         string                  `json:"old_version,omitempty"`
+	NewVersion         string                  `json:"new_version"`
+	StartedAt          *time.Time              `json:"started_at,omitempty"`
+	CompletedAt        *time.Time              `json:"completed_at,omitempty"`
+	ErrorMessage       string                  `json:"error_message,omitempty"`
+	DependentsAffected []string                `json:"dependents_affected,omitempty"` // JSON array of container names
+	RollbackOccurred   bool                    `json:"rollback_occurred"`
+	BatchDetails       []BatchContainerDetail  `json:"batch_details,omitempty"` // Details for batch operations
+	CreatedAt          time.Time               `json:"created_at"`
+	UpdatedAt          time.Time               `json:"updated_at"`
 }
 
 // ComposeBackup represents metadata for a compose file backup.

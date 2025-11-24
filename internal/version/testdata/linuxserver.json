@@ -1,0 +1,72 @@
+{
+  "name": "linuxserver/*",
+  "description": "LinuxServer.io images with build numbers and git hashes",
+  "docker_hub_url": "https://hub.docker.com/u/linuxserver",
+  "test_cases": [
+    {
+      "image": "linuxserver/plex",
+      "current_tag": "1.40.0.7998-f5c1d59-ls280",
+      "available_tags": [
+        "1.40.0.7998-f5c1d59-ls280",
+        "1.40.1.8227-c0dd5a73e-ls285",
+        "1.41.0.8994-f2c27da23-ls290",
+        "1.41.2.9200-c6bbc1b53-ls295"
+      ],
+      "expected_latest": "1.41.2.9200-c6bbc1b53-ls295",
+      "expected_version": "1.41.2",
+      "notes": "Build numbers (.7998, .8227, etc.) and LinuxServer build (-ls280) should be normalized"
+    },
+    {
+      "image": "linuxserver/sonarr",
+      "current_tag": "4.0.0-ls250",
+      "available_tags": [
+        "4.0.0-ls250",
+        "4.0.1-ls255",
+        "4.0.2-ls260",
+        "latest"
+      ],
+      "expected_latest": "4.0.2-ls260",
+      "expected_version": "4.0.2",
+      "notes": "Simple LinuxServer build number format"
+    },
+    {
+      "image": "linuxserver/calibre-web",
+      "current_tag": "0.6.21-ls240",
+      "available_tags": [
+        "0.6.21-ls240",
+        "0.6.22-ls245",
+        "0.6.23-ls250",
+        "nightly"
+      ],
+      "expected_latest": "0.6.23-ls250",
+      "expected_version": "0.6.23",
+      "notes": "Nightly should be ignored as meta tag"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Multiple version components in tag",
+      "example": "5.28.0.10274-ls285",
+      "expected_behavior": "Extract 5.28.0 as version, normalize .10274 and -ls285",
+      "pattern": "^(\\d+\\.\\d+\\.\\d+)\\.\\d+-.*-ls\\d+$"
+    },
+    {
+      "issue": "Git commit hash embedded",
+      "example": "1.40.1.8227-c0dd5a73e-ls285",
+      "expected_behavior": "Normalize git hash -c0dd5a73e",
+      "pattern": "^(\\d+\\.\\d+\\.\\d+)\\.\\d+-[a-f0-9]+-ls\\d+$"
+    },
+    {
+      "issue": "LinuxServer build number changes frequently",
+      "example": "-ls280 vs -ls285",
+      "expected_behavior": "Normalize -ls<number> suffix",
+      "pattern": "-ls\\d+$"
+    }
+  ],
+  "normalization_rules": [
+    "Remove LinuxServer build numbers: -ls\\d+",
+    "Remove upstream build numbers: \\.\\d{4,}",
+    "Remove git commit hashes: -[a-f0-9]{7,}",
+    "Keep semantic version: \\d+\\.\\d+\\.\\d+"
+  ]
+}

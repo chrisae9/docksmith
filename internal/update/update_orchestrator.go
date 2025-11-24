@@ -136,9 +136,12 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 		NewVersion:    targetVersion,
 	}
 
-	if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
-		o.releaseStackLock(stackName)
-		return "", fmt.Errorf("failed to save operation: %w", err)
+	// Only save to storage if available
+	if o.storage != nil {
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			o.releaseStackLock(stackName)
+			return "", fmt.Errorf("failed to save operation: %w", err)
+		}
 	}
 
 	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName)
@@ -148,6 +151,10 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 
 // UpdateBatchContainers initiates batch updates for multiple containers.
 func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containerNames []string, targetVersions map[string]string) (string, error) {
+	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch")
+}
+
+func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, containerNames []string, targetVersions map[string]string, operationType string) (string, error) {
 	operationID := uuid.New().String()
 
 	containers, err := o.dockerClient.ListContainers(ctx)
@@ -195,7 +202,7 @@ func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containe
 	}
 
 	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "batch"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, containerNames, operationType); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		return operationID, nil
@@ -204,25 +211,47 @@ func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containe
 	op := storage.UpdateOperation{
 		OperationID:   operationID,
 		StackName:     stackName,
-		OperationType: "batch",
+		OperationType: operationType,
 		Status:        "validating",
 	}
 
-	// For single-container batches, populate container details like a single update
-	if len(orderedContainers) == 1 {
-		container := orderedContainers[0]
+	// Build batch details for all containers
+	batchDetails := make([]storage.BatchContainerDetail, 0, len(orderedContainers))
+	for _, container := range orderedContainers {
 		currentVersion := ""
 		if parts := strings.Split(container.Image, ":"); len(parts) >= 2 {
 			currentVersion = parts[len(parts)-1]
 		}
-		op.ContainerID = container.ID
-		op.ContainerName = container.Name
-		op.OldVersion = currentVersion
+
+		targetVersion := ""
 		if targetVersions != nil {
 			if targetVer, ok := targetVersions[container.Name]; ok {
-				op.NewVersion = targetVer
+				targetVersion = targetVer
 			}
 		}
+
+		// Get stack name from container labels
+		containerStack := o.stackManager.DetermineStack(ctx, *container)
+
+		batchDetails = append(batchDetails, storage.BatchContainerDetail{
+			ContainerName: container.Name,
+			StackName:     containerStack,
+			OldVersion:    currentVersion,
+			NewVersion:    targetVersion,
+		})
+	}
+	op.BatchDetails = batchDetails
+
+	// For single-container batches, also populate top-level fields for backwards compatibility
+	if len(orderedContainers) == 1 {
+		container := orderedContainers[0]
+		op.ContainerID = container.ID
+		op.ContainerName = container.Name
+		op.OldVersion = batchDetails[0].OldVersion
+		op.NewVersion = batchDetails[0].NewVersion
+	} else {
+		// For multi-container batches, use a summary in container_name
+		op.ContainerName = fmt.Sprintf("%d containers", len(orderedContainers))
 	}
 
 	if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
@@ -323,22 +352,36 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		return
 	}
 
-	log.Printf("UPDATE: Permissions OK for operation=%s, creating backup", operationID)
-	o.publishProgress(operationID, container.Name, stackName, "backup", 10, "Creating compose file backup")
+	log.Printf("UPDATE: Permissions OK for operation=%s", operationID)
 
-	backupPath, err := o.backupComposeFile(ctx, operationID, container)
-	if err != nil {
-		o.failOperation(ctx, operationID, "backup", fmt.Sprintf("Backup failed: %v", err))
-		return
+	// Run pre-update check if configured
+	if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+		log.Printf("UPDATE: Running pre-update check for container %s: %s", container.Name, scriptPath)
+
+		// Translate path if needed
+		translatedPath := scriptPath
+		if o.pathTranslator != nil {
+			translatedPath = o.pathTranslator.TranslateToHost(scriptPath)
+		}
+
+		if err := runPreUpdateCheck(ctx, container, translatedPath); err != nil {
+			o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Pre-update check failed: %v", err))
+			return
+		}
+		log.Printf("UPDATE: Pre-update check passed for container %s", container.Name)
 	}
-	log.Printf("UPDATE: Backup created for operation=%s at %s", operationID, backupPath)
 
 	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
 
+	// Set started_at timestamp and old version before beginning actual update work
+	now := time.Now()
 	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
-	if found && op.OldVersion == "" {
-		// Only set OldVersion if not already set (e.g., by batch update initialization)
-		op.OldVersion = currentVersion
+	if found {
+		if op.OldVersion == "" {
+			// Only set OldVersion if not already set (e.g., by batch update initialization)
+			op.OldVersion = currentVersion
+		}
+		op.StartedAt = &now
 		o.storage.SaveUpdateOperation(ctx, op)
 	}
 
@@ -383,26 +426,14 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	// Build the full image reference with new version
 	newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
 
-	_, err = o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, newImageRef)
-	if err != nil {
+	if _, err := o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, newImageRef); err != nil {
 		o.failOperation(ctx, operationID, "recreating", fmt.Sprintf("Recreation failed: %v", err))
-		o.attemptRollback(ctx, operationID, container, backupPath)
 		return
 	}
 
 	o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Verifying health")
 
 	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
-		shouldRollback, _ := o.shouldAutoRollback(ctx, container.Name)
-		if shouldRollback {
-			o.publishProgress(operationID, container.Name, stackName, "rolling_back", 85, "Health check failed, rolling back")
-			if err := o.rollbackUpdate(ctx, operationID, container, backupPath); err != nil {
-				o.failOperation(ctx, operationID, "failed", fmt.Sprintf("Rollback failed: %v", err))
-				return
-			}
-			o.failOperation(ctx, operationID, "failed", "Health check failed, rolled back successfully")
-			return
-		}
 		o.failOperation(ctx, operationID, "health_check", fmt.Sprintf("Health check failed: %v", err))
 		return
 	}
@@ -410,15 +441,15 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	log.Printf("UPDATE: Health check passed for operation=%s, marking complete", operationID)
 	o.publishProgress(operationID, container.Name, stackName, "complete", 100, "Update completed successfully")
 
-	now := time.Now()
-	op, found, _ = o.storage.GetUpdateOperation(ctx, operationID)
-	if found {
-		op.Status = "complete"
-		op.CompletedAt = &now
-		o.storage.SaveUpdateOperation(ctx, op)
+	completedNow := time.Now()
+	completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if completedFound {
+		completedOp.Status = "complete"
+		completedOp.CompletedAt = &completedNow
+		o.storage.SaveUpdateOperation(ctx, completedOp)
 	}
 
-	// Restart dependent containers (those with docksmith.restart-depends-on label)
+	// Restart dependent containers (those with docksmith.restart-after label)
 	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
 		log.Printf("UPDATE: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
 		// Don't fail the update if dependent restarts fail
@@ -467,25 +498,25 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		return
 	}
 
-	// Phase 1: Backup and update all compose files first (10-30%)
-	o.publishProgress(operationID, "", stackName, "backup", 10, fmt.Sprintf("Backing up %d compose files", len(updateContainers)))
+	// Set started_at timestamp before beginning actual update work
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
 
-	backupPaths := make(map[string]string)
+	// Phase 1: Update all compose files first (10-30%)
+	o.publishProgress(operationID, "", stackName, "updating_compose", 10, fmt.Sprintf("Updating %d compose files", len(updateContainers)))
+
 	for i, container := range updateContainers {
 		progress := 10 + (i * 20 / len(updateContainers))
-		o.publishProgress(operationID, container.Name, stackName, "backup", progress, fmt.Sprintf("Backing up %s", container.Name))
-
-		backupPath, err := o.backupComposeFile(ctx, operationID, container)
-		if err != nil {
-			o.failOperation(ctx, operationID, "backup", fmt.Sprintf("Failed to backup %s: %v", container.Name, err))
-			return
-		}
-		backupPaths[container.Name] = backupPath
+		o.publishProgress(operationID, container.Name, stackName, "updating_compose", progress, fmt.Sprintf("Updating compose for %s", container.Name))
 
 		// Update compose file with new version
-		if backupPath != "" {
-			targetVersion := targetVersions[container.Name]
-			composeFilePath := o.getComposeFilePath(container)
+		targetVersion := targetVersions[container.Name]
+		composeFilePath := o.getComposeFilePath(container)
+		if composeFilePath != "" {
 			resolvedPath, err := o.resolveComposeFile(composeFilePath)
 			if err != nil {
 				o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Failed to resolve compose for %s: %v", container.Name, err))
@@ -639,13 +670,13 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		status = "failed"
 	}
 
-	now := time.Now()
-	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
-	if found {
-		op.Status = status
-		op.CompletedAt = &now
-		op.ErrorMessage = message
-		o.storage.SaveUpdateOperation(ctx, op)
+	completedNow := time.Now()
+	completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if completedFound {
+		completedOp.Status = status
+		completedOp.CompletedAt = &completedNow
+		completedOp.ErrorMessage = message
+		o.storage.SaveUpdateOperation(ctx, completedOp)
 	}
 
 	o.publishProgress(operationID, "", stackName, status, 100, message)
@@ -726,58 +757,61 @@ func (o *UpdateOrchestrator) backupComposeFile(ctx context.Context, operationID 
 }
 
 // updateComposeFile updates the image tag in the compose file.
+// Handles include-based compose setups automatically.
 func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFilePath string, container *docker.Container, newTag string) error {
-	data, err := os.ReadFile(composeFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to read compose file: %w", err)
-	}
-
-	var compose map[string]interface{}
-	if err := yaml.Unmarshal(data, &compose); err != nil {
-		return fmt.Errorf("failed to parse compose file: %w", err)
-	}
-
-	services, ok := compose["services"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("invalid compose file: no services section")
-	}
-
 	serviceName := container.Labels["com.docker.compose.service"]
 	if serviceName == "" {
 		return fmt.Errorf("container has no service label")
 	}
 
-	service, ok := services[serviceName].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("service %s not found in compose file", serviceName)
+	// Load compose file (handles include-based setups)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, serviceName)
+	if err != nil {
+		return fmt.Errorf("failed to load compose file: %w", err)
 	}
 
-	imageStr, ok := service["image"].(string)
-	if !ok {
+	// Find the service
+	service, err := composeFile.FindServiceByContainerName(serviceName)
+	if err != nil {
+		return fmt.Errorf("failed to find service %s: %w", serviceName, err)
+	}
+
+	// Update the image tag in the service node
+	if service.Node.Kind != yaml.MappingNode {
+		return fmt.Errorf("service node is not a mapping")
+	}
+
+	// Find and update the image field
+	imageUpdated := false
+	for i := 0; i < len(service.Node.Content); i += 2 {
+		keyNode := service.Node.Content[i]
+		valueNode := service.Node.Content[i+1]
+
+		if keyNode.Value == "image" {
+			// Parse current image
+			currentImage := valueNode.Value
+			parts := strings.Split(currentImage, ":")
+
+			// Update tag
+			if len(parts) > 1 {
+				parts[len(parts)-1] = newTag
+			} else {
+				parts = append(parts, newTag)
+			}
+
+			valueNode.Value = strings.Join(parts, ":")
+			imageUpdated = true
+			break
+		}
+	}
+
+	if !imageUpdated {
 		return fmt.Errorf("service %s has no image field", serviceName)
 	}
 
-	parts := strings.Split(imageStr, ":")
-	if len(parts) > 1 {
-		parts[len(parts)-1] = newTag
-	} else {
-		parts = append(parts, newTag)
-	}
-	service["image"] = strings.Join(parts, ":")
-
-	modifiedData, err := yaml.Marshal(compose)
-	if err != nil {
-		return fmt.Errorf("failed to marshal compose file: %w", err)
-	}
-
-	tempFile := composeFilePath + ".tmp"
-	if err := os.WriteFile(tempFile, modifiedData, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-
-	if err := os.Rename(tempFile, composeFilePath); err != nil {
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to rename temp file: %w", err)
+	// Save the compose file (uses the actual file path from composeFile.Path)
+	if err := composeFile.Save(); err != nil {
+		return fmt.Errorf("failed to save compose file: %w", err)
 	}
 
 	return nil
@@ -837,7 +871,7 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 
 // restartContainerWithDependents recreates a container using docker compose.
 // Note: This does NOT automatically restart dependent containers.
-// Explicit restart dependencies should use the docksmith.restart-depends-on label.
+// Explicit restart dependencies should use the docksmith.restart-after label.
 func (o *UpdateOrchestrator) restartContainerWithDependents(ctx context.Context, operationID, containerName, stackName, newImageRef string) ([]string, error) {
 	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
@@ -892,48 +926,59 @@ func (o *UpdateOrchestrator) restartContainerWithSDK(ctx context.Context, operat
 	return nil, fmt.Errorf("SDK-based recreation not supported - container must be managed by docker compose")
 }
 
-// restartDependentContainers finds and restarts containers that depend on the given container
-// via the docksmith.restart-depends-on label
+// restartDependentContainers finds and restarts containers that have the given container
+// listed in their docksmith.restart-after label
 func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string) error {
-	// Get docker service to find dependents
+	// Get docker service
 	dockerService, err := docker.NewService()
 	if err != nil {
 		return fmt.Errorf("failed to create docker service: %w", err)
 	}
 	defer dockerService.Close()
 
-	// Find containers that have this container in their restart-depends-on label
-	dependents, err := dockerService.FindDependentContainers(ctx, containerName, scripts.RestartDependsOnLabel)
-	if err != nil {
-		return fmt.Errorf("failed to find dependent containers: %w", err)
-	}
-
-	if len(dependents) == 0 {
-		log.Printf("UPDATE: No dependent containers found for %s", containerName)
-		return nil
-	}
-
-	log.Printf("UPDATE: Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
-
-	// Get full container info for pre-update checks
+	// Get all containers to find those that depend on the restarted container
 	containers, err := dockerService.ListContainers(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
 
+	// Find all containers that have containerName in their restart-after label
+	var dependents []string
+	for _, c := range containers {
+		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+			// Parse comma-separated list of dependencies
+			dependencies := strings.Split(restartAfter, ",")
+			for _, dep := range dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == containerName {
+					dependents = append(dependents, c.Name)
+					break
+				}
+			}
+		}
+	}
+
+	if len(dependents) == 0 {
+		log.Printf("UPDATE: No containers depend on %s", containerName)
+		return nil
+	}
+
+	log.Printf("UPDATE: Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
+
+	// Create container map for lookups
 	containerMap := docker.CreateContainerMap(containers)
 
-	// Restart each dependent
-	for _, dep := range dependents {
-		depContainer := containerMap[dep]
+	// Restart each dependent container
+	for _, depName := range dependents {
+		depContainer := containerMap[depName]
 		if depContainer == nil {
-			log.Printf("UPDATE: Dependent container %s not found, skipping", dep)
+			log.Printf("UPDATE: Dependent container %s not found, skipping", depName)
 			continue
 		}
 
 		// Run pre-update check if configured
 		if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-			log.Printf("UPDATE: Running pre-update check for dependent %s", dep)
+			log.Printf("UPDATE: Running pre-update check for dependent %s", depName)
 
 			// Translate path if needed
 			translatedPath := scriptPath
@@ -942,21 +987,27 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 			}
 
 			if err := runPreUpdateCheck(ctx, depContainer, translatedPath); err != nil {
-				log.Printf("UPDATE: Pre-update check failed for dependent %s: %v (skipping restart)", dep, err)
+				log.Printf("UPDATE: Pre-update check failed for dependent %s: %v (skipping restart)", depName, err)
 				continue
 			}
-			log.Printf("UPDATE: Pre-update check passed for dependent %s", dep)
+			log.Printf("UPDATE: Pre-update check passed for dependent %s", depName)
 		}
 
 		// Restart the dependent container
-		log.Printf("UPDATE: Restarting dependent container: %s", dep)
-		err := dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{})
+		log.Printf("UPDATE: Restarting dependent container: %s", depName)
+		err := dockerService.GetClient().ContainerRestart(ctx, depName, container.StopOptions{})
 		if err != nil {
-			log.Printf("UPDATE: Failed to restart dependent %s: %v", dep, err)
+			log.Printf("UPDATE: Failed to restart dependent %s: %v", depName, err)
 			continue
 		}
 
-		log.Printf("UPDATE: Successfully restarted dependent container: %s", dep)
+		log.Printf("UPDATE: Successfully restarted dependent container: %s", depName)
+
+		// Recursively restart this container's dependents (cascade the restart chain)
+		if err := o.restartDependentContainers(ctx, depName); err != nil {
+			log.Printf("UPDATE: Warning - failed to restart cascaded dependents for %s: %v", depName, err)
+			// Don't fail the parent operation if cascaded restarts fail
+		}
 	}
 
 	return nil
@@ -1172,6 +1223,28 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 		return "", fmt.Errorf("operation not found: %s", originalOperationID)
 	}
 
+	// Check if this is a batch operation
+	if len(origOp.BatchDetails) > 0 {
+		log.Printf("ROLLBACK: Rolling back batch operation %s with %d containers", originalOperationID, len(origOp.BatchDetails))
+
+		// Build target versions map from batch details (roll back to old versions)
+		targetVersions := make(map[string]string)
+		containerNames := make([]string, 0, len(origOp.BatchDetails))
+
+		for _, detail := range origOp.BatchDetails {
+			if detail.OldVersion == "" {
+				return "", fmt.Errorf("no old version found for container %s", detail.ContainerName)
+			}
+			targetVersions[detail.ContainerName] = detail.OldVersion
+			containerNames = append(containerNames, detail.ContainerName)
+			log.Printf("ROLLBACK: %s from %s to %s", detail.ContainerName, detail.NewVersion, detail.OldVersion)
+		}
+
+		// Use updateBatchContainersInternal to roll back all containers with operation_type = "rollback"
+		return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "rollback")
+	}
+
+	// Single container rollback (existing logic)
 	// Find the container
 	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
@@ -1299,7 +1372,7 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 95, "Health check passed")
 	}
 
-	// Restart dependent containers (those with docksmith.restart-depends-on label)
+	// Restart dependent containers (those with docksmith.restart-after label)
 	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
 		log.Printf("ROLLBACK: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
 		// Don't fail the rollback if dependent restarts fail
@@ -1489,6 +1562,12 @@ func (o *UpdateOrchestrator) queueOperation(ctx context.Context, operationID, st
 
 // processQueue processes queued operations in the background.
 func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
+	// Skip queue processing if storage is unavailable
+	if o.storage == nil {
+		log.Printf("QUEUE: Storage unavailable, queue processing disabled")
+		return
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 

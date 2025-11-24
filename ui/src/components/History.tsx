@@ -470,7 +470,24 @@ export function History({ onBack: _onBack }: HistoryProps) {
                     )}
                   </div>
 
-                  {op.error_message && (
+                  {/* Batch Details - show individual containers and version transitions */}
+                  {op.batch_details && op.batch_details.length > 0 && (
+                    <div className="op-batch-details">
+                      <div className="batch-details-header">Containers ({op.batch_details.length})</div>
+                      <div className="batch-details-list">
+                        {op.batch_details.map((detail, idx) => (
+                          <div key={idx} className="batch-detail-item">
+                            <span className="batch-container-name">{detail.container_name}</span>
+                            <span className="batch-version-change">
+                              {detail.old_version} → {detail.new_version}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {op.error_message && op.status === 'failed' && (
                     <div className="op-error">
                       <span className="error-label">Error:</span>
                       <span className="error-msg">{op.error_message}</span>

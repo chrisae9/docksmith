@@ -7,6 +7,7 @@ import { useElapsedTime } from '../hooks/useElapsedTime';
 import { useAutoScrollLogs } from '../hooks/useAutoScrollLogs';
 import { useProgressEventLogger } from '../hooks/useProgressEventLogger';
 import { useAutoRefreshOnClose } from '../hooks/useAutoRefreshOnClose';
+import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
 import { ContainerDetailModal } from './ContainerDetailModal';
 import { ProgressModal } from './ProgressModal';
 import type { ProgressModalStatCard, ProgressModalContainer } from './ProgressModal';
@@ -60,46 +61,55 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [pullDistance, setPullDistance] = useState(0);
   const [isPulling, setIsPulling] = useState(false);
   const pullStartY = useRef<number | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   // Connect to SSE for real-time progress (always connected for check progress)
   const { lastEvent: progressEvent, checkProgress, clearEvents, containerUpdated } = useEventStream(true);
 
   // Calculate time ago from ISO timestamp
   // Fetch cached status (for initial load)
+  // Does NOT show loading state to avoid screen flashing when switching tabs
   const fetchCachedStatus = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const response = await getContainerStatus();
       if (response.success && response.data) {
         setResult(response.data);
+        setError(null);
       } else {
-        setError(response.error || 'Failed to fetch data');
+        // Only set error if we don't have existing data
+        if (!result) {
+          setError(response.error || 'Failed to fetch data');
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
+      // Only set error if we don't have existing data
+      if (!result) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
+    }
+    // If this is truly the first load (no data), end loading state
+    if (!result) {
       setLoading(false);
     }
   };
 
-  // Background refresh - triggers background check without clearing cache
+  // Background refresh - triggers background check using cached registry data
+  // Does NOT show loading state to avoid screen flashing
   const backgroundRefresh = async () => {
-    setLoading(true);
-    setError(null);
     try {
+      // Trigger background check (uses cached registry data, respects CACHE_TTL)
       await fetch('/api/trigger-check', { method: 'POST' });
       await new Promise(resolve => setTimeout(resolve, 500));
       const response = await getContainerStatus();
       if (response.success && response.data) {
         setResult(response.data);
-      } else {
-        setError(response.error || 'Failed to fetch data');
+        // Clear any previous errors on successful refresh
+        setError(null);
       }
+      // Don't set error on background refresh failures to avoid disrupting UI
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
+      // Silently fail - background refresh shouldn't disrupt the UI
+      console.error('Background refresh failed:', err);
     }
   };
 
@@ -109,6 +119,15 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const logEntriesRef = useAutoScrollLogs(updateProgress?.logs);
   useProgressEventLogger(progressEvent, updateProgress, setUpdateProgress);
   useAutoRefreshOnClose(!!updateProgress, backgroundRefresh);
+
+  // Periodic background refresh (every 60 seconds)
+  // Skip when modals are open or already loading
+  usePeriodicRefresh(
+    backgroundRefresh,
+    60000, // 60 seconds
+    true, // enabled
+    () => !!expandedContainer || !!updateProgress || loading
+  );
 
   // Cache refresh - clears cache and triggers fresh registry queries
   const cacheRefresh = async () => {
@@ -577,6 +596,39 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     fetchCachedStatus();
   }, []);
 
+  // Trigger background refresh on browser page refresh or focus
+  useEffect(() => {
+    // Trigger background refresh when component mounts (page reload)
+    // Use a small delay to avoid race with initial fetchCachedStatus
+    const mountTimer = setTimeout(() => {
+      backgroundRefresh();
+    }, 100);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Page became visible (tab switched back or browser restored)
+        backgroundRefresh();
+      }
+    };
+
+    const handleFocus = () => {
+      // Window gained focus (user clicked back into browser)
+      backgroundRefresh();
+    };
+
+    // Listen for visibility changes (tab switching, minimize/restore)
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Listen for window focus (clicking back into the browser)
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearTimeout(mountTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
   // Auto-refresh when container.updated event is received
   // Only refresh if not viewing a modal to avoid screen flashing
   useEffect(() => {
@@ -743,8 +795,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
   // Pull-to-refresh handlers
   const handleTouchStart = (e: React.TouchEvent) => {
-    // Only allow pull-to-refresh when at the top of the page
-    if (window.scrollY === 0 && !loading) {
+    // Only allow pull-to-refresh when scrolled to the top of the container
+    const scrollTop = mainRef.current?.scrollTop ?? 0;
+    if (scrollTop === 0 && !loading) {
       pullStartY.current = e.touches[0].clientY;
       setIsPulling(true);
     }
@@ -758,14 +811,18 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
     // Only track downward pulls
     if (distance > 0) {
-      setPullDistance(Math.min(distance, 100)); // Cap at 100px
+      setPullDistance(Math.min(distance, 150)); // Cap at 150px for two-level refresh
     }
   };
 
   const handleTouchEnd = () => {
-    if (pullDistance > 60) {
-      // Trigger refresh if pulled more than 60px
+    // Two-level threshold:
+    // - 70-119px: Background refresh (blue)
+    // - 120px+: Cache refresh (orange)
+    if (pullDistance >= 120) {
       cacheRefresh();
+    } else if (pullDistance >= 70) {
+      backgroundRefresh();
     }
 
     // Reset pull state
@@ -782,33 +839,55 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       onTouchEnd={handleTouchEnd}
     >
       {/* Pull-to-refresh indicator */}
-      {pullDistance > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            height: `${pullDistance}px`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'var(--color-bg-secondary)',
-            transition: isPulling ? 'none' : 'height 0.2s ease-out',
-            zIndex: 1000,
-          }}
-        >
-          <i
-            className="fa-solid fa-rotate"
+      {pullDistance > 0 && (() => {
+        const isBackgroundLevel = pullDistance >= 70 && pullDistance < 120;
+        const isCacheLevel = pullDistance >= 120;
+        const backgroundColor = isCacheLevel ? '#ff8c42' : isBackgroundLevel ? '#4a9eff' : '#2c2c2c';
+        const iconColor = isCacheLevel || isBackgroundLevel ? '#ffffff' : '#888888';
+        const label = isCacheLevel ? 'Cache Refresh' : isBackgroundLevel ? 'Background Refresh' : 'Pull to refresh';
+
+        return (
+          <div
             style={{
-              fontSize: '1.5rem',
-              color: 'var(--color-text-secondary)',
-              transform: `rotate(${pullDistance * 3.6}deg)`,
-              opacity: pullDistance / 100,
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: `${pullDistance}px`,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: backgroundColor,
+              transition: isPulling ? 'background 0.1s ease-out' : 'height 0.2s ease-out, background 0.1s ease-out',
+              zIndex: 1000,
             }}
-          ></i>
-        </div>
-      )}
+          >
+            <i
+              className="fa-solid fa-rotate"
+              style={{
+                fontSize: '1.5rem',
+                color: iconColor,
+                transform: `rotate(${pullDistance * 3.6}deg)`,
+                opacity: Math.min(pullDistance / 70, 1),
+              }}
+            ></i>
+            {pullDistance >= 40 && (
+              <div
+                style={{
+                  marginTop: '8px',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  color: iconColor,
+                  opacity: Math.min(pullDistance / 70, 1),
+                }}
+              >
+                {label}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <header>
         <div className="header-top">
@@ -890,7 +969,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         </div>
       </header>
 
-      <main>
+      <main ref={mainRef}>
         {(() => {
           // Check if there are any containers after filtering
           const filteredContainerCount = result.containers.filter(filterContainer).length;

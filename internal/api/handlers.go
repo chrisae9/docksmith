@@ -32,6 +32,8 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if s.backgroundChecker != nil {
 		// Clear cache to force fresh registry queries
 		s.discoveryOrchestrator.ClearCache()
+		// Mark that cache was cleared so timestamp gets updated
+		s.backgroundChecker.MarkCacheCleared()
 		s.backgroundChecker.TriggerCheck()
 		// Wait a moment for the check to start
 		time.Sleep(100 * time.Millisecond)

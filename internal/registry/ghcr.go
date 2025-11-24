@@ -48,6 +48,27 @@ func NewGHCRClient(githubPAT string) *GHCRClient {
 	}
 }
 
+// getMaxPages determines optimal page limit based on repository type
+// Well-known orgs tend to have many tags, user repos have fewer
+func (c *GHCRClient) getMaxPages(repository string, isV2API bool) int {
+	// Check for well-known organizations with many tags
+	wellKnownOrgs := []string{"linuxserver/", "homeassistant/", "home-assistant/"}
+	for _, org := range wellKnownOrgs {
+		if strings.HasPrefix(repository, org) {
+			if isV2API {
+				return 5 // V2 API can handle more
+			}
+			return 3 // Packages API
+		}
+	}
+
+	// User repositories - typically fewer tags
+	if isV2API {
+		return 3 // 300 tags for V2
+	}
+	return 2 // 200 versions for Packages API
+}
+
 // dockerConfigAuth represents auth entry in Docker config
 type dockerConfigAuth struct {
 	Auth string `json:"auth"`
@@ -98,11 +119,6 @@ func readGHCRCredsFromDockerConfig() string {
 	return parts[1]
 }
 
-// ghcrManifest represents the manifest list response.
-type ghcrManifest struct {
-	Tags []string `json:"tags"`
-}
-
 // ghcrTagList represents the tag list response.
 type ghcrTagList struct {
 	Name string   `json:"name"`
@@ -135,7 +151,8 @@ func (c *GHCRClient) ListTags(ctx context.Context, repository string) ([]string,
 
 	for _, baseURL := range urls {
 		page := 1
-		maxPages := 3 // Limit to 3 pages (300 versions) for performance
+		// Adaptive maxPages based on repository type (reduces API calls)
+		maxPages := c.getMaxPages(repository, false) // false = Packages API
 
 		for page <= maxPages {
 			url := fmt.Sprintf("%s&page=%d", baseURL, page)
@@ -205,9 +222,18 @@ func (c *GHCRClient) ListTags(ctx context.Context, repository string) ([]string,
 		}
 	}
 
-	// If GitHub Packages API failed, fallback to registry V2 API
+	// Always try V2 API as fallback to get complete tag list
+	// GitHub Packages API may not include older versions that were cleaned up
 	if len(allTags) == 0 {
 		return c.listTagsV2(ctx, repository)
+	}
+
+	// Also try V2 API to supplement GitHub Packages results
+	// This ensures we don't miss tags that exist in registry but not in Packages API
+	v2Tags, err := c.listTagsV2(ctx, repository)
+	if err == nil && len(v2Tags) > len(allTags) {
+		// V2 API found more tags, use that instead
+		return v2Tags, nil
 	}
 
 	return allTags, nil
@@ -223,9 +249,10 @@ func (c *GHCRClient) listTagsV2(ctx context.Context, repository string) ([]strin
 
 	var allTags []string
 	lastTag := ""
-	maxPages := 5 // Limit to 5 pages (500 tags)
+	// Adaptive maxPages based on repository type
+	maxPages := c.getMaxPages(repository, true) // true = V2 API
 
-	for page := 0; page < maxPages; page++ {
+	for range maxPages {
 		url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list?n=100", repository)
 		if lastTag != "" {
 			url += "&last=" + lastTag

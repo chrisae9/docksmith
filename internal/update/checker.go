@@ -208,8 +208,8 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 		return false, ""
 	}
 
-	// Load and parse the compose file
-	composeData, err := compose.LoadComposeFile(composePath)
+	// Load and parse the compose file (handles include-based setups)
+	composeData, err := compose.LoadComposeFileOrIncluded(composePath, container.Name)
 	if err != nil {
 		// If we can't read the compose file, we can't verify scenario 2 (file content mismatch)
 		// This is OK - scenario 1 (lost tag) already works above

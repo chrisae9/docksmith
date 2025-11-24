@@ -1,0 +1,58 @@
+{
+  "name": "alpine",
+  "description": "Alpine Linux with mixed date-based and semantic versioning",
+  "docker_hub_url": "https://hub.docker.com/_/alpine",
+  "test_cases": [
+    {
+      "image": "alpine",
+      "current_tag": "20240115",
+      "available_tags": [
+        "20240115",
+        "20240329",
+        "20241001",
+        "20250108",
+        "edge",
+        "latest"
+      ],
+      "expected_latest": "20250108",
+      "expected_version": "2025.01.08",
+      "notes": "YYYYMMDD format should be parsed as date-based version"
+    },
+    {
+      "image": "alpine",
+      "current_tag": "3.18",
+      "available_tags": [
+        "3.18",
+        "3.18.0",
+        "3.18.4",
+        "3.19",
+        "3.19.0",
+        "3.19.1",
+        "edge"
+      ],
+      "expected_latest": "3.19.1",
+      "expected_version": "3.19.1",
+      "notes": "Semantic versions should be compared separately from date-based"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Mix of date-based and semantic versions",
+      "example": "20240329 vs 3.19.0",
+      "expected_behavior": "These are different versioning schemes and should not be compared",
+      "notes": "User should specify suffix or version pattern to disambiguate"
+    },
+    {
+      "issue": "Edge tag (rolling release)",
+      "example": "edge",
+      "expected_behavior": "Treated as meta tag, not a version",
+      "pattern": "^edge$"
+    },
+    {
+      "issue": "Date-based YYYYMMDD format",
+      "example": "20250108",
+      "expected_behavior": "Parse as 2025.01.08 for comparison",
+      "pattern": "^(\\d{4})(\\d{2})(\\d{2})$"
+    }
+  ]
+}

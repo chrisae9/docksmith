@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 )
 
 // DockerHubClient implements the Client interface for Docker Hub.
 type DockerHubClient struct {
-	httpClient *http.Client
+	httpClient  *http.Client
+	rateLimiter *time.Ticker
 }
 
 // NewDockerHubClient creates a new Docker Hub client.
@@ -18,7 +21,29 @@ func NewDockerHubClient() *DockerHubClient {
 		httpClient: &http.Client{
 			Timeout: DefaultHTTPTimeout,
 		},
+		rateLimiter: time.NewTicker(DefaultRateLimitInterval), // 10 requests per second max
 	}
+}
+
+// getMaxPages determines optimal page limit based on repository type
+// Official images (library/*) tend to have many tags, user images have fewer
+func (c *DockerHubClient) getMaxPages(repository string) int {
+	// Official images (library/nginx, library/postgres) - typically 200-500 tags
+	if strings.HasPrefix(repository, "library/") {
+		return 5
+	}
+
+	// Well-known organizations with many tags
+	wellKnownOrgs := []string{"linuxserver/", "bitnami/", "homeassistant/"}
+	for _, org := range wellKnownOrgs {
+		if strings.HasPrefix(repository, org) {
+			return 4 // Slightly fewer than official images
+		}
+	}
+
+	// User repositories - typically < 200 tags
+	// Start conservative to reduce API calls
+	return 2 // 200 tags should be sufficient for most user repos
 }
 
 // dockerHubTagsResponse represents Docker Hub's API response.
@@ -53,8 +78,14 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", repository)
 
 	tags := []string{}
+	// Adaptive maxPages based on repository type (reduces API calls for smaller repos)
+	maxPages := c.getMaxPages(repository)
+	pageCount := 0
 
-	for url != "" {
+	for url != "" && pageCount < maxPages {
+		// Rate limiting
+		<-c.rateLimiter.C
+
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
@@ -81,8 +112,10 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 
 		// Handle pagination
 		url = tagsResp.Next
-		if url != "" && len(tags) >= 100 {
-			// Limit to first 100 tags to avoid excessive requests
+		pageCount++
+
+		// If we got less than 100 results, we've reached the end
+		if len(tagsResp.Results) < 100 {
 			break
 		}
 	}
@@ -131,6 +164,9 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 	// First we need to get a token for the repository
 	tokenURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", repository)
 
+	// Rate limiting for token request
+	<-c.rateLimiter.C
+
 	tokenReq, err := http.NewRequestWithContext(ctx, "GET", tokenURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
@@ -155,6 +191,9 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 
 	// Now fetch the manifest with the token
 	manifestURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", repository, tag)
+
+	// Rate limiting for manifest request
+	<-c.rateLimiter.C
 
 	manifestReq, err := http.NewRequestWithContext(ctx, "HEAD", manifestURL, nil)
 	if err != nil {
@@ -190,8 +229,14 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", repository)
 
 	tagDigests := make(map[string][]string)
+	// Adaptive maxPages based on repository type
+	maxPages := c.getMaxPages(repository)
+	pageCount := 0
 
-	for url != "" {
+	for url != "" && pageCount < maxPages {
+		// Rate limiting
+		<-c.rateLimiter.C
+
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
@@ -234,8 +279,10 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 
 		// Handle pagination
 		url = tagsResp.Next
-		if url != "" && len(tagDigests) >= 100 {
-			// Limit to first 100 tags to avoid excessive requests
+		pageCount++
+
+		// If we got less than 100 results, we've reached the end
+		if len(tagsResp.Results) < 100 {
 			break
 		}
 	}

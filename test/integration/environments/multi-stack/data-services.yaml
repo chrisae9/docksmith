@@ -1,0 +1,12 @@
+services:
+  redis-test:
+    image: redis:7.2
+    container_name: rooday2-redis
+    restart: unless-stopped
+  postgres-test:
+    image: postgres:18.1
+    container_name: rooday2-postgres
+    environment:
+      POSTGRES_PASSWORD: testpass123
+      POSTGRES_DB: testdb
+    restart: unless-stopped

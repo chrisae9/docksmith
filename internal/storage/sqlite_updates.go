@@ -100,18 +100,28 @@ func (s *SQLiteStorage) SaveUpdateOperation(ctx context.Context, op UpdateOperat
 			return fmt.Errorf("failed to serialize dependents affected: %w", err)
 		}
 
+		// Serialize batch details to JSON
+		var batchDetailsJSON []byte
+		if len(op.BatchDetails) > 0 {
+			batchDetailsJSON, err = json.Marshal(op.BatchDetails)
+			if err != nil {
+				log.Printf("Failed to serialize batch details: %v", err)
+				return fmt.Errorf("failed to serialize batch details: %w", err)
+			}
+		}
+
 		query := `
 			INSERT OR REPLACE INTO update_operations
 			(operation_id, container_id, container_name, stack_name, operation_type, status,
 			 old_version, new_version, started_at, completed_at, error_message,
-			 dependents_affected, rollback_occurred, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM update_operations WHERE operation_id = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+			 dependents_affected, rollback_occurred, batch_details, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM update_operations WHERE operation_id = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
 		`
 
 		_, err = s.db.ExecContext(ctx, query,
 			op.OperationID, op.ContainerID, op.ContainerName, op.StackName, op.OperationType, op.Status,
 			op.OldVersion, op.NewVersion, op.StartedAt, op.CompletedAt, op.ErrorMessage,
-			string(dependentsJSON), op.RollbackOccurred, op.OperationID)
+			string(dependentsJSON), op.RollbackOccurred, string(batchDetailsJSON), op.OperationID)
 		if err != nil {
 			log.Printf("Failed to save update operation %s: %v", op.OperationID, err)
 			return fmt.Errorf("failed to save update operation: %w", err)
@@ -129,20 +139,21 @@ func (s *SQLiteStorage) GetUpdateOperation(ctx context.Context, operationID stri
 	query := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
+		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE operation_id = ?
 	`
 
 	var op UpdateOperation
 	var dependentsJSON string
+	var batchDetailsJSON sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, operationID).Scan(
 		&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
 		&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-		&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
+		&dependentsJSON, &op.RollbackOccurred, &batchDetailsJSON, &op.CreatedAt, &op.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -185,6 +196,15 @@ func (s *SQLiteStorage) GetUpdateOperation(ctx context.Context, operationID stri
 		}
 	}
 
+	// Deserialize batch details from JSON
+	if batchDetailsJSON.Valid && batchDetailsJSON.String != "" {
+		err = json.Unmarshal([]byte(batchDetailsJSON.String), &op.BatchDetails)
+		if err != nil {
+			log.Printf("Failed to deserialize batch details for operation %s: %v", operationID, err)
+			return UpdateOperation{}, false, fmt.Errorf("failed to deserialize batch details: %w", err)
+		}
+	}
+
 	log.Printf("Retrieved update operation: %s [%s] (status: %s)", op.OperationID, op.ContainerName, op.Status)
 	return op, true, nil
 }
@@ -196,7 +216,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status 
 	query := appendLimitClause(`
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
+		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE status = ?
 		ORDER BY created_at DESC
@@ -218,7 +238,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByContainer(ctx context.Context, cont
 	query := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
+		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE container_name = ?
 		ORDER BY started_at DESC
@@ -244,7 +264,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByTimeRange(ctx context.Context, star
 	query := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
+		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE started_at >= ? AND started_at <= ?
 		ORDER BY started_at DESC
@@ -299,7 +319,7 @@ func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]U
 	query := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
-		       dependents_affected, rollback_occurred, created_at, updated_at
+		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE status IN ('complete', 'failed')
 		ORDER BY started_at DESC

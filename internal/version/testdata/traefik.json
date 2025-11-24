@@ -1,0 +1,55 @@
+{
+  "name": "traefik",
+  "description": "Traefik with mandatory v-prefix",
+  "docker_hub_url": "https://hub.docker.com/_/traefik",
+  "test_cases": [
+    {
+      "image": "traefik",
+      "current_tag": "v2.10.0",
+      "available_tags": [
+        "v2.10.0",
+        "v2.10.1",
+        "v2.10.7",
+        "v2.11.0",
+        "v3.0.0-beta2",
+        "latest"
+      ],
+      "expected_latest": "v2.11.0",
+      "expected_version": "2.11.0",
+      "notes": "v-prefix should be normalized, beta versions skipped if current is stable"
+    },
+    {
+      "image": "traefik",
+      "current_tag": "v3.0.0-beta1",
+      "available_tags": [
+        "v3.0.0-beta1",
+        "v3.0.0-beta2",
+        "v3.0.0-rc1",
+        "v2.11.0"
+      ],
+      "expected_latest": "v3.0.0-rc1",
+      "expected_version": "3.0.0-rc1",
+      "notes": "If current is prerelease, can upgrade to newer prerelease"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Mandatory v-prefix",
+      "example": "v2.10.0",
+      "expected_behavior": "v should be stripped before comparison",
+      "pattern": "^v(\\d+\\.\\d+\\.\\d+)"
+    },
+    {
+      "issue": "RC versions with dash separator",
+      "example": "v3.0.0-rc1",
+      "expected_behavior": "Recognized as prerelease, rc1 < rc2 < release",
+      "pattern": "^v?(\\d+\\.\\d+\\.\\d+)-(rc\\d+)"
+    },
+    {
+      "issue": "Beta vs RC vs Release precedence",
+      "example": "beta1 < beta2 < rc1 < rc2 < release",
+      "expected_behavior": "Standard prerelease ordering",
+      "notes": "alpha < beta < rc < (no prerelease)"
+    }
+  ]
+}

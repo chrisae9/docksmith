@@ -1,0 +1,39 @@
+{
+  "name": "qmcgaw/gluetun",
+  "description": "VPN client with rolling release model (latest-only)",
+  "docker_hub_url": "https://hub.docker.com/r/qmcgaw/gluetun",
+  "test_cases": [
+    {
+      "image": "qmcgaw/gluetun",
+      "current_tag": "latest",
+      "available_tags": [
+        "latest",
+        "v3.35.0",
+        "v3.34.0",
+        "v3.33.0"
+      ],
+      "expected_latest": "latest",
+      "expected_version": "digest",
+      "notes": "Should use digest comparison, not semantic versioning. Old v3.x.x tags are abandoned."
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Abandoned semantic versioning",
+      "example": "v3.35.0 (last semver tag, no longer updated)",
+      "expected_behavior": "Use digest-only comparison for :latest tag",
+      "requires_override": true
+    },
+    {
+      "issue": "Rolling release model",
+      "example": ":latest is the only actively maintained tag",
+      "expected_behavior": "Require docksmith.allow-latest=true label",
+      "requires_override": true
+    }
+  ],
+  "override_config": {
+    "pattern": "digest-only",
+    "reason": "Maintainer abandoned semantic versioning in favor of :latest",
+    "recommended_label": "docksmith.allow-latest=true"
+  }
+}

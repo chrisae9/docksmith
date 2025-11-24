@@ -8,6 +8,7 @@ import (
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
+	"github.com/chis/docksmith/internal/storage"
 )
 
 // BackgroundChecker runs container checks on a configurable interval
@@ -15,6 +16,7 @@ type BackgroundChecker struct {
 	orchestrator  *Orchestrator
 	dockerClient  docker.Client
 	eventBus      *events.Bus
+	storage       storage.Storage
 	interval      time.Duration
 	cache         *CheckResultCache
 	stopChan      chan struct{}
@@ -26,21 +28,37 @@ type BackgroundChecker struct {
 type CheckResultCache struct {
 	mu                 sync.RWMutex
 	result             *DiscoveryResult
-	lastCheck          time.Time // When cache was last populated (registry query)
+	lastCacheRefresh   time.Time // When cache was last cleared (cache refresh)
 	lastBackgroundRun  time.Time // When background check last ran
 	checking           bool
+	cacheCleared       bool      // Flag to track if cache was recently cleared
 }
 
 // NewBackgroundChecker creates a new background checker
-func NewBackgroundChecker(orchestrator *Orchestrator, dockerClient docker.Client, eventBus *events.Bus, interval time.Duration) *BackgroundChecker {
+func NewBackgroundChecker(orchestrator *Orchestrator, dockerClient docker.Client, eventBus *events.Bus, storage storage.Storage, interval time.Duration) *BackgroundChecker {
+	// Try to load last_cache_refresh from database
+	var lastCacheRefresh time.Time
+	if storage != nil {
+		ctx := context.Background()
+		if timestampStr, found, err := storage.GetConfig(ctx, "last_cache_refresh"); err == nil && found {
+			if parsed, err := time.Parse(time.RFC3339, timestampStr); err == nil {
+				lastCacheRefresh = parsed
+				log.Printf("BACKGROUND_CHECKER: Loaded last_cache_refresh from database: %s", timestampStr)
+			}
+		}
+	}
+
 	return &BackgroundChecker{
 		orchestrator: orchestrator,
 		dockerClient: dockerClient,
 		eventBus:     eventBus,
+		storage:      storage,
 		interval:     interval,
 		cache: &CheckResultCache{
-			result:    nil,
-			lastCheck: time.Time{},
+			result:            nil,
+			lastCacheRefresh:  lastCacheRefresh,
+			lastBackgroundRun: time.Time{},
+			cacheCleared:      false,
 		},
 		stopChan: make(chan struct{}),
 	}
@@ -123,9 +141,23 @@ func (bc *BackgroundChecker) runCheck() {
 	if err != nil {
 		log.Printf("BACKGROUND_CHECKER: Check failed: %v", err)
 		// Still update cache with empty result to show we tried
+		now := time.Now()
 		bc.cache.mu.Lock()
 		bc.cache.result = &DiscoveryResult{Containers: []ContainerInfo{}}
-		bc.cache.lastCheck = time.Now()
+		// Only update lastCacheRefresh if cache was cleared
+		if bc.cache.cacheCleared {
+			bc.cache.lastCacheRefresh = now
+			bc.cache.cacheCleared = false
+			// Persist to database
+			if bc.storage != nil {
+				go func() {
+					if err := bc.storage.SetConfig(context.Background(), "last_cache_refresh", now.Format(time.RFC3339)); err != nil {
+						log.Printf("BACKGROUND_CHECKER: Failed to persist last_cache_refresh: %v", err)
+					}
+				}()
+			}
+		}
+		bc.cache.lastBackgroundRun = now
 		bc.cache.mu.Unlock()
 		return
 	}
@@ -134,7 +166,20 @@ func (bc *BackgroundChecker) runCheck() {
 	now := time.Now()
 	bc.cache.mu.Lock()
 	bc.cache.result = result
-	bc.cache.lastCheck = now
+	// Only update lastCacheRefresh if cache was cleared (cache refresh)
+	if bc.cache.cacheCleared {
+		bc.cache.lastCacheRefresh = now
+		bc.cache.cacheCleared = false
+		// Persist to database
+		if bc.storage != nil {
+			go func() {
+				if err := bc.storage.SetConfig(context.Background(), "last_cache_refresh", now.Format(time.RFC3339)); err != nil {
+					log.Printf("BACKGROUND_CHECKER: Failed to persist last_cache_refresh: %v", err)
+				}
+			}()
+		}
+	}
+	// Always update lastBackgroundRun (for both background check and cache refresh)
 	bc.cache.lastBackgroundRun = now
 	bc.cache.mu.Unlock()
 
@@ -160,7 +205,14 @@ func (bc *BackgroundChecker) GetCachedResults() (*DiscoveryResult, time.Time, ti
 	bc.cache.mu.RLock()
 	defer bc.cache.mu.RUnlock()
 
-	return bc.cache.result, bc.cache.lastCheck, bc.cache.lastBackgroundRun, bc.cache.checking
+	return bc.cache.result, bc.cache.lastCacheRefresh, bc.cache.lastBackgroundRun, bc.cache.checking
+}
+
+// MarkCacheCleared marks that the cache was cleared (for cache refresh tracking)
+func (bc *BackgroundChecker) MarkCacheCleared() {
+	bc.cache.mu.Lock()
+	defer bc.cache.mu.Unlock()
+	bc.cache.cacheCleared = true
 }
 
 // TriggerCheck manually triggers a check (for manual refresh)

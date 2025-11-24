@@ -1,0 +1,14 @@
+services:
+  redis-test:
+    image: redis:8.4
+    container_name: rooday-redis
+    restart: unless-stopped
+    labels:
+      - docksmith.pre-update-check=/scripts/check-always-pass.sh
+  postgres-test:
+    image: postgres:18.1
+    container_name: rooday-postgres
+    environment:
+      POSTGRES_PASSWORD: testpass123
+      POSTGRES_DB: testdb
+    restart: unless-stopped

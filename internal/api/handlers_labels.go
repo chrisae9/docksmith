@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
@@ -26,6 +25,7 @@ type SetLabelsRequest struct {
 	Container        string  `json:"container"`
 	Ignore           *bool   `json:"ignore,omitempty"`
 	AllowLatest      *bool   `json:"allow_latest,omitempty"`
+	VersionPinMajor  *bool   `json:"version_pin_major,omitempty"`
 	Script           *string `json:"script,omitempty"`
 	RestartDependsOn *string `json:"restart_depends_on,omitempty"`
 	NoRestart        bool    `json:"no_restart,omitempty"`
@@ -56,6 +56,8 @@ type LabelOperationResult struct {
 
 // handleLabelsGet returns labels for a container
 // GET /api/labels/:container
+// For compose-managed containers, reads from compose file (source of truth).
+// For standalone containers, falls back to container labels.
 func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	containerName := r.PathValue("container")
 
@@ -75,22 +77,68 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 
 	// Extract docksmith labels
 	docksmithLabels := make(map[string]string)
+
+	// Try to read from compose file first (source of truth for compose-managed containers)
+	composeFilePath, hasComposeFile := container.Labels[composeConfigFilesLabel]
+	if hasComposeFile && composeFilePath != "" {
+		// Container is managed by compose - read labels from compose file
+		composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
+		serviceName := container.Labels[composeServiceLabel]
+
+		// Load compose file
+		composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, containerName)
+		if err == nil {
+			// Find service
+			service, err := composeFile.FindServiceByContainerName(serviceName)
+			if err == nil {
+				// Get all labels from service
+				allLabels, err := service.GetAllLabels()
+				if err == nil {
+					// Extract docksmith labels from compose file
+					for labelKey, labelVal := range allLabels {
+						if labelKey == scripts.IgnoreLabel ||
+							labelKey == scripts.AllowLatestLabel ||
+							labelKey == scripts.VersionPinMajorLabel ||
+							labelKey == scripts.PreUpdateCheckLabel ||
+							labelKey == scripts.RestartAfterLabel {
+							docksmithLabels[labelKey] = labelVal
+						}
+					}
+				}
+			}
+		}
+		// If we successfully read from compose file, use those labels
+		if len(docksmithLabels) > 0 {
+			RespondSuccess(w, map[string]any{
+				"container": containerName,
+				"labels":    docksmithLabels,
+				"source":    "compose_file",
+			})
+			return
+		}
+	}
+
+	// Fall back to container labels (for standalone containers or if compose read failed)
 	if val, ok := container.Labels[scripts.IgnoreLabel]; ok {
 		docksmithLabels[scripts.IgnoreLabel] = val
 	}
 	if val, ok := container.Labels[scripts.AllowLatestLabel]; ok {
 		docksmithLabels[scripts.AllowLatestLabel] = val
 	}
+	if val, ok := container.Labels[scripts.VersionPinMajorLabel]; ok {
+		docksmithLabels[scripts.VersionPinMajorLabel] = val
+	}
 	if val, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok {
 		docksmithLabels[scripts.PreUpdateCheckLabel] = val
 	}
-	if val, ok := container.Labels[scripts.RestartDependsOnLabel]; ok {
-		docksmithLabels[scripts.RestartDependsOnLabel] = val
+	if val, ok := container.Labels[scripts.RestartAfterLabel]; ok {
+		docksmithLabels[scripts.RestartAfterLabel] = val
 	}
 
 	RespondSuccess(w, map[string]any{
 		"container": containerName,
 		"labels":    docksmithLabels,
+		"source":    "container_labels",
 	})
 }
 
@@ -108,7 +156,7 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Ignore == nil && req.AllowLatest == nil && req.Script == nil && req.RestartDependsOn == nil {
+	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.Script == nil && req.RestartDependsOn == nil {
 		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
 		return
 	}
@@ -166,33 +214,6 @@ func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 	RespondSuccess(w, result)
 }
 
-// withComposeBackup wraps a compose file operation with automatic backup and restore
-// It creates a backup before the operation, restores on error, and cleans up on success
-func withComposeBackup(composeFilePath string, operation func(backupPath string) error) error {
-	backupPath, err := compose.BackupComposeFile(composeFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to create backup: %w", err)
-	}
-
-	success := false
-	defer func() {
-		if success {
-			// Clean up backup on success
-			_ = os.Remove(backupPath)
-		}
-	}()
-
-	err = operation(backupPath)
-	if err != nil {
-		// Restore from backup on error
-		compose.RestoreFromBackup(composeFilePath, backupPath)
-		return err
-	}
-
-	success = true
-	return nil
-}
-
 // setLabels implements the label setting logic (atomic: compose update + restart)
 func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
 	result := &LabelOperationResult{
@@ -232,28 +253,23 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	}
 
 	// Create backup
-	backupPath, err := compose.BackupComposeFile(composeFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
 	defer func() {
-		// Clean up backup on success
 		if result.Success {
-			_ = os.Remove(backupPath)
 		}
 	}()
 
-	// Load compose file
-	composeFile, err := compose.LoadComposeFile(composeFilePath)
+	// Load compose file (handles include-based setups)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, req.Container)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to load compose file: %w", err)
 	}
 
 	// Find service
 	service, err := composeFile.FindServiceByContainerName(serviceName)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to find service: %w", err)
 	}
 
@@ -262,14 +278,12 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		if *req.Ignore {
 			// Set to true (non-default)
 			if err := service.SetLabel(scripts.IgnoreLabel, "true"); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to set ignore label: %w", err)
 			}
 			result.LabelsModified[scripts.IgnoreLabel] = "true"
 		} else {
 			// Remove label when false (default value)
 			if err := service.RemoveLabel(scripts.IgnoreLabel); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to remove ignore label: %w", err)
 			}
 			result.LabelsModified[scripts.IgnoreLabel] = ""
@@ -280,17 +294,31 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		if *req.AllowLatest {
 			// Set to true (non-default)
 			if err := service.SetLabel(scripts.AllowLatestLabel, "true"); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to set allow-latest label: %w", err)
 			}
 			result.LabelsModified[scripts.AllowLatestLabel] = "true"
 		} else {
 			// Remove label when false (default value)
 			if err := service.RemoveLabel(scripts.AllowLatestLabel); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to remove allow-latest label: %w", err)
 			}
 			result.LabelsModified[scripts.AllowLatestLabel] = ""
+		}
+	}
+
+	if req.VersionPinMajor != nil {
+		if *req.VersionPinMajor {
+			// Set to true (non-default)
+			if err := service.SetLabel(scripts.VersionPinMajorLabel, "true"); err != nil {
+				return nil, fmt.Errorf("failed to set version-pin-major label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionPinMajorLabel] = "true"
+		} else {
+			// Remove label when false (default value)
+			if err := service.RemoveLabel(scripts.VersionPinMajorLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove version-pin-major label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionPinMajorLabel] = ""
 		}
 	}
 
@@ -298,13 +326,11 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		// If script is empty string, remove the label; otherwise set it
 		if *req.Script == "" {
 			if err := service.RemoveLabel(scripts.PreUpdateCheckLabel); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to remove script label: %w", err)
 			}
 			result.LabelsModified[scripts.PreUpdateCheckLabel] = ""
 		} else {
 			if err := service.SetLabel(scripts.PreUpdateCheckLabel, *req.Script); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
 				return nil, fmt.Errorf("failed to set script label: %w", err)
 			}
 			result.LabelsModified[scripts.PreUpdateCheckLabel] = *req.Script
@@ -312,32 +338,28 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	}
 
 	if req.RestartDependsOn != nil {
-		// If restart-depends-on is empty string, remove the label; otherwise set it
+		// If restart-after is empty string, remove the label; otherwise set it
 		if *req.RestartDependsOn == "" {
-			if err := service.RemoveLabel(scripts.RestartDependsOnLabel); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
-				return nil, fmt.Errorf("failed to remove restart-depends-on label: %w", err)
+			if err := service.RemoveLabel(scripts.RestartAfterLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove restart-after label: %w", err)
 			}
-			result.LabelsModified[scripts.RestartDependsOnLabel] = ""
+			result.LabelsModified[scripts.RestartAfterLabel] = ""
 		} else {
-			if err := service.SetLabel(scripts.RestartDependsOnLabel, *req.RestartDependsOn); err != nil {
-				compose.RestoreFromBackup(composeFilePath, backupPath)
-				return nil, fmt.Errorf("failed to set restart-depends-on label: %w", err)
+			if err := service.SetLabel(scripts.RestartAfterLabel, *req.RestartDependsOn); err != nil {
+				return nil, fmt.Errorf("failed to set restart-after label: %w", err)
 			}
-			result.LabelsModified[scripts.RestartDependsOnLabel] = *req.RestartDependsOn
+			result.LabelsModified[scripts.RestartAfterLabel] = *req.RestartDependsOn
 		}
 	}
 
 	// Save compose file
 	if err := composeFile.Save(); err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to save compose file: %w", err)
 	}
 
 	// Restart container to apply labels (unless --no-restart)
 	if !req.NoRestart {
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true
@@ -388,49 +410,41 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	}
 
 	// Create backup
-	backupPath, err := compose.BackupComposeFile(composeFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
 	defer func() {
-		// Clean up backup on success
 		if result.Success {
-			_ = os.Remove(backupPath)
 		}
 	}()
 
-	// Load compose file
-	composeFile, err := compose.LoadComposeFile(composeFilePath)
+	// Load compose file (handles include-based setups)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, req.Container)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to load compose file: %w", err)
 	}
 
 	// Find service
 	service, err := composeFile.FindServiceByContainerName(serviceName)
 	if err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to find service: %w", err)
 	}
 
 	// Remove all specified labels
 	for _, labelName := range req.LabelNames {
 		if err := service.RemoveLabel(labelName); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return nil, fmt.Errorf("failed to remove label %s: %w", labelName, err)
 		}
 	}
 
 	// Save compose file
 	if err := composeFile.Save(); err != nil {
-		compose.RestoreFromBackup(composeFilePath, backupPath)
 		return nil, fmt.Errorf("failed to save compose file: %w", err)
 	}
 
 	// Restart container to apply changes (unless --no-restart)
 	if !req.NoRestart {
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
-			compose.RestoreFromBackup(composeFilePath, backupPath)
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true

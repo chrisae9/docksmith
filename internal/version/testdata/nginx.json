@@ -1,0 +1,47 @@
+{
+  "name": "nginx",
+  "description": "Nginx with combined platform variant suffixes",
+  "docker_hub_url": "https://hub.docker.com/_/nginx",
+  "test_cases": [
+    {
+      "image": "nginx",
+      "current_tag": "1.25.3-alpine",
+      "available_tags": [
+        "1.25.3",
+        "1.25.3-alpine",
+        "1.25.3-alpine3.18",
+        "1.25.4-alpine3.19",
+        "1.26.0-alpine",
+        "mainline",
+        "stable"
+      ],
+      "expected_latest": "1.26.0-alpine",
+      "expected_version": "1.26.0",
+      "notes": "Should match alpine* suffix and upgrade across minor versions"
+    },
+    {
+      "image": "nginx",
+      "current_tag": "1.25.3-alpine-perl",
+      "available_tags": [
+        "1.25.3-alpine-perl",
+        "1.25.4-alpine-perl",
+        "1.26.0-alpine-perl"
+      ],
+      "expected_latest": "1.26.0-alpine-perl",
+      "expected_version": "1.26.0",
+      "notes": "Combined suffixes (alpine-perl) treated as single unit"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "Meta tags for release channels",
+      "example": "mainline, stable",
+      "expected_behavior": "Ignored as non-versioned meta tags"
+    },
+    {
+      "issue": "Combined variant suffixes",
+      "example": "alpine-perl, bookworm-perl",
+      "expected_behavior": "Treated as single compound suffix"
+    }
+  ]
+}

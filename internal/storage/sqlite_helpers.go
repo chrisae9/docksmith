@@ -51,13 +51,14 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 	for rows.Next() {
 		var op UpdateOperation
 		var dependentsJSON string
+		var batchDetailsJSON sql.NullString
 		var startedAt, completedAt sql.NullTime
 		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
 
 		err := rows.Scan(
 			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
 			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-			&dependentsJSON, &op.RollbackOccurred, &op.CreatedAt, &op.UpdatedAt,
+			&dependentsJSON, &op.RollbackOccurred, &batchDetailsJSON, &op.CreatedAt, &op.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan update operation: %w", err)
@@ -92,6 +93,15 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 			if err != nil {
 				log.Printf("Failed to deserialize dependents affected: %v", err)
 				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)
+			}
+		}
+
+		// Deserialize batch details from JSON
+		if batchDetailsJSON.Valid && batchDetailsJSON.String != "" {
+			err = json.Unmarshal([]byte(batchDetailsJSON.String), &op.BatchDetails)
+			if err != nil {
+				log.Printf("Failed to deserialize batch details: %v", err)
+				return nil, fmt.Errorf("failed to deserialize batch details: %w", err)
 			}
 		}
 
