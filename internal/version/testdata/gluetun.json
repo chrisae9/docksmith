@@ -5,6 +5,23 @@
   "test_cases": [
     {
       "image": "qmcgaw/gluetun",
+      "current_tag": "v3.40.3",
+      "available_tags": [
+        "latest",
+        "v3.40.3",
+        "v3.40.2",
+        "v3.40.1",
+        "v3.40.0",
+        "v3.39.1",
+        "1243",
+        "1086"
+      ],
+      "expected_latest": "v3.40.3",
+      "expected_version": "3.40.3",
+      "notes": "Should filter out bare numeric tags (1243, 1086) which are CI build numbers, not versions."
+    },
+    {
+      "image": "qmcgaw/gluetun",
       "current_tag": "latest",
       "available_tags": [
         "latest",

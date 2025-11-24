@@ -174,6 +174,20 @@ func (p *Parser) extractVersion(tag string) (*Version, string) {
 		version.Patch, _ = strconv.Atoi(matches[3])
 	}
 
+	// Reject suspicious bare numeric tags (likely CI/build numbers, not versions)
+	// Examples: "1243", "1086" from gluetun (CI build numbers)
+	// Heuristic: major > 100 with no minor/patch AND no 'v' prefix = likely a build number
+	if version.Major > 100 && version.Minor == 0 && version.Patch == 0 {
+		// Check if this was a bare number (no 'v' prefix and no dots in original tag)
+		hasPrefix := strings.HasPrefix(tag, "v") || strings.HasPrefix(tag, "V")
+		hasDots := strings.Contains(tag, ".")
+
+		// If it's just a bare number > 100, reject it
+		if !hasPrefix && !hasDots {
+			return nil, tag
+		}
+	}
+
 	// Extract everything after the version (prerelease, build, and suffix)
 	fullMatch := matches[0]
 	remainder := strings.TrimPrefix(tag, fullMatch)
