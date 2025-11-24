@@ -216,6 +216,43 @@ export function getChangeTypeName(changeType: number): string {
   }
 }
 
+// Set Labels Request (matches api.SetLabelsRequest)
+export interface SetLabelsRequest {
+  container: string;
+  ignore?: boolean;
+  allow_latest?: boolean;
+  version_pin_major?: boolean;
+  version_pin_minor?: boolean;
+  tag_regex?: string;
+  version_min?: string;
+  version_max?: string;
+  script?: string;
+  restart_depends_on?: string;
+  no_restart?: boolean;
+  force?: boolean;
+}
+
+// Label Operation Result (matches api.LabelOperationResult)
+export interface LabelOperationResult {
+  success: boolean;
+  container: string;
+  operation: string;
+  labels_modified?: Record<string, string>;
+  labels_removed?: string[];
+  compose_file: string;
+  restarted: boolean;
+  pre_check_ran: boolean;
+  pre_check_passed?: boolean;
+  message?: string;
+}
+
+// Registry Tags Response
+export interface RegistryTagsResponse {
+  image_ref: string;
+  tags: string[];
+  count: number;
+}
+
 // API Response types
 export type CheckResponse = APIResponse<DiscoveryResult>;
 export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number }>;
@@ -223,3 +260,5 @@ export type HistoryResponse = APIResponse<{ history: HistoryEntry[]; count: numb
 export type BackupsResponse = APIResponse<{ backups: ComposeBackup[]; count: number }>;
 export type HealthCheckResponse = APIResponse<HealthResponse>;
 export type DockerConfigResponse = APIResponse<DockerRegistryInfo>;
+export type SetLabelsResponse = APIResponse<LabelOperationResult>;
+export type RegistryTagsAPIResponse = APIResponse<RegistryTagsResponse>;

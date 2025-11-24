@@ -40,6 +40,34 @@ const (
 	//          Container on Redis 7.2 will update to 7.4 but not to 8.x
 	// Default: false (allow major version upgrades)
 	VersionPinMajorLabel = "docksmith.version-pin-major"
+
+	// VersionPinMinorLabel is the Docker label key to pin updates within the current minor version
+	// When set to "true", the container will only update to newer patch versions within the same minor version.
+	// Example: Container on Node 20.10.0 will update to 20.10.5 but not to 20.11.0
+	//          Container on Redis 7.2.1 will update to 7.2.4 but not to 7.3.0
+	// Default: false (allow minor version upgrades)
+	VersionPinMinorLabel = "docksmith.version-pin-minor"
+
+	// TagRegexLabel is the Docker label key for custom tag filtering via regular expressions
+	// When set, only tags matching the regex pattern will be considered for updates.
+	// Example: "^v?[0-9.]+-alpine$" to only allow Alpine-based images
+	//          "^v?[0-9]+-lts" to only allow LTS tags
+	// Default: "" (no filtering)
+	TagRegexLabel = "docksmith.tag-regex"
+
+	// VersionMinLabel is the Docker label key to set a minimum version threshold
+	// When set, only versions >= this value will be considered for updates.
+	// Example: "2.0.0" to never suggest versions below 2.0.0
+	//          "7.2" to skip old 7.0 and 7.1 branches
+	// Default: "" (no minimum)
+	VersionMinLabel = "docksmith.version-min"
+
+	// VersionMaxLabel is the Docker label key to set a maximum version cap
+	// When set, only versions <= this value will be considered for updates.
+	// Example: "3.9.99" to cap at 3.x and defer v4 migration
+	//          "20.99" to stay on Node 20.x indefinitely
+	// Default: "" (no maximum)
+	VersionMaxLabel = "docksmith.version-max"
 )
 
 // Manager handles script discovery, validation, and assignment operations.

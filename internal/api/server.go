@@ -194,6 +194,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/labels/set", s.handleLabelsSet)
 	mux.HandleFunc("POST /api/labels/remove", s.handleLabelsRemove)
 
+	// Registry tags (for regex testing UI)
+	mux.HandleFunc("GET /api/registry/tags/{imageRef...}", s.handleRegistryTags)
+
 	// Container settings (deprecated - use labels endpoints instead)
 	mux.HandleFunc("POST /api/settings/ignore", s.handleSettingsIgnore)
 	mux.HandleFunc("POST /api/settings/allow-latest", s.handleSettingsAllowLatest)
@@ -340,6 +343,31 @@ func spaHandler(staticDir string) http.Handler {
 
 		// Serve the file
 		fileServer.ServeHTTP(w, r)
+	})
+}
+
+// handleRegistryTags returns the list of available tags for an image from the registry cache
+// GET /api/registry/tags/{imageRef...}
+func (s *Server) handleRegistryTags(w http.ResponseWriter, r *http.Request) {
+	imageRef := r.PathValue("imageRef")
+	if imageRef == "" {
+		output.WriteJSONError(w, fmt.Errorf("missing image reference"))
+		return
+	}
+
+	ctx := r.Context()
+
+	// Fetch tags from registry (uses cached data if available)
+	tags, err := s.registryManager.ListTags(ctx, imageRef)
+	if err != nil {
+		output.WriteJSONError(w, fmt.Errorf("failed to fetch tags: %w", err))
+		return
+	}
+
+	RespondSuccess(w, map[string]any{
+		"image_ref": imageRef,
+		"tags":      tags,
+		"count":     len(tags),
 	})
 }
 

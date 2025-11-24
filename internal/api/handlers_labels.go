@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
@@ -26,6 +27,10 @@ type SetLabelsRequest struct {
 	Ignore           *bool   `json:"ignore,omitempty"`
 	AllowLatest      *bool   `json:"allow_latest,omitempty"`
 	VersionPinMajor  *bool   `json:"version_pin_major,omitempty"`
+	VersionPinMinor  *bool   `json:"version_pin_minor,omitempty"`
+	TagRegex         *string `json:"tag_regex,omitempty"`
+	VersionMin       *string `json:"version_min,omitempty"`
+	VersionMax       *string `json:"version_max,omitempty"`
 	Script           *string `json:"script,omitempty"`
 	RestartDependsOn *string `json:"restart_depends_on,omitempty"`
 	NoRestart        bool    `json:"no_restart,omitempty"`
@@ -99,6 +104,10 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 						if labelKey == scripts.IgnoreLabel ||
 							labelKey == scripts.AllowLatestLabel ||
 							labelKey == scripts.VersionPinMajorLabel ||
+							labelKey == scripts.VersionPinMinorLabel ||
+							labelKey == scripts.TagRegexLabel ||
+							labelKey == scripts.VersionMinLabel ||
+							labelKey == scripts.VersionMaxLabel ||
 							labelKey == scripts.PreUpdateCheckLabel ||
 							labelKey == scripts.RestartAfterLabel {
 							docksmithLabels[labelKey] = labelVal
@@ -127,6 +136,18 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	}
 	if val, ok := container.Labels[scripts.VersionPinMajorLabel]; ok {
 		docksmithLabels[scripts.VersionPinMajorLabel] = val
+	}
+	if val, ok := container.Labels[scripts.VersionPinMinorLabel]; ok {
+		docksmithLabels[scripts.VersionPinMinorLabel] = val
+	}
+	if val, ok := container.Labels[scripts.TagRegexLabel]; ok {
+		docksmithLabels[scripts.TagRegexLabel] = val
+	}
+	if val, ok := container.Labels[scripts.VersionMinLabel]; ok {
+		docksmithLabels[scripts.VersionMinLabel] = val
+	}
+	if val, ok := container.Labels[scripts.VersionMaxLabel]; ok {
+		docksmithLabels[scripts.VersionMaxLabel] = val
 	}
 	if val, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok {
 		docksmithLabels[scripts.PreUpdateCheckLabel] = val
@@ -319,6 +340,71 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 				return nil, fmt.Errorf("failed to remove version-pin-major label: %w", err)
 			}
 			result.LabelsModified[scripts.VersionPinMajorLabel] = ""
+		}
+	}
+
+	if req.VersionPinMinor != nil {
+		if *req.VersionPinMinor {
+			// Set to true (non-default)
+			if err := service.SetLabel(scripts.VersionPinMinorLabel, "true"); err != nil {
+				return nil, fmt.Errorf("failed to set version-pin-minor label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionPinMinorLabel] = "true"
+		} else {
+			// Remove label when false (default value)
+			if err := service.RemoveLabel(scripts.VersionPinMinorLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove version-pin-minor label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionPinMinorLabel] = ""
+		}
+	}
+
+	if req.TagRegex != nil {
+		// If regex is empty string, remove the label; otherwise validate and set it
+		if *req.TagRegex == "" {
+			if err := service.RemoveLabel(scripts.TagRegexLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove tag-regex label: %w", err)
+			}
+			result.LabelsModified[scripts.TagRegexLabel] = ""
+		} else {
+			// Validate regex before setting
+			if err := validateRegexPattern(*req.TagRegex); err != nil {
+				return nil, fmt.Errorf("invalid tag regex: %w", err)
+			}
+			if err := service.SetLabel(scripts.TagRegexLabel, *req.TagRegex); err != nil {
+				return nil, fmt.Errorf("failed to set tag-regex label: %w", err)
+			}
+			result.LabelsModified[scripts.TagRegexLabel] = *req.TagRegex
+		}
+	}
+
+	if req.VersionMin != nil {
+		// If version-min is empty string, remove the label; otherwise set it
+		if *req.VersionMin == "" {
+			if err := service.RemoveLabel(scripts.VersionMinLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove version-min label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionMinLabel] = ""
+		} else {
+			if err := service.SetLabel(scripts.VersionMinLabel, *req.VersionMin); err != nil {
+				return nil, fmt.Errorf("failed to set version-min label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionMinLabel] = *req.VersionMin
+		}
+	}
+
+	if req.VersionMax != nil {
+		// If version-max is empty string, remove the label; otherwise set it
+		if *req.VersionMax == "" {
+			if err := service.RemoveLabel(scripts.VersionMaxLabel); err != nil {
+				return nil, fmt.Errorf("failed to remove version-max label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionMaxLabel] = ""
+		} else {
+			if err := service.SetLabel(scripts.VersionMaxLabel, *req.VersionMax); err != nil {
+				return nil, fmt.Errorf("failed to set version-max label: %w", err)
+			}
+			result.LabelsModified[scripts.VersionMaxLabel] = *req.VersionMax
 		}
 	}
 
@@ -537,4 +623,24 @@ func (s *Server) findContainerByName(ctx context.Context, containerName string) 
 	}
 
 	return nil, fmt.Errorf("container not found: %s", containerName)
+}
+
+// validateRegexPattern validates a regular expression pattern for tag filtering
+func validateRegexPattern(pattern string) error {
+	if pattern == "" {
+		return nil // Empty is valid (no filtering)
+	}
+
+	// Security: limit pattern length to prevent resource exhaustion
+	if len(pattern) > 500 {
+		return fmt.Errorf("pattern too long (max 500 characters)")
+	}
+
+	// Try to compile the regex
+	_, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex: %w", err)
+	}
+
+	return nil
 }

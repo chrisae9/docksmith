@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -502,7 +503,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	// Find the latest version from tags (filtered by suffix)
 	// We always do this to populate LatestVersion for display/recommendation purposes
 	log.Printf("Container %s: Calling findLatestVersion with suffix='%s', currentVer=%v", container.Name, currentSuffix, currentVer)
-	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer)
+	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels)
 	log.Printf("Container %s: findLatestVersion returned: '%s'", container.Name, latestVersion)
 
 	// Update LatestVersion if we don't already have one from digest resolution
@@ -767,12 +768,40 @@ func (c *Checker) getCurrentVersion(ctx context.Context, imageName string) strin
 // findLatestVersion finds the newest semantic version from a list of tags.
 // Only considers tags that match the given suffix (variant filter).
 // If currentVersion is stable (no prerelease), skips prerelease versions.
-func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, currentVersion *version.Version) string {
+// Applies custom filters from container labels (regex, min/max versions, minor pinning).
+func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, currentVersion *version.Version, labels map[string]string) string {
+	// Apply regex filter first (if specified)
+	if regexPattern := labels[scripts.TagRegexLabel]; regexPattern != "" {
+		tags = filterTagsByRegex(tags, regexPattern)
+		log.Printf("findLatestVersion: Applied regex filter '%s', %d tags remain", regexPattern, len(tags))
+	}
+
 	var versions []*version.Version
 	versionToTag := make(map[string]string)
 
 	// Check if current version is stable (no prerelease marker)
 	isCurrentStable := currentVersion != nil && currentVersion.Prerelease == ""
+
+	// Parse min/max version constraints
+	var minVersion, maxVersion *version.Version
+	if minVerStr := labels[scripts.VersionMinLabel]; minVerStr != "" {
+		minVersion = c.versionParser.ParseTag(minVerStr)
+		if minVersion != nil {
+			log.Printf("findLatestVersion: Min version constraint: %s", minVersion.String())
+		}
+	}
+	if maxVerStr := labels[scripts.VersionMaxLabel]; maxVerStr != "" {
+		maxVersion = c.versionParser.ParseTag(maxVerStr)
+		if maxVersion != nil {
+			log.Printf("findLatestVersion: Max version constraint: %s", maxVersion.String())
+		}
+	}
+
+	// Check if minor version pinning is enabled
+	pinMinor := labels[scripts.VersionPinMinorLabel] == "true"
+	if pinMinor && currentVersion != nil {
+		log.Printf("findLatestVersion: Minor version pinning enabled (current: %d.%d.x)", currentVersion.Major, currentVersion.Minor)
+	}
 
 	log.Printf("findLatestVersion: Looking for tags with suffix='%s', currentVersion=%v, isStable=%v", requiredSuffix, currentVersion, isCurrentStable)
 
@@ -797,6 +826,26 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		if isCurrentStable && tagInfo.Version.Prerelease != "" {
 			log.Printf("  Skipping tag %s: prerelease '%s' (current is stable)", tag, tagInfo.Version.Prerelease)
 			continue // Don't suggest upgrading from stable to prerelease
+		}
+
+		// Apply minor version pinning filter
+		if pinMinor && currentVersion != nil {
+			if tagInfo.Version.Major != currentVersion.Major || tagInfo.Version.Minor != currentVersion.Minor {
+				log.Printf("  Skipping tag %s: different minor version (pinned to %d.%d.x)", tag, currentVersion.Major, currentVersion.Minor)
+				continue
+			}
+		}
+
+		// Apply minimum version filter
+		if minVersion != nil && c.versionComp.Compare(tagInfo.Version, minVersion) < 0 {
+			log.Printf("  Skipping tag %s: below minimum version %s", tag, minVersion.String())
+			continue
+		}
+
+		// Apply maximum version filter
+		if maxVersion != nil && c.versionComp.Compare(tagInfo.Version, maxVersion) > 0 {
+			log.Printf("  Skipping tag %s: above maximum version %s", tag, maxVersion.String())
+			continue
 		}
 
 		log.Printf("  Accepted tag %s: version=%s, suffix='%s'", tag, tagInfo.Version.String(), tagInfo.Suffix)
@@ -954,4 +1003,28 @@ func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, curren
 	}
 
 	return ""
+}
+
+// filterTagsByRegex filters a list of tags by a regular expression pattern.
+// Returns only tags that match the pattern. If the pattern is invalid, returns all tags (fail-open).
+func filterTagsByRegex(tags []string, pattern string) []string {
+	if pattern == "" {
+		return tags
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		// Invalid regex - log error but don't block updates (fail-open for safety)
+		log.Printf("Warning: Invalid regex pattern '%s': %v - ignoring filter", pattern, err)
+		return tags
+	}
+
+	var filtered []string
+	for _, tag := range tags {
+		if re.MatchString(tag) {
+			filtered = append(filtered, tag)
+		}
+	}
+
+	return filtered
 }
