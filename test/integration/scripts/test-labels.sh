@@ -265,6 +265,263 @@ test_label_atomicity() {
     sleep 3
 }
 
+# Test 7: docksmith.version-pin-minor label
+test_version_pin_minor() {
+    print_info "Test: docksmith.version-pin-minor label"
+
+    # Setup: Use nginx container on 1.25.3, with available versions: 1.25.4, 1.26.0, 1.27.0
+    local container="test-labels-nginx"
+
+    # Set version-pin-minor label
+    print_info "Setting version-pin-minor label..."
+    local body='{"container":"'"$container"'","version_pin_minor":true}'
+    local response=$(curl_api POST "/labels/set" "$body")
+    assert_api_success "$response" "Version-pin-minor label set"
+
+    sleep 5
+
+    # Trigger check
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Check container status
+    local status_response=$(curl_api GET "/status")
+    local latest_version=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .latest_version')
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should suggest 1.25.4 (same minor), NOT 1.26.0 or 1.27.0
+    if [[ "$latest_version" == "1.25."* ]]; then
+        print_success "Version pinning to minor version works (got: $latest_version)"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Version pinning failed - got $latest_version, expected 1.25.x"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up
+    local body='{"container":"'"$container"'","label_names":["docksmith.version-pin-minor"],"no_restart":true}'
+    curl_api POST "/labels/remove" "$body" > /dev/null
+    sleep 2
+}
+
+# Test 8: docksmith.tag-regex label
+test_tag_regex() {
+    print_info "Test: docksmith.tag-regex label"
+
+    local container="test-labels-alpine"
+
+    # Set tag-regex to only allow alpine tags (Node.js has versioned -alpine tags)
+    print_info "Setting tag-regex for Alpine builds only..."
+    local body='{"container":"'"$container"'","tag_regex":"^[0-9]+-alpine$"}'
+    local response=$(curl_api POST "/labels/set" "$body")
+    assert_api_success "$response" "Tag-regex label set"
+
+    sleep 5
+
+    # Trigger check
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Check container status
+    local status_response=$(curl_api GET "/status")
+    local latest_version=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .latest_version')
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should only suggest alpine tags
+    if [[ "$latest_version" == *"-alpine" ]]; then
+        print_success "Tag regex filtering works (got alpine tag: $latest_version)"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Tag regex failed - got $latest_version, expected *-alpine"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up
+    local body='{"container":"'"$container"'","label_names":["docksmith.tag-regex"],"no_restart":true}'
+    curl_api POST "/labels/remove" "$body" > /dev/null
+    sleep 2
+}
+
+# Test 9: docksmith.version-min label
+test_version_min() {
+    print_info "Test: docksmith.version-min label"
+
+    local container="test-labels-postgres"
+
+    # Set minimum version to 14.0
+    print_info "Setting version-min to 14.0..."
+    local body='{"container":"'"$container"'","version_min":"14.0"}'
+    local response=$(curl_api POST "/labels/set" "$body")
+    assert_api_success "$response" "Version-min label set"
+
+    sleep 5
+
+    # Trigger check
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Check container status
+    local status_response=$(curl_api GET "/status")
+    local latest_version=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .latest_version')
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should NOT suggest versions below 14.0
+    local major_version=$(echo "$latest_version" | cut -d. -f1)
+    if [ "$major_version" -ge 14 ]; then
+        print_success "Version-min filter works (got: $latest_version >= 14.0)"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Version-min failed - got $latest_version, expected >= 14.0"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up
+    local body='{"container":"'"$container"'","label_names":["docksmith.version-min"],"no_restart":true}'
+    curl_api POST "/labels/remove" "$body" > /dev/null
+    sleep 2
+}
+
+# Test 10: docksmith.version-max label
+test_version_max() {
+    print_info "Test: docksmith.version-max label"
+
+    local container="test-labels-redis"
+
+    # Set maximum version to 7.99
+    print_info "Setting version-max to 7.99..."
+    local body='{"container":"'"$container"'","version_max":"7.99"}'
+    local response=$(curl_api POST "/labels/set" "$body")
+    assert_api_success "$response" "Version-max label set"
+
+    sleep 5
+
+    # Trigger check
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Check container status
+    local status_response=$(curl_api GET "/status")
+    local latest_version=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .latest_version')
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should NOT suggest version 8.x or higher
+    local major_version=$(echo "$latest_version" | cut -d. -f1)
+    if [ "$major_version" -le 7 ]; then
+        print_success "Version-max filter works (got: $latest_version <= 7.99)"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Version-max failed - got $latest_version, expected <= 7.99"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up
+    local body='{"container":"'"$container"'","label_names":["docksmith.version-max"],"no_restart":true}'
+    curl_api POST "/labels/remove" "$body" > /dev/null
+    sleep 2
+}
+
+# Test 11: Invalid regex pattern validation
+test_invalid_regex() {
+    print_info "Test: Invalid regex pattern validation"
+
+    local container="test-labels-nginx"
+
+    # Try to set invalid regex
+    print_info "Attempting to set invalid regex pattern..."
+    local body='{"container":"'"$container"'","tag_regex":"(invalid[regex","no_restart":true}'
+    local response=$(curl_api POST "/labels/set" "$body")
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should fail with error about invalid regex
+    local success=$(echo "$response" | jq -r '.success')
+    local error=$(echo "$response" | jq -r '.error // ""')
+
+    if [ "$success" = "false" ] && [[ "$error" == *"invalid regex"* ]]; then
+        print_success "Invalid regex rejected by validation"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Invalid regex should have been rejected"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# Test 12: Regex pattern too long validation
+test_regex_too_long() {
+    print_info "Test: Regex pattern length validation"
+
+    local container="test-labels-nginx"
+
+    # Create a pattern that's over 500 characters
+    local long_pattern=$(printf 'a%.0s' {1..501})
+
+    # Try to set overly long regex
+    print_info "Attempting to set overly long regex pattern (>500 chars)..."
+    local body='{"container":"'"$container"'","tag_regex":"'"$long_pattern"'","no_restart":true}'
+    local response=$(curl_api POST "/labels/set" "$body")
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    # Should fail with error about pattern length
+    local success=$(echo "$response" | jq -r '.success')
+    local error=$(echo "$response" | jq -r '.error // ""')
+
+    if [ "$success" = "false" ] && [[ "$error" == *"too long"* ]]; then
+        print_success "Overly long regex rejected by validation"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Overly long regex should have been rejected"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# Test 13: Multiple constraints combined
+test_combined_constraints() {
+    print_info "Test: Multiple version constraints combined"
+
+    local container="test-labels-node"
+
+    # Set both pin-minor and version-max
+    print_info "Setting multiple constraints (pin-minor + version-max)..."
+    local body='{"container":"'"$container"'","version_pin_minor":true,"version_max":"20.99","no_restart":true}'
+    local response=$(curl_api POST "/labels/set" "$body")
+    assert_api_success "$response" "Multiple constraints set"
+
+    sleep 3
+
+    # Verify both labels persisted
+    local labels_response=$(curl_api GET "/labels/$container")
+    local pin_minor=$(echo "$labels_response" | jq -r '.data.labels."docksmith.version-pin-minor"')
+    local version_max=$(echo "$labels_response" | jq -r '.data.labels."docksmith.version-max"')
+
+    TESTS_RUN=$((TESTS_RUN + 2))
+
+    if [ "$pin_minor" = "true" ]; then
+        print_success "Pin-minor label persisted"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Pin-minor label not persisted"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    if [ "$version_max" = "20.99" ]; then
+        print_success "Version-max label persisted"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Version-max label not persisted"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up
+    local body='{"container":"'"$container"'","label_names":["docksmith.version-pin-minor","docksmith.version-max"],"no_restart":true}'
+    curl_api POST "/labels/remove" "$body" > /dev/null
+    sleep 2
+}
+
 # Main test execution
 main() {
     check_docksmith || exit 1
@@ -282,6 +539,15 @@ main() {
     test_pre_check_fail
     test_restart_after
     test_label_atomicity
+
+    # Run new version constraint tests
+    test_version_pin_minor
+    test_tag_regex
+    test_version_min
+    test_version_max
+    test_invalid_regex
+    test_regex_too_long
+    test_combined_constraints
 
     # Print summary
     print_test_summary

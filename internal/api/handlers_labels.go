@@ -177,7 +177,9 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.Script == nil && req.RestartDependsOn == nil {
+	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil &&
+		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
+		req.Script == nil && req.RestartDependsOn == nil {
 		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
 		return
 	}
