@@ -1,14 +1,8 @@
 import { useState, useEffect } from 'react';
-import { getOperations, checkContainers } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { getOperations } from '../api/client';
 import type { UpdateOperation } from '../types/api';
-import { useEventStream } from '../hooks/useEventStream';
 import { formatTimeWithDate } from '../utils/time';
-import { useElapsedTime } from '../hooks/useElapsedTime';
-import { useAutoScrollLogs } from '../hooks/useAutoScrollLogs';
-import { useProgressEventLogger } from '../hooks/useProgressEventLogger';
-import { useAutoRefreshOnClose } from '../hooks/useAutoRefreshOnClose';
-import { ProgressModal } from './ProgressModal';
-import type { ProgressModalStatCard } from './ProgressModal';
 
 interface HistoryProps {
   onBack: () => void;
@@ -22,6 +16,7 @@ interface RollbackConfirmation {
 }
 
 export function History({ onBack: _onBack }: HistoryProps) {
+  const navigate = useNavigate();
   const [operations, setOperations] = useState<UpdateOperation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,17 +24,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
-  const [rollbackProgress, setRollbackProgress] = useState<{
-    containerName: string;
-    status: 'pending' | 'in_progress' | 'success' | 'failed';
-    operationId?: string;
-    message?: string;
-    error?: string;
-    startTime: number;
-    logs: Array<{ time: number; message: string }>;
-  } | null>(null);
-
-  const { lastEvent: progressEvent, clearEvents } = useEventStream(true);
 
   useEffect(() => {
     fetchOperations();
@@ -80,175 +64,21 @@ export function History({ onBack: _onBack }: HistoryProps) {
     setRollbackConfirm(null);
   };
 
-  const executeRollback = async () => {
+  const executeRollback = () => {
     if (!rollbackConfirm) return;
 
-    const { operationId, containerName } = rollbackConfirm;
-    setRollbackConfirm(null);
-    clearEvents();
-
-    // Initialize rollback progress
-    setRollbackProgress({
-      containerName,
-      status: 'in_progress',
-      startTime: Date.now(),
-      logs: [{ time: Date.now(), message: `Starting rollback of ${containerName}...` }],
-    });
-
-    try {
-      const response = await fetch('/api/rollback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operation_id: operationId }),
-      });
-      const data = await response.json();
-
-      if (data.success) {
-        setRollbackProgress(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            operationId: data.data?.operation_id,
-            message: 'Rollback triggered, waiting for completion...',
-            logs: [...prev.logs, { time: Date.now(), message: `Rollback operation started (${data.data?.operation_id?.slice(0, 8)}...)` }],
-          };
-        });
-
-        // Poll for completion
-        const rollbackOpId = data.data?.operation_id;
-        if (rollbackOpId) {
-          let completed = false;
-          let pollCount = 0;
-          const maxPolls = 60;
-
-          while (!completed && pollCount < maxPolls) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            pollCount++;
-
-            try {
-              const opResponse = await fetch(`/api/operations/${rollbackOpId}`);
-              const opData = await opResponse.json();
-
-              if (opData.success && opData.data) {
-                const op = opData.data;
-                setRollbackProgress(prev => {
-                  if (!prev) return prev;
-                  return { ...prev, message: `Status: ${op.status}` };
-                });
-
-                if (op.status === 'complete') {
-                  completed = true;
-                  setRollbackProgress(prev => {
-                    if (!prev) return prev;
-                    return {
-                      ...prev,
-                      status: 'success',
-                      message: 'Rollback completed successfully',
-                      logs: [...prev.logs, { time: Date.now(), message: `✓ Rollback complete` }],
-                    };
-                  });
-                } else if (op.status === 'failed') {
-                  completed = true;
-                  setRollbackProgress(prev => {
-                    if (!prev) return prev;
-                    return {
-                      ...prev,
-                      status: 'failed',
-                      message: 'Rollback failed',
-                      error: op.error_message,
-                      logs: [...prev.logs, { time: Date.now(), message: `✗ ${op.error_message}` }],
-                    };
-                  });
-                }
-              }
-            } catch {
-              // Continue polling
-            }
-          }
-
-          if (!completed) {
-            setRollbackProgress(prev => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                status: 'failed',
-                message: 'Timed out waiting for completion',
-                logs: [...prev.logs, { time: Date.now(), message: `✗ Timed out` }],
-              };
-            });
-          }
-        } else {
-          // No operation ID, mark as complete without polling
-          setRollbackProgress(prev => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              status: 'success',
-              message: 'Rollback initiated',
-              logs: [...prev.logs, { time: Date.now(), message: `✓ Rollback complete` }],
-            };
-          });
+    // Navigate to rollback progress page with rollback info
+    navigate('/rollback', {
+      state: {
+        rollback: {
+          operationId: rollbackConfirm.operationId,
+          containerName: rollbackConfirm.containerName,
+          oldVersion: rollbackConfirm.oldVersion,
+          newVersion: rollbackConfirm.newVersion,
         }
-      } else {
-        setRollbackProgress(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            status: 'failed',
-            message: 'Failed to trigger rollback',
-            error: data.error,
-            logs: [...prev.logs, { time: Date.now(), message: `✗ ${data.error}` }],
-          };
-        });
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      setRollbackProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          status: 'failed',
-          message: 'Error',
-          error: errorMsg,
-          logs: [...prev.logs, { time: Date.now(), message: `✗ ${errorMsg}` }],
-        };
-      });
-    }
-  };
-
-  // Custom hooks to replace duplicate patterns
-  const isRollingBack = !!(rollbackProgress && rollbackProgress.status === 'in_progress');
-  const elapsedTime = useElapsedTime(rollbackProgress?.startTime ?? null, isRollingBack);
-  const logEntriesRef = useAutoScrollLogs(rollbackProgress?.logs);
-  useProgressEventLogger(progressEvent, rollbackProgress, setRollbackProgress);
-  useAutoRefreshOnClose(!!rollbackProgress, () => {
-    fetchOperations();
-    checkContainers();
-  });
-
-  const getStageIcon = (stage: string): React.ReactNode => {
-    switch (stage) {
-      case 'validating':
-        return <i className="fa-solid fa-magnifying-glass"></i>;
-      case 'backup':
-        return <i className="fa-solid fa-floppy-disk"></i>;
-      case 'updating_compose':
-        return <i className="fa-solid fa-file-pen"></i>;
-      case 'pulling_image':
-        return <i className="fa-solid fa-cloud-arrow-down"></i>;
-      case 'recreating':
-        return <i className="fa-solid fa-rotate"></i>;
-      case 'health_check':
-        return <i className="fa-solid fa-heart-pulse"></i>;
-      case 'rolling_back':
-        return <i className="fa-solid fa-rotate-left"></i>;
-      case 'complete':
-        return <i className="fa-solid fa-circle-check"></i>;
-      case 'failed':
-        return <i className="fa-solid fa-circle-xmark"></i>;
-      default:
-        return <i className="fa-solid fa-hourglass-half"></i>;
-    }
+    });
+    setRollbackConfirm(null);
   };
 
   // Alias for consistency - using shared utility from utils/time.ts
@@ -540,69 +370,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
           </div>
         </div>
       )}
-
-      {/* Rollback Progress Modal */}
-      {rollbackProgress && (() => {
-        const inProgress = rollbackProgress.status === 'in_progress';
-        const allSuccess = rollbackProgress.status === 'success';
-        const allFailed = rollbackProgress.status === 'failed';
-
-        const stageIcon = inProgress ? (
-          <div className="stage-icon-wrapper">
-            <i className="fa-solid fa-rotate-left"></i>
-            <div className="spinner-ring"></div>
-          </div>
-        ) : allSuccess ? (
-          <i className="fa-solid fa-circle-check"></i>
-        ) : (
-          <i className="fa-solid fa-circle-xmark"></i>
-        );
-
-        const stageVariant = inProgress ? 'in-progress' : allSuccess ? 'complete' : 'complete-with-errors';
-
-        const stageMessage = inProgress
-          ? `Rolling back ${rollbackProgress.containerName}...`
-          : allSuccess
-          ? 'Rollback completed successfully!'
-          : 'Rollback failed';
-
-        const stats: ProgressModalStatCard[] = [
-          {
-            label: 'Container',
-            value: rollbackProgress.containerName,
-          },
-          {
-            label: 'Status',
-            value: rollbackProgress.status.replace('_', ' ').charAt(0).toUpperCase() + rollbackProgress.status.replace('_', ' ').slice(1),
-            variant: allSuccess ? 'success' : allFailed ? 'error' : 'default',
-          },
-          {
-            label: 'Elapsed',
-            value: `${elapsedTime}s`,
-          },
-        ];
-
-        const currentProgress = progressEvent && inProgress ? {
-          event: progressEvent,
-          getStageIcon,
-        } : undefined;
-
-        return (
-          <ProgressModal
-            title="Rolling Back Container"
-            stageIcon={stageIcon}
-            stageVariant={stageVariant}
-            stageMessage={stageMessage}
-            stats={stats}
-            currentProgress={currentProgress}
-            logs={rollbackProgress.logs}
-            logEntriesRef={logEntriesRef}
-            buttonText={inProgress ? 'Rolling back...' : 'Close'}
-            buttonDisabled={inProgress}
-            onClose={() => setRollbackProgress(null)}
-          />
-        );
-      })()}
     </div>
   );
 }

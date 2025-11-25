@@ -8,6 +8,9 @@ import type {
   APIResponse,
   ScriptsResponse,
   ScriptAssignmentsResponse,
+  RegistryTagsAPIResponse,
+  SetLabelsRequest,
+  SetLabelsResponse,
 } from '../types/api';
 
 const API_BASE = '/api';
@@ -239,15 +242,8 @@ export async function getContainerLabels(containerName: string): Promise<APIResp
 // Set labels atomically (updates compose + restarts container)
 export async function setLabels(
   containerName: string,
-  options: {
-    ignore?: boolean;
-    allow_latest?: boolean;
-    script?: string;
-    restart_depends_on?: string;
-    no_restart?: boolean;
-    force?: boolean;
-  }
-): Promise<APIResponse<LabelOperationResult>> {
+  options: Omit<SetLabelsRequest, 'container'>
+): Promise<SetLabelsResponse> {
   return fetchAPI('/labels/set', {
     method: 'POST',
     body: JSON.stringify({
@@ -297,6 +293,18 @@ export async function restartContainer(containerName: string, force = false): Pr
 // Restart all containers in a stack
 export async function restartStack(stackName: string): Promise<APIResponse<RestartResponse>> {
   return fetchAPI(`/restart/stack/${stackName}`, {
+    method: 'POST',
+  });
+}
+
+// Registry tags (for regex testing UI)
+export async function getRegistryTags(imageRef: string): Promise<RegistryTagsAPIResponse> {
+  return fetchAPI(`/registry/tags/${encodeURIComponent(imageRef)}`);
+}
+
+// Trigger background check (uses cached registry data)
+export async function triggerBackgroundCheck(): Promise<CheckResponse> {
+  return fetchAPI('/trigger-check', {
     method: 'POST',
   });
 }

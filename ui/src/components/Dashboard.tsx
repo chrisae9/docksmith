@@ -1,16 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { checkContainers, getContainerStatus, triggerBatchUpdate, restartStack } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { checkContainers, getContainerStatus, restartStack } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
-import { useElapsedTime } from '../hooks/useElapsedTime';
-import { useAutoScrollLogs } from '../hooks/useAutoScrollLogs';
-import { useProgressEventLogger } from '../hooks/useProgressEventLogger';
-import { useAutoRefreshOnClose } from '../hooks/useAutoRefreshOnClose';
 import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
-import { ContainerDetailModal } from './ContainerDetailModal';
-import { ProgressModal } from './ProgressModal';
-import type { ProgressModalStatCard, ProgressModalContainer } from './ProgressModal';
 import { isUpdatable } from '../utils/status';
 import { STORAGE_KEY_FILTER, STORAGE_KEY_INITIAL_SWITCH } from '../utils/constants';
 
@@ -22,6 +16,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: DashboardProps) {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResult | null>(null);
@@ -40,21 +35,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [showLocalImages, setShowLocalImages] = useState(false);
   const [showIgnored, setShowIgnored] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [updating, setUpdating] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [expandedContainer, setExpandedContainer] = useState<string | null>(null);
-  const [updateProgress, setUpdateProgress] = useState<{
-    containers: Array<{
-      name: string;
-      status: 'pending' | 'in_progress' | 'success' | 'failed';
-      message?: string;
-      error?: string;
-      operationId?: string;
-    }>;
-    currentIndex: number;
-    startTime: number;
-    logs: Array<{ time: number; message: string }>;
-  } | null>(null);
   const [restartingStack, setRestartingStack] = useState<string | null>(null);
 
   // Pull-to-refresh state
@@ -64,9 +44,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const mainRef = useRef<HTMLElement>(null);
 
   // Connect to SSE for real-time progress (always connected for check progress)
-  const { lastEvent: progressEvent, checkProgress, clearEvents, containerUpdated } = useEventStream(true);
+  const { checkProgress, containerUpdated } = useEventStream(true);
 
-  // Calculate time ago from ISO timestamp
   // Fetch cached status (for initial load)
   // Does NOT show loading state to avoid screen flashing when switching tabs
   const fetchCachedStatus = async () => {
@@ -113,20 +92,12 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   };
 
-  // Use custom hooks for progress modal management
-  const isUpdating = !!(updateProgress && !updateProgress.containers.every(c => c.status === 'success' || c.status === 'failed'));
-  const elapsedTime = useElapsedTime(updateProgress?.startTime ?? null, isUpdating);
-  const logEntriesRef = useAutoScrollLogs(updateProgress?.logs);
-  useProgressEventLogger(progressEvent, updateProgress, setUpdateProgress);
-  useAutoRefreshOnClose(!!updateProgress, backgroundRefresh);
-
   // Periodic background refresh (every 60 seconds)
-  // Skip when modals are open or already loading
   usePeriodicRefresh(
     backgroundRefresh,
     60000, // 60 seconds
     true, // enabled
-    () => !!expandedContainer || !!updateProgress || loading
+    () => loading
   );
 
   // Cache refresh - clears cache and triggers fresh registry queries
@@ -147,26 +118,10 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   };
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     if (selectedContainers.size === 0 || !result) return;
 
-    setUpdating(true);
-    setUpdateStatus(null);
-    clearEvents(); // Clear previous events
-
     const containerNames = Array.from(selectedContainers);
-
-    // Initialize progress tracking for all containers
-    const initialProgress = {
-      containers: containerNames.map(name => ({
-        name,
-        status: 'pending' as const,
-      })),
-      currentIndex: 0,
-      startTime: Date.now(),
-      logs: [{ time: Date.now(), message: `Starting stack-aware update of ${containerNames.length} container(s)` }],
-    };
-    setUpdateProgress(initialProgress);
 
     // Build container info with stack grouping
     const containersToUpdate = containerNames.map(name => {
@@ -178,376 +133,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       };
     });
 
-    // Group by stack for logging
-    const stackGroups = new Map<string, string[]>();
-    for (const c of containersToUpdate) {
-      const stack = c.stack || '__standalone__';
-      if (!stackGroups.has(stack)) {
-        stackGroups.set(stack, []);
-      }
-      stackGroups.get(stack)!.push(c.name);
-    }
-
-    // Log stack grouping
-    setUpdateProgress(prev => {
-      if (!prev) return prev;
-      const logs = [...prev.logs];
-      for (const [stack, containers] of stackGroups) {
-        const stackName = stack === '__standalone__' ? 'standalone' : stack;
-        logs.push({ time: Date.now(), message: `Stack "${stackName}": ${containers.join(', ')}` });
-      }
-      return { ...prev, logs };
-    });
-
-    try {
-      // Send batch update request
-      const response = await triggerBatchUpdate(containersToUpdate);
-
-      if (!response.success) {
-        setUpdateProgress(prev => {
-          if (!prev) return prev;
-          const newContainers = prev.containers.map(c => ({
-            ...c,
-            status: 'failed' as const,
-            message: 'Batch update failed',
-            error: response.error,
-          }));
-          return {
-            ...prev,
-            containers: newContainers,
-            logs: [...prev.logs, { time: Date.now(), message: `✗ Batch update failed: ${response.error}` }],
-          };
-        });
-        setUpdating(false);
-        return;
-      }
-
-      // Mark containers as in progress based on their stack operations
-      const operations = response.data?.operations || [];
-      const containerToOpId = new Map<string, string>();
-
-      for (const op of operations) {
-        if (op.status === 'started' && op.operation_id) {
-          for (const containerName of op.containers) {
-            containerToOpId.set(containerName, op.operation_id);
-          }
-          setUpdateProgress(prev => {
-            if (!prev) return prev;
-            const newContainers = prev.containers.map(c => {
-              if (op.containers.includes(c.name)) {
-                return { ...c, status: 'in_progress' as const, message: 'Update in progress...', operationId: op.operation_id };
-              }
-              return c;
-            });
-            return {
-              ...prev,
-              containers: newContainers,
-              logs: [...prev.logs, { time: Date.now(), message: `Stack "${op.stack}": Operation ${op.operation_id?.slice(0, 8)}... started` }],
-            };
-          });
-        } else if (op.status === 'failed') {
-          setUpdateProgress(prev => {
-            if (!prev) return prev;
-            const newContainers = prev.containers.map(c => {
-              if (op.containers.includes(c.name)) {
-                return { ...c, status: 'failed' as const, message: 'Failed to start', error: op.error };
-              }
-              return c;
-            });
-            return {
-              ...prev,
-              containers: newContainers,
-              logs: [...prev.logs, { time: Date.now(), message: `Stack "${op.stack}": ✗ ${op.error}` }],
-            };
-          });
-        }
-      }
-
-      // Poll for completion of all operations
-      const uniqueOpIds = new Set<string>();
-      for (const opId of containerToOpId.values()) {
-        uniqueOpIds.add(opId);
-      }
-
-      // Helper to poll a single operation
-      const pollOperation = async (operationId: string) => {
-        let completed = false;
-        let pollCount = 0;
-        const maxPolls = 60; // 5 minutes with 5 second intervals
-
-        while (!completed && pollCount < maxPolls) {
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          pollCount++;
-
-          try {
-            const opResponse = await fetch(`/api/operations/${operationId}`);
-            const opData = await opResponse.json();
-
-            if (opData.success && opData.data) {
-              const op = opData.data;
-
-              // Find all containers for this operation
-              const affectedContainers: string[] = [];
-              for (const [containerName, opId] of containerToOpId) {
-                if (opId === operationId) {
-                  affectedContainers.push(containerName);
-                }
-              }
-
-              if (op.status === 'complete') {
-                completed = true;
-                setUpdateProgress(prev => {
-                  if (!prev) return prev;
-                  const newContainers = prev.containers.map(c => {
-                    if (affectedContainers.includes(c.name)) {
-                      return { ...c, status: 'success' as const, message: 'Updated successfully' };
-                    }
-                    return c;
-                  });
-                  return {
-                    ...prev,
-                    containers: newContainers,
-                    logs: [...prev.logs, { time: Date.now(), message: `Operation ${operationId.slice(0, 8)}...: ✓ Complete (${affectedContainers.join(', ')})` }],
-                  };
-                });
-              } else if (op.status === 'failed') {
-                completed = true;
-                setUpdateProgress(prev => {
-                  if (!prev) return prev;
-                  const newContainers = prev.containers.map(c => {
-                    if (affectedContainers.includes(c.name)) {
-                      return { ...c, status: 'failed' as const, message: 'Update failed', error: op.error_message };
-                    }
-                    return c;
-                  });
-                  return {
-                    ...prev,
-                    containers: newContainers,
-                    logs: [...prev.logs, { time: Date.now(), message: `Operation ${operationId.slice(0, 8)}...: ✗ ${op.error_message}` }],
-                  };
-                });
-              } else {
-                // Update status message
-                setUpdateProgress(prev => {
-                  if (!prev) return prev;
-                  const newContainers = prev.containers.map(c => {
-                    if (affectedContainers.includes(c.name)) {
-                      return { ...c, message: `Status: ${op.status}` };
-                    }
-                    return c;
-                  });
-                  return { ...prev, containers: newContainers };
-                });
-              }
-            }
-          } catch {
-            // Continue polling on error
-          }
-        }
-
-        if (!completed) {
-          // Find all containers for this operation
-          const affectedContainers: string[] = [];
-          for (const [containerName, opId] of containerToOpId) {
-            if (opId === operationId) {
-              affectedContainers.push(containerName);
-            }
-          }
-          setUpdateProgress(prev => {
-            if (!prev) return prev;
-            const newContainers = prev.containers.map(c => {
-              if (affectedContainers.includes(c.name)) {
-                return { ...c, status: 'failed' as const, message: 'Timed out waiting for completion' };
-              }
-              return c;
-            });
-            return {
-              ...prev,
-              containers: newContainers,
-              logs: [...prev.logs, { time: Date.now(), message: `Operation ${operationId.slice(0, 8)}...: ✗ Timed out` }],
-            };
-          });
-        }
-      };
-
-      // Poll all operations in parallel
-      await Promise.all(Array.from(uniqueOpIds).map(opId => pollOperation(opId)));
-
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      setUpdateProgress(prev => {
-        if (!prev) return prev;
-        const newContainers = prev.containers.map(c => ({
-          ...c,
-          status: 'failed' as const,
-          message: 'Error',
-          error: errorMsg,
-        }));
-        return {
-          ...prev,
-          containers: newContainers,
-          logs: [...prev.logs, { time: Date.now(), message: `✗ ${errorMsg}` }],
-        };
-      });
-    }
-
-    // Add completion log entry
-    setUpdateProgress(prev => {
-      if (!prev) return prev;
-      const successful = prev.containers.filter(c => c.status === 'success').length;
-      const failed = prev.containers.filter(c => c.status === 'failed').length;
-      return {
-        ...prev,
-        logs: [...prev.logs, {
-          time: Date.now(),
-          message: `Update complete: ${successful} succeeded, ${failed} failed`,
-        }],
-      };
-    });
-
+    // Clear selection and navigate to update progress page
     setSelectedContainers(new Set());
-    setUpdating(false);
-    // Don't auto-close the modal - let user close it manually
-  };
-
-  const handleSingleUpdate = async (containerName: string) => {
-    if (!result) return;
-
-    setUpdating(true);
-    setUpdateStatus(null);
-    clearEvents(); // Clear previous events
-
-    // Initialize progress tracking for just this container
-    const initialProgress = {
-      containers: [{
-        name: containerName,
-        status: 'pending' as const,
-      }],
-      currentIndex: 0,
-      startTime: Date.now(),
-      logs: [{ time: Date.now(), message: `Starting update of ${containerName}` }],
-    };
-    setUpdateProgress(initialProgress);
-
-    // Build container info
-    const container = result.containers.find(c => c.container_name === containerName);
-    if (!container) {
-      setUpdateStatus('Container not found');
-      setUpdating(false);
-      return;
-    }
-
-    const containerToUpdate = {
-      name: containerName,
-      target_version: container.latest_version || '',
-      stack: container.stack || '',
-    };
-
-    try {
-      // Update progress to in_progress
-      setUpdateProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          containers: [{ name: containerName, status: 'in_progress' as const, message: 'Triggering update...' }],
-          logs: [...prev.logs, { time: Date.now(), message: `→ Updating ${containerName} to ${containerToUpdate.target_version}` }],
-        };
-      });
-
-      // Trigger batch update with single container
-      const response = await triggerBatchUpdate([containerToUpdate]);
-
-      if (response.success && response.data) {
-        const operations = response.data.operations;
-
-        // Update progress with operation IDs
-        setUpdateProgress(prev => {
-          if (!prev) return prev;
-          const op = operations.find(o => o.containers.includes(containerName));
-          return {
-            ...prev,
-            containers: [{
-              name: containerName,
-              status: 'in_progress' as const,
-              message: 'Update triggered, polling for completion...',
-              operationId: op?.operation_id,
-            }],
-            logs: [...prev.logs, { time: Date.now(), message: `✓ Update triggered (${op?.operation_id?.slice(0, 8)}...)` }],
-          };
-        });
-
-        // Poll for completion
-        const op = operations.find(o => o.containers.includes(containerName));
-        if (op?.operation_id) {
-          let completed = false;
-          let pollCount = 0;
-          const maxPolls = 120;
-
-          while (!completed && pollCount < maxPolls) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            pollCount++;
-
-            try {
-              const opResponse = await fetch(`/api/operations/${op.operation_id}`);
-              const opData = await opResponse.json();
-
-              if (opData.success && opData.data) {
-                const operation = opData.data;
-
-                if (operation.status === 'complete') {
-                  completed = true;
-                  setUpdateProgress(prev => {
-                    if (!prev) return prev;
-                    return {
-                      ...prev,
-                      containers: [{ name: containerName, status: 'success' as const, message: 'Updated successfully' }],
-                      logs: [...prev.logs, { time: Date.now(), message: `✓ ${containerName} updated successfully` }],
-                    };
-                  });
-                } else if (operation.status === 'failed') {
-                  completed = true;
-                  setUpdateProgress(prev => {
-                    if (!prev) return prev;
-                    return {
-                      ...prev,
-                      containers: [{ name: containerName, status: 'failed' as const, message: 'Update failed', error: operation.error_message }],
-                      logs: [...prev.logs, { time: Date.now(), message: `✗ ${containerName}: ${operation.error_message}` }],
-                    };
-                  });
-                }
-              }
-            } catch {
-              // Continue polling on error
-            }
-          }
-
-          if (!completed) {
-            setUpdateProgress(prev => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                containers: [{ name: containerName, status: 'failed' as const, message: 'Timed out waiting for completion' }],
-                logs: [...prev.logs, { time: Date.now(), message: `✗ ${containerName}: Timed out` }],
-              };
-            });
-          }
-        }
-      } else {
-        throw new Error(response.error || 'Update failed');
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      setUpdateProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          containers: [{ name: containerName, status: 'failed' as const, message: 'Error', error: errorMsg }],
-          logs: [...prev.logs, { time: Date.now(), message: `✗ ${errorMsg}` }],
-        };
-      });
-    }
-
-    setUpdating(false);
+    navigate('/update', { state: { containers: containersToUpdate } });
   };
 
   const handleStackRestart = async (stackName: string, e: React.MouseEvent) => {
@@ -630,9 +218,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   }, []);
 
   // Auto-refresh when container.updated event is received
-  // Only refresh if not viewing a modal to avoid screen flashing
   useEffect(() => {
-    if (!containerUpdated || expandedContainer || updateProgress) return;
+    if (!containerUpdated) return;
 
     // If this is from an update completion, trigger a background check first
     // to ensure we get fresh status showing the container is now up-to-date
@@ -642,7 +229,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       // For background check completions, just fetch cached status
       fetchCachedStatus();
     }
-  }, [containerUpdated, expandedContainer, updateProgress]);
+  }, [containerUpdated]);
 
   // Persist filter changes to localStorage
   useEffect(() => {
@@ -768,31 +355,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     return <div className="empty">No containers found</div>;
   }
 
-  const getStageIcon = (stage: string): React.ReactNode => {
-    switch (stage) {
-      case 'validating':
-        return <i className="fa-solid fa-magnifying-glass"></i>;
-      case 'backup':
-        return <i className="fa-solid fa-floppy-disk"></i>;
-      case 'updating_compose':
-        return <i className="fa-solid fa-file-pen"></i>;
-      case 'pulling_image':
-        return <i className="fa-solid fa-cloud-arrow-down"></i>;
-      case 'recreating':
-        return <i className="fa-solid fa-rotate"></i>;
-      case 'health_check':
-        return <i className="fa-solid fa-heart-pulse"></i>;
-      case 'rolling_back':
-        return <i className="fa-solid fa-rotate-left"></i>;
-      case 'complete':
-        return <i className="fa-solid fa-circle-check"></i>;
-      case 'failed':
-        return <i className="fa-solid fa-circle-xmark"></i>;
-      default:
-        return <i className="fa-solid fa-hourglass-half"></i>;
-    }
-  };
-
   // Pull-to-refresh handlers
   const handleTouchStart = (e: React.TouchEvent) => {
     // Only allow pull-to-refresh when scrolled to the top of the container
@@ -902,7 +464,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           )}
         </div>
         <div className="search-bar">
-          <i className="fa-solid fa-magnifying-glass search-icon"></i>
+          <i className="fa-solid fa-search"></i>
           <input
             type="text"
             placeholder="Search containers..."
@@ -911,11 +473,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             className="search-input"
           />
           {searchQuery && (
-            <button
-              className="search-clear"
-              onClick={() => setSearchQuery('')}
-            >
-              <i className="fa-solid fa-xmark"></i>
+            <button className="clear-search" onClick={() => setSearchQuery('')}>
+              <i className="fa-solid fa-times"></i>
             </button>
           )}
         </div>
@@ -1032,7 +591,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                             container={container}
                             selected={selectedContainers.has(container.container_name)}
                             onToggle={() => toggleContainer(container.container_name)}
-                            onContainerClick={() => setExpandedContainer(container.container_name)}
+                            onContainerClick={() => navigate(`/container/${container.container_name}`)}
                             allContainers={result.containers}
                           />
                         ))}
@@ -1056,7 +615,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                           container={container}
                           selected={selectedContainers.has(container.container_name)}
                           onToggle={() => toggleContainer(container.container_name)}
-                          onContainerClick={() => setExpandedContainer(container.container_name)}
+                          onContainerClick={() => navigate(`/container/${container.container_name}`)}
                           allContainers={result.containers}
                         />
                       ))}
@@ -1080,7 +639,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                       container={container}
                       selected={selectedContainers.has(container.container_name)}
                       onToggle={() => toggleContainer(container.container_name)}
-                      onContainerClick={() => setExpandedContainer(container.container_name)}
+                      onContainerClick={() => navigate(`/container/${container.container_name}`)}
                       allContainers={result.containers}
                     />
                   ))}
@@ -1096,111 +655,10 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           <button
             className="update-btn"
             onClick={handleUpdate}
-            disabled={updating}
           >
-            {updating ? 'Updating...' : 'Update'}
+            Update
           </button>
         </div>
-      )}
-
-      {updateStatus && (
-        <div className="update-status">
-          {updateStatus}
-        </div>
-      )}
-
-      {updateProgress && (() => {
-        const allComplete = updateProgress.containers.every(c => c.status === 'success' || c.status === 'failed');
-        const allSuccess = updateProgress.containers.every(c => c.status === 'success');
-        const allFailed = updateProgress.containers.every(c => c.status === 'failed');
-        const inProgress = updateProgress.containers.some(c => c.status === 'in_progress');
-
-        const stageIcon = inProgress ? (
-          <div className="stage-icon-wrapper">
-            <i className="fa-solid fa-arrow-up"></i>
-            <div className="spinner-ring"></div>
-          </div>
-        ) : allSuccess ? (
-          <i className="fa-solid fa-circle-check"></i>
-        ) : allFailed ? (
-          <i className="fa-solid fa-circle-xmark"></i>
-        ) : (
-          <i className="fa-solid fa-exclamation-triangle"></i>
-        );
-
-        const stageVariant = allComplete
-          ? (allSuccess ? 'complete' : 'complete-with-errors')
-          : 'in-progress';
-
-        const stageMessage = inProgress
-          ? 'Updating containers...'
-          : allSuccess
-          ? 'All updates completed successfully!'
-          : allFailed
-          ? 'All updates failed'
-          : 'Updates completed with some errors';
-
-        const stats: ProgressModalStatCard[] = [
-          {
-            label: 'Progress',
-            value: `${updateProgress.containers.filter(c => c.status === 'success' || c.status === 'failed').length}/${updateProgress.containers.length}`,
-          },
-          {
-            label: 'Successful',
-            value: updateProgress.containers.filter(c => c.status === 'success').length,
-            variant: 'success',
-          },
-          {
-            label: 'Failed',
-            value: updateProgress.containers.filter(c => c.status === 'failed').length,
-            variant: 'error',
-          },
-          {
-            label: 'Elapsed',
-            value: `${elapsedTime}s`,
-          },
-        ];
-
-        const containers: ProgressModalContainer[] = updateProgress.containers.map(c => ({
-          name: c.name,
-          status: c.status,
-          message: c.message,
-          error: c.error,
-        }));
-
-        const currentProgress = (progressEvent && inProgress) ? {
-          event: progressEvent,
-          getStageIcon,
-        } : undefined;
-
-        return (
-          <ProgressModal
-            title="Updating Containers"
-            stageIcon={stageIcon}
-            stageVariant={stageVariant}
-            stageMessage={stageMessage}
-            stats={stats}
-            containers={containers}
-            currentProgress={currentProgress}
-            logs={updateProgress.logs}
-            logEntriesRef={logEntriesRef}
-            buttonText={inProgress ? 'Updating...' : 'Close'}
-            buttonDisabled={!allComplete}
-            onClose={() => {
-              setUpdateProgress(null);
-              setUpdating(false);
-            }}
-          />
-        );
-      })()}
-
-      {expandedContainer && result && (
-        <ContainerDetailModal
-          container={result.containers.find(c => c.container_name === expandedContainer)!}
-          onClose={() => setExpandedContainer(null)}
-          onRefresh={backgroundRefresh}
-          onUpdate={handleSingleUpdate}
-        />
       )}
 
     </div>

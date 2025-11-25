@@ -1,20 +1,60 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getScripts, getContainerLabels, setLabels, restartContainer, checkContainers } from '../api/client';
-import type { ContainerInfo, Script } from '../types/api';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { getContainerLabels, setLabels, restartContainer, checkContainers, getContainerStatus } from '../api/client';
+import type { ContainerInfo } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
 import { useElapsedTime } from '../hooks/useElapsedTime';
+import './ContainerDetailPage.css';
 
-interface ContainerDetailModalProps {
-  container: ContainerInfo;
-  onClose: () => void;
-  onRefresh?: () => void;
-  onUpdate?: (containerName: string) => void;
+// Generate a clickable URL for an image repository
+function getRegistryUrl(image: string): string | null {
+  // Remove tag if present
+  const imageWithoutTag = image.split(':')[0];
+
+  // GHCR
+  if (imageWithoutTag.startsWith('ghcr.io/')) {
+    const parts = imageWithoutTag.replace('ghcr.io/', '').split('/');
+    if (parts.length >= 2) {
+      const owner = parts[0];
+      const repo = parts.slice(1).join('/');
+      return `https://github.com/${owner}/${repo}/pkgs/container/${parts[parts.length - 1]}`;
+    }
+  }
+
+  // LinuxServer (lscr.io)
+  if (imageWithoutTag.startsWith('lscr.io/')) {
+    const path = imageWithoutTag.replace('lscr.io/', '');
+    return `https://fleet.linuxserver.io/image?name=${path}`;
+  }
+
+  // Quay.io
+  if (imageWithoutTag.startsWith('quay.io/')) {
+    const path = imageWithoutTag.replace('quay.io/', '');
+    return `https://quay.io/repository/${path}`;
+  }
+
+  // Docker Hub (docker.io or no registry prefix)
+  if (imageWithoutTag.startsWith('docker.io/') || !imageWithoutTag.includes('/') || (!imageWithoutTag.includes('.') && imageWithoutTag.includes('/'))) {
+    let path = imageWithoutTag.replace('docker.io/', '');
+    // Official images (no slash or library/)
+    if (!path.includes('/') || path.startsWith('library/')) {
+      const imageName = path.replace('library/', '');
+      return `https://hub.docker.com/_/${imageName}`;
+    }
+    return `https://hub.docker.com/r/${path}`;
+  }
+
+  // Generic registry - just return null, can't reliably link
+  return null;
 }
 
-export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }: ContainerDetailModalProps) {
+export function ContainerDetailPage() {
   const navigate = useNavigate();
-  const [scripts, setScripts] = useState<Script[]>([]);
+  const location = useLocation();
+  const { containerName } = useParams<{ containerName: string }>();
+
+  const [container, setContainer] = useState<ContainerInfo | undefined>(undefined);
+  const [loadingContainer, setLoadingContainer] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<React.ReactNode | null>(null);
   const [selectedScript, setSelectedScript] = useState<string>('');
@@ -28,12 +68,12 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [preCheckFailed, setPreCheckFailed] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [dependentContainers, setDependentContainers] = useState<string[]>([]);
-  const [showForceRestart, setShowForceRestart] = useState(false);
   const [restartProgress, setRestartProgress] = useState<{
     stage: 'stopping' | 'starting' | 'checking' | 'dependents' | 'complete' | 'failed';
     message: string;
+    description?: string;
     startTime: number;
-    logs: Array<{ time: number; message: string; type: 'info' | 'success' | 'error' }>;
+    logs: Array<{ time: number; message: string; type: 'info' | 'success' | 'error' | 'stage'; icon?: string }>;
     dependentsRestarted?: string[];
     dependentsBlocked?: string[];
     errors?: string[];
@@ -48,9 +88,65 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const [originalVersionPinMinor, setOriginalVersionPinMinor] = useState(false);
   const [originalRestartDependsOn, setOriginalRestartDependsOn] = useState<string>('');
 
+  // Fetch container data when component mounts or containerName changes
   useEffect(() => {
+    if (!containerName) {
+      navigate('/');
+      return;
+    }
+
+    const fetchContainerData = async () => {
+      try {
+        setLoadingContainer(true);
+        const [statusResponse, labelsResponse] = await Promise.all([
+          getContainerStatus(),
+          getContainerLabels(containerName),
+        ]);
+
+        if (statusResponse.success && statusResponse.data) {
+          const foundContainer = statusResponse.data.containers.find(
+            (c) => c.container_name === containerName
+          );
+
+          if (foundContainer && labelsResponse.success && labelsResponse.data) {
+            setContainer({
+              ...foundContainer,
+              labels: labelsResponse.data.labels || {},
+            });
+          } else {
+            navigate('/');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load container:', err);
+        navigate('/');
+      } finally {
+        setLoadingContainer(false);
+      }
+    };
+
+    fetchContainerData();
+  }, [containerName, navigate]);
+
+  // Handle location state updates (from sub-pages)
+  useEffect(() => {
+    const state = location.state as any;
+    if (state) {
+      if ('selectedScript' in state) {
+        setSelectedScript(state.selectedScript);
+      }
+      if ('restartDependsOn' in state) {
+        setRestartDependsOn(state.restartDependsOn);
+      }
+      // Clear the state after handling to prevent re-applying on back navigation
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!container) return;
     fetchData();
-  }, [container.container_name]);
+  }, [container]);
 
   useEffect(() => {
     // Check if any settings have changed
@@ -68,18 +164,15 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   const restartElapsed = useElapsedTime(restartProgress?.startTime ?? null, isRestarting);
 
   const fetchData = async () => {
+    if (!container) return;
+
     setLoading(true);
     setError(null);
     try {
-      const [scriptsResponse, labelsResponse, containersResponse] = await Promise.all([
-        getScripts(),
+      const [labelsResponse, containersResponse] = await Promise.all([
         getContainerLabels(container.container_name),
         checkContainers(),
       ]);
-
-      if (scriptsResponse.success && scriptsResponse.data) {
-        setScripts(scriptsResponse.data.scripts || []);
-      }
 
       if (labelsResponse.success && labelsResponse.data) {
         const labels = labelsResponse.data.labels || {};
@@ -120,14 +213,6 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
         const dependents = dependentContainersData.map(c => c.container_name);
         setDependentContainers(dependents);
-
-        // Determine if Force Restart should be shown
-        // Show if this container has a pre-update check OR any dependent has a pre-update check
-        const hasOwnPreCheck = !!(labelsResponse.success && labelsResponse.data?.labels?.['docksmith.pre-update-check']);
-        const hasDependentPreChecks = dependentContainersData.some(c =>
-          c.labels?.['docksmith.pre-update-check']
-        );
-        setShowForceRestart(hasOwnPreCheck || hasDependentPreChecks);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -174,6 +259,13 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   };
 
   const handleSave = async (force = false) => {
+    if (!container) {
+      console.error('Container is undefined in handleSave');
+      setError('Container not loaded');
+      return;
+    }
+
+    console.log('Starting handleSave, force:', force);
     setSaving(true);
     setError(null);
     setPreCheckFailed(false);
@@ -184,20 +276,22 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
     // Initialize progress tracking
     const startTime = Date.now();
-    const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    const addLog = (message: string, type: 'info' | 'success' | 'error' | 'stage' = 'info', icon?: string) => {
       setRestartProgress(prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          logs: [...prev.logs, { time: Date.now(), message, type }],
+          logs: [...prev.logs, { time: Date.now(), message, type, icon }],
         };
       });
     };
 
     // Start progress view
+    console.log('Setting restart progress');
     setRestartProgress({
       stage: 'stopping',
-      message: 'Saving settings and restarting...',
+      message: 'Saving Settings',
+      description: 'Updating compose file with new settings...',
       startTime,
       logs: [
         {
@@ -205,10 +299,12 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           message: force
             ? `Saving settings with force restart for ${container.container_name}`
             : `Saving settings for ${container.container_name}`,
-          type: 'info'
+          type: 'info',
+          icon: 'fa-floppy-disk'
         }
       ],
     });
+    console.log('Restart progress set');
 
     try {
       // Build label changes
@@ -239,25 +335,28 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         return;
       }
 
-      addLog('Updating compose file...', 'info');
+      addLog('Updating compose file...', 'stage', 'fa-file-pen');
 
       // Simulate stages for visual feedback
       const timeout1 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Updating compose file...' } : null);
+        setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Updating Compose', description: 'Writing new settings to compose file...' } : null);
       }, 300);
       restartTimeoutsRef.current.push(timeout1);
 
       const timeout2 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Restarting container...' } : null);
+        setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Restarting', description: 'Restarting container with new settings...' } : null);
+        addLog('Restarting container...', 'stage', 'fa-rotate');
       }, 800);
       restartTimeoutsRef.current.push(timeout2);
 
       const timeout3 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Verifying changes...' } : null);
+        setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Verifying', description: 'Checking that settings were applied...' } : null);
+        addLog('Verifying changes...', 'stage', 'fa-check-double');
       }, 1200);
       restartTimeoutsRef.current.push(timeout3);
 
       // Call atomic API
+      if (!container) return;
       const result = await setLabels(container.container_name, {
         ...changes,
         force,
@@ -271,20 +370,21 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         const data = result.data;
 
         // Log what happened
-        addLog('✓ Compose file updated', 'success');
+        addLog('Compose file updated', 'success', 'fa-check');
 
         if (data.pre_check_ran && data.pre_check_passed) {
-          addLog('✓ Pre-update check passed', 'success');
+          addLog('Pre-update check passed', 'success', 'fa-shield-check');
         }
 
         if (data.restarted) {
-          addLog('✓ Container restarted successfully', 'success');
+          addLog('Container restarted successfully', 'success', 'fa-check');
         }
 
         // Update originals
         setOriginalIgnore(ignoreFlag);
         setOriginalAllowLatest(allowLatestFlag);
         setOriginalVersionPinMajor(versionPinMajor);
+        setOriginalVersionPinMinor(versionPinMinor);
         setOriginalScript(selectedScript);
         setOriginalRestartDependsOn(restartDependsOn);
 
@@ -292,10 +392,11 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         setRestartProgress(prev => prev ? {
           ...prev,
           stage: 'complete',
-          message: 'Settings saved and container restarted',
+          message: 'Complete',
+          description: 'Settings saved and container restarted',
         } : null);
 
-        addLog('✓ Settings saved successfully', 'success');
+        addLog('Settings saved successfully', 'success', 'fa-circle-check');
 
         // Don't auto-refresh - let user close the modal first
       } else {
@@ -313,19 +414,21 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         setRestartProgress(prev => prev ? {
           ...prev,
           stage: 'failed',
-          message: 'Pre-update check failed',
+          message: 'Pre-check Failed',
+          description: 'Pre-update check script returned an error',
           errors: [errorMessage],
         } : null);
-        addLog(`✗ Pre-update check failed: ${errorMessage}`, 'error');
+        addLog(`Pre-update check failed: ${errorMessage}`, 'error', 'fa-shield-xmark');
         setPreCheckFailed(true);
       } else {
         setRestartProgress(prev => prev ? {
           ...prev,
           stage: 'failed',
-          message: 'Save failed',
+          message: 'Failed',
+          description: errorMessage,
           errors: [errorMessage],
         } : null);
-        addLog(`✗ Save failed: ${errorMessage}`, 'error');
+        addLog(`Save failed: ${errorMessage}`, 'error', 'fa-circle-xmark');
       }
     } finally {
       // Ensure all timeouts are cleared
@@ -346,6 +449,8 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   };
 
   const handleRestart = async (force = false) => {
+    if (!container) return;
+
     setRestarting(true);
     setError(null);
 
@@ -355,19 +460,20 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
     // Initialize progress tracking
     const startTime = Date.now();
-    const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    const addLog = (message: string, type: 'info' | 'success' | 'error' | 'stage' = 'info', icon?: string) => {
       setRestartProgress(prev => {
         if (!prev) return prev;
         return {
           ...prev,
-          logs: [...prev.logs, { time: Date.now(), message, type }],
+          logs: [...prev.logs, { time: Date.now(), message, type, icon }],
         };
       });
     };
 
     setRestartProgress({
       stage: 'stopping',
-      message: force ? 'Force restarting container...' : 'Restarting container...',
+      message: force ? 'Force Restarting' : 'Restarting',
+      description: 'Stopping the container gracefully...',
       startTime,
       logs: [
         {
@@ -375,26 +481,28 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           message: force
             ? `Force restarting ${container.container_name} (bypassing pre-checks)`
             : `Restarting ${container.container_name}`,
-          type: 'info'
+          type: 'info',
+          icon: 'fa-rotate-right'
         }
       ],
     });
 
     // Simulate stages since backend doesn't emit events - store timeout IDs
     const timeout1 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Stopping container...' } : null);
-      addLog('Stopping container...', 'info');
+      setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Stopping', description: 'Stopping the container gracefully...' } : null);
+      addLog('Stopping container...', 'stage', 'fa-circle-stop');
     }, 300);
     restartTimeoutsRef.current.push(timeout1);
 
     const timeout2 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Starting container...' } : null);
-      addLog('Starting container...', 'info');
+      setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Starting', description: 'Starting the container with current configuration...' } : null);
+      addLog('Starting container...', 'stage', 'fa-circle-play');
     }, 800);
     restartTimeoutsRef.current.push(timeout2);
 
     const timeout3 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Checking container status...' } : null);
+      setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Health Check', description: 'Verifying container is running correctly...' } : null);
+      addLog('Checking container status...', 'stage', 'fa-heart-pulse');
     }, 1200);
     restartTimeoutsRef.current.push(timeout3);
 
@@ -406,7 +514,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
       restartTimeoutsRef.current = [];
 
       if (response.success && response.data) {
-        addLog(`✓ Container restarted successfully`, 'success');
+        addLog(`Container restarted successfully`, 'success', 'fa-check');
 
         // Handle dependents
         const hasDependents = dependentContainers.length > 0;
@@ -415,28 +523,28 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
         const errors = response.data.errors || [];
 
         if (hasDependents) {
-          setRestartProgress(prev => prev ? { ...prev, stage: 'dependents', message: 'Processing dependent containers...' } : null);
-          addLog(`Processing ${dependentContainers.length} dependent container(s)...`, 'info');
+          setRestartProgress(prev => prev ? { ...prev, stage: 'dependents', message: 'Processing Dependents', description: 'Restarting dependent containers...' } : null);
+          addLog(`Processing ${dependentContainers.length} dependent container(s)...`, 'stage', 'fa-link');
         }
 
         // Show which dependents were restarted
         if (dependentsRestarted.length > 0) {
           dependentsRestarted.forEach(dep => {
-            addLog(`✓ Dependent restarted: ${dep}`, 'success');
+            addLog(`Dependent restarted: ${dep}`, 'success', 'fa-check');
           });
         }
 
         // Show which dependents were blocked
         if (dependentsBlocked.length > 0) {
           dependentsBlocked.forEach(dep => {
-            addLog(`⚠ Dependent blocked by pre-check: ${dep}`, 'error');
+            addLog(`Dependent blocked by pre-check: ${dep}`, 'error', 'fa-exclamation-triangle');
           });
         }
 
         // Show any errors
         if (errors.length > 0) {
           errors.forEach(err => {
-            addLog(`✗ ${err}`, 'error');
+            addLog(err, 'error', 'fa-xmark');
           });
         }
 
@@ -446,8 +554,11 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
           ...prev,
           stage: 'complete',
           message: hasErrors
-            ? 'Restart completed with warnings'
-            : 'Restart completed successfully',
+            ? 'Completed with Warnings'
+            : 'Complete',
+          description: hasErrors
+            ? 'Some dependents could not be restarted'
+            : 'Container restarted successfully',
           dependentsRestarted,
           dependentsBlocked,
           errors,
@@ -455,9 +566,10 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
 
         addLog(
           hasErrors
-            ? '⚠ Restart completed with warnings - some dependents may not have restarted'
-            : '✓ Restart completed successfully',
-          hasErrors ? 'error' : 'success'
+            ? 'Restart completed with warnings'
+            : 'Restart completed successfully',
+          hasErrors ? 'error' : 'success',
+          hasErrors ? 'fa-exclamation-triangle' : 'fa-circle-check'
         );
 
         // Don't auto-refresh - let user close the modal first
@@ -474,11 +586,12 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
       setRestartProgress(prev => prev ? {
         ...prev,
         stage: 'failed',
-        message: 'Restart failed',
+        message: 'Failed',
+        description: errorMessage,
         errors: [errorMessage],
       } : null);
 
-      addLog(`✗ Restart failed: ${errorMessage}`, 'error');
+      addLog(`Restart failed: ${errorMessage}`, 'error', 'fa-circle-xmark');
     } finally {
       // Ensure all timeouts are cleared
       restartTimeoutsRef.current.forEach(id => clearTimeout(id));
@@ -507,6 +620,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   };
 
   const getStatusBadge = () => {
+    if (!container) return null;
     switch (container.status) {
       case 'UPDATE_AVAILABLE':
         return <span className="status-badge update">Update Available</span>;
@@ -526,6 +640,7 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
   };
 
   const getChangeTypeBadge = () => {
+    if (!container) return null;
     // Don't show badge for NoChange, Unknown, or if the name is "unknown"
     const changeTypeName = getChangeTypeName(container.change_type);
     if (
@@ -543,16 +658,37 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
     );
   };
 
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal container-detail-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="container-detail-title">
-            <h2>{container.container_name}</h2>
-            {getStatusBadge()}
-          </div>
-          <button className="close-btn" onClick={onClose}>×</button>
+  // Show loading state while fetching container
+  if (loadingContainer) {
+    return (
+      <div className="container-detail-page">
+        <div className="page-header">
+          <button className="back-button" onClick={() => navigate('/')}>
+            ← Back
+          </button>
+          <h1>Loading...</h1>
+          <div className="header-spacer"></div>
         </div>
+      </div>
+    );
+  }
+
+  // Container not found or error
+  if (!container) {
+    return null;
+  }
+
+  return (
+    <div className="container-detail-page">
+      <div className="page-header">
+        <button className="back-button" onClick={() => navigate('/')}>
+          ← Back
+        </button>
+        <h1>{container.container_name}</h1>
+        <div className="header-spacer"></div>
+      </div>
+
+      <div className="page-content">
 
         {error && (
           <div className={`error-banner ${preCheckFailed ? 'error-with-action' : ''}`}>
@@ -562,100 +698,34 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                 <strong>{preCheckFailed ? 'Pre-Update Check Failed' : 'Error'}</strong>
                 <p>{error}</p>
               </div>
+              {preCheckFailed && (
+                <button
+                  className="button button-danger"
+                  onClick={() => {
+                    setError(null);
+                    setPreCheckFailed(false);
+                    hasChanges ? handleSave(true) : handleRestart(true);
+                  }}
+                  style={{ marginLeft: '12px' }}
+                >
+                  <i className="fa-solid fa-bolt"></i> Force
+                </button>
+              )}
             </div>
-            <button className="error-dismiss" onClick={() => setError(null)}>×</button>
+            <button className="error-dismiss" onClick={() => {
+              setError(null);
+              setPreCheckFailed(false);
+            }}>×</button>
           </div>
         )}
 
-        <div className="modal-body">
-          {/* Restart Progress View - replaces modal content during restart */}
-          {restartProgress ? (
-            <div className="restart-progress-view">
-              {/* Container info */}
-              <div className="restart-container-info">
-                <div className="container-name-display">
-                  <i className="fa-solid fa-box"></i>
-                  <span>{container.container_name}</span>
-                </div>
-                <div className="restart-stats">
-                  <span>Elapsed: {restartElapsed}s</span>
-                  {dependentContainers.length > 0 && (
-                    <span>Dependents: {dependentContainers.length}</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Current stage indicator */}
-              <div className="restart-stage-display">
-                <div className={`restart-stage-icon ${restartProgress.stage === 'failed' ? 'failed' : restartProgress.stage === 'complete' ? 'complete' : 'in-progress'}`}>
-                  {restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed' ? (
-                    <div className="stage-icon-wrapper">
-                      {getRestartStageIcon(restartProgress.stage)}
-                      <div className="spinner-ring"></div>
-                    </div>
-                  ) : (
-                    getRestartStageIcon(restartProgress.stage)
-                  )}
-                </div>
-                <div className="restart-stage-message">{restartProgress.message}</div>
-              </div>
-
-              {/* Activity log */}
-              <div className="update-activity-log">
-                <div className="log-header">Activity Log:</div>
-                <div className="log-entries" style={{ maxHeight: '250px', overflowY: 'auto' }}>
-                  {restartProgress.logs.map((log, i) => (
-                    <div key={i} className={`log-entry log-${log.type}`}>
-                      <span className="log-time">
-                        [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
-                      </span>
-                      <span className="log-message">{log.message}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Completion summary */}
-              {(restartProgress.stage === 'complete' || restartProgress.stage === 'failed') && (
-                <div className="restart-completion">
-                  {restartProgress.stage === 'complete' ? (
-                    <>
-                      <div className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'completion-warning' : 'completion-success'}>
-                        <i className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check'}></i>
-                        {' '}
-                        {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0
-                          ? 'Restart completed with warnings'
-                          : 'Container restarted successfully!'}
-                      </div>
-                      {restartProgress.dependentsRestarted && restartProgress.dependentsRestarted.length > 0 && (
-                        <div className="dependents-summary success">
-                          <i className="fa-solid fa-check-circle"></i> {restartProgress.dependentsRestarted.length} dependent(s) restarted
-                        </div>
-                      )}
-                      {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 && (
-                        <div className="dependents-summary warning">
-                          <i className="fa-solid fa-exclamation-circle"></i> {restartProgress.dependentsBlocked.length} dependent(s) blocked by pre-checks
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="completion-error">
-                      <i className="fa-solid fa-xmark"></i> Restart failed
-                      {restartProgress.errors && restartProgress.errors.length > 0 && (
-                        <div style={{ marginTop: '8px', fontSize: '0.9em' }}>
-                          {restartProgress.errors.map((err, i) => (
-                            <div key={i}>{err}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Normal modal content */}
+        {/* Status Badge */}
+        <div className="status-section">
+          {getStatusBadge()}
+          {getChangeTypeBadge()}
+        </div>
+          {/* Normal content */}
+          <>
               {/* Container Settings */}
               <div className="detail-section settings-section">
             <h3 className="section-title">
@@ -785,36 +855,41 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                       <strong>Pre-Update Check</strong>
                       <small>Run script before updates</small>
                     </label>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <select
-                        value={selectedScript}
-                        onChange={(e) => setSelectedScript(e.target.value)}
-                        disabled={saving}
-                        className="setting-select"
-                        style={{ flex: 1 }}
-                      >
-                        <option value="">No script</option>
-                        {scripts.map(s => (
-                          <option key={s.path} value={s.path} disabled={!s.executable}>
-                            {s.name} {s.executable ? '' : '(not executable)'}
-                          </option>
-                        ))}
-                      </select>
-                      {selectedScript && (
-                        <button
-                          className="btn-clear"
-                          onClick={() => setSelectedScript('')}
-                          disabled={saving}
-                          title="Clear script"
-                        >
-                          <i className="fa-solid fa-times"></i>
-                        </button>
-                      )}
-                    </div>
-                    {originalScript && (
+                    <button
+                      className="setting-button"
+                      onClick={() => {
+                        navigate(`/container/${container.container_name}/script-selection`, {
+                          state: { currentScript: selectedScript }
+                        });
+                      }}
+                      disabled={saving}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'var(--color-bg-tertiary)',
+                        border: '1px solid var(--color-separator)',
+                        borderRadius: '10px',
+                        color: 'var(--color-accent)',
+                        fontSize: '15px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <span>
+                        {selectedScript
+                          ? selectedScript.split('/').pop()
+                          : 'No script selected'}
+                      </span>
+                      <span style={{ marginLeft: '8px' }}>→</span>
+                    </button>
+                    {selectedScript && (
                       <div className="current-script-indicator">
                         <i className="fa-solid fa-shield-alt"></i>
-                        <strong>Current:</strong> {originalScript.split('/').pop()}
+                        <strong>Current:</strong> {selectedScript.split('/').pop()}
                       </div>
                     )}
                   </div>
@@ -823,33 +898,43 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
                   <div className="setting-item full-width">
                     <label className="select-label">
                       <strong>Restart When These Restart</strong>
-                      <small>Comma-separated container names</small>
+                      <small>Select containers this depends on</small>
                     </label>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <input
-                        type="text"
-                        value={restartDependsOn}
-                        onChange={(e) => setRestartDependsOn(e.target.value)}
-                        disabled={saving}
-                        placeholder="e.g., vpn, tailscale"
-                        className="setting-select"
-                        style={{ flex: 1 }}
-                      />
-                      {restartDependsOn && (
-                        <button
-                          className="btn-clear"
-                          onClick={() => setRestartDependsOn('')}
-                          disabled={saving}
-                          title="Clear dependencies"
-                        >
-                          <i className="fa-solid fa-times"></i>
-                        </button>
-                      )}
-                    </div>
-                    {originalRestartDependsOn && (
+                    <button
+                      className="setting-button"
+                      onClick={() => {
+                        navigate(`/container/${container.container_name}/restart-dependencies`, {
+                          state: { currentDependencies: restartDependsOn }
+                        });
+                      }}
+                      disabled={saving}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'var(--color-bg-tertiary)',
+                        border: '1px solid var(--color-separator)',
+                        borderRadius: '10px',
+                        color: 'var(--color-accent)',
+                        fontSize: '15px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <span>
+                        {restartDependsOn
+                          ? `${restartDependsOn.split(',').length} container${restartDependsOn.split(',').length > 1 ? 's' : ''} selected`
+                          : 'No dependencies'}
+                      </span>
+                      <span style={{ marginLeft: '8px' }}>→</span>
+                    </button>
+                    {restartDependsOn && (
                       <div className="current-script-indicator">
                         <i className="fa-solid fa-link"></i>
-                        <strong>Current:</strong> {originalRestartDependsOn}
+                        <strong>Current:</strong> {restartDependsOn}
                       </div>
                     )}
 
@@ -915,7 +1000,21 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
             <div className="detail-grid">
               <div className="detail-item">
                 <span className="detail-label">Repository</span>
-                <span className="detail-value mono">{container.image}</span>
+                <span className="detail-value mono">
+                  {getRegistryUrl(container.image) ? (
+                    <a
+                      href={getRegistryUrl(container.image)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="image-link"
+                    >
+                      {container.image}
+                      <i className="fa-solid fa-external-link-alt" style={{ marginLeft: '6px', fontSize: '12px', opacity: 0.7 }}></i>
+                    </a>
+                  ) : (
+                    container.image
+                  )}
+                </span>
               </div>
               {container.current_tag && (
                 <div className="detail-item">
@@ -1011,120 +1110,228 @@ export function ContainerDetailModal({ container, onClose, onRefresh, onUpdate }
             </div>
           )}
             </>
-          )}
-        </div>
+      </div>
 
-        {/* Changes Warning - Anchored near footer */}
-        {hasChanges && (
-          <div className="settings-changes" style={{
-            margin: '0',
-            borderTop: '1px solid var(--border-color)',
-            borderRadius: '0',
-            padding: '12px 20px'
-          }}>
-            <div className="changes-warning">
-              <div className="warning-header">
-                <i className="fa-solid fa-exclamation-triangle"></i>
-                <strong>Container will be restarted</strong>
+      {/* Restart Progress Modal Overlay */}
+      {restartProgress && (
+        <div className="progress-overlay">
+          <div className="progress-modal">
+            <div className="restart-progress-view">
+              {/* Container info */}
+              <div className="restart-container-info">
+                <div className="container-name-display">
+                  <i className="fa-solid fa-box"></i>
+                  <span>{container.container_name}</span>
+                </div>
+                <div className="restart-stats">
+                  <span>Elapsed: {restartElapsed}s</span>
+                  {dependentContainers.length > 0 && (
+                    <span>Dependents: {dependentContainers.length}</span>
+                  )}
+                </div>
               </div>
-              <div className="changes-list">
-                <span>Changes to apply:</span>
-                <ul>
-                  {getChangeSummary().map((change, i) => (
-                    <li key={i}>{change}</li>
+
+              {/* Current stage indicator */}
+              <div className="restart-stage-display">
+                <div className={`restart-stage-icon ${restartProgress.stage === 'failed' ? 'failed' : restartProgress.stage === 'complete' ? 'complete' : 'in-progress'}`}>
+                  {restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed' ? (
+                    <div className="stage-icon-wrapper">
+                      {getRestartStageIcon(restartProgress.stage)}
+                      <div className="spinner-ring"></div>
+                    </div>
+                  ) : (
+                    getRestartStageIcon(restartProgress.stage)
+                  )}
+                </div>
+                <div className="restart-stage-message">{restartProgress.message}</div>
+                {restartProgress.description && (
+                  <div className="restart-stage-description">{restartProgress.description}</div>
+                )}
+              </div>
+
+              {/* Activity log */}
+              <div className="update-activity-log">
+                <div className="log-header">Activity Log:</div>
+                <div className="log-entries" style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                  {restartProgress.logs.map((log, i) => (
+                    <div key={i} className={`log-entry log-${log.type}`}>
+                      <span className="log-time">
+                        [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
+                      </span>
+                      {log.icon && (
+                        <span className="log-icon">
+                          <i className={`fa-solid ${log.icon}`}></i>
+                        </span>
+                      )}
+                      <span className="log-message">{log.message}</span>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </div>
-              {originalScript && (
-                <div className="warning-note">
-                  <i className="fa-solid fa-info-circle"></i>
-                  Pre-update check will run before restart
+
+              {/* Completion summary */}
+              {(restartProgress.stage === 'complete' || restartProgress.stage === 'failed') && (
+                <div className="restart-completion">
+                  {restartProgress.stage === 'complete' ? (
+                    <>
+                      <div className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'completion-warning' : 'completion-success'}>
+                        <i className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check'}></i>
+                        {' '}
+                        {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0
+                          ? 'Restart completed with warnings'
+                          : 'Container restarted successfully!'}
+                      </div>
+                      {restartProgress.dependentsRestarted && restartProgress.dependentsRestarted.length > 0 && (
+                        <div className="dependents-summary success">
+                          <i className="fa-solid fa-check-circle"></i> {restartProgress.dependentsRestarted.length} dependent(s) restarted
+                        </div>
+                      )}
+                      {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 && (
+                        <div className="dependents-summary warning">
+                          <i className="fa-solid fa-exclamation-circle"></i> {restartProgress.dependentsBlocked.length} dependent(s) blocked by pre-checks
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="completion-error">
+                      <i className="fa-solid fa-xmark"></i> Restart failed
+                      {restartProgress.errors && restartProgress.errors.length > 0 && (
+                        <div style={{ marginTop: '8px', fontSize: '0.9em' }}>
+                          {restartProgress.errors.map((err, i) => (
+                            <div key={i}>{err}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
-        )}
-
-        <div className="modal-footer">
-          {restartProgress ? (
-            // Show simple close button during restart (disabled until complete)
-            <button
-              className="btn-primary"
-              onClick={() => {
-                setRestartProgress(null);
-                // Refresh and close modal when user dismisses restart view
-                if (onRefresh) {
-                  onRefresh();
-                }
-                onClose();
-              }}
-              disabled={restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed'}
-              style={{ width: '100%' }}
-            >
-              {restartProgress.stage === 'complete' || restartProgress.stage === 'failed'
-                ? 'Close'
-                : 'Restarting...'}
-            </button>
-          ) : (
-            // Normal footer buttons
-            <>
-              <button className="btn-secondary" onClick={onClose}>Close</button>
-
-              {hasChanges && (
-                <button
-                  className="btn-secondary"
-                  onClick={handleReset}
-                  disabled={saving || restarting}
-                >
-                  <i className="fa-solid fa-undo"></i> Cancel
-                </button>
-              )}
-
-              {!showForceRestart && (
-                <button
-                  className="btn-secondary"
-                  onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
-                  disabled={saving || restarting}
-                >
-                  {saving || restarting ? (
-                    <>
-                      <div className="spinner-inline"></div> {hasChanges ? 'Saving...' : 'Restarting...'}
-                    </>
-                  ) : (
-                    <>
-                      <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i> {hasChanges ? 'Save & Restart' : 'Restart'}
-                    </>
-                  )}
-                </button>
-              )}
-
-              {showForceRestart && (
-                <button
-                  className="btn-warning"
-                  onClick={() => hasChanges ? handleSave(true) : handleRestart(true)}
-                  disabled={saving || restarting}
-                  title="Force restart, bypassing pre-update checks"
-                >
-                  <i className="fa-solid fa-bolt"></i> Force {hasChanges ? 'Save & ' : ''}Restart
-                </button>
-              )}
-
-              {!hasChanges && container.status === 'UPDATE_AVAILABLE' && onUpdate && (
-                <button
-                  className="btn-primary"
-                  onClick={() => {
-                    onUpdate(container.container_name);
-                    onClose();
-                  }}
-                >
-                  <i className="fa-solid fa-arrow-up"></i> Update Now
-                </button>
-              )}
-            </>
-          )}
         </div>
+      )}
 
+      {/* Page Footer */}
+      <div className="page-footer">
+        {restartProgress ? (
+          // Show simple close button during restart (disabled until complete)
+          <button
+            className="button button-primary"
+            onClick={() => {
+              setRestartProgress(null);
+              // Refresh container data after restart
+              if (containerName) {
+                const fetchContainerData = async () => {
+                  try {
+                    const [statusResponse, labelsResponse] = await Promise.all([
+                      getContainerStatus(),
+                      getContainerLabels(containerName),
+                    ]);
+
+                    if (statusResponse.success && statusResponse.data) {
+                      const foundContainer = statusResponse.data.containers.find(
+                        (c) => c.container_name === containerName
+                      );
+
+                      if (foundContainer && labelsResponse.success && labelsResponse.data) {
+                        setContainer({
+                          ...foundContainer,
+                          labels: labelsResponse.data.labels || {},
+                        });
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Failed to refresh container data:', err);
+                  }
+                };
+                fetchContainerData();
+              }
+            }}
+            disabled={restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed'}
+            style={{ width: '100%' }}
+          >
+            {restartProgress.stage === 'complete' || restartProgress.stage === 'failed'
+              ? 'Done'
+              : 'Restarting...'}
+          </button>
+        ) : (
+          // Normal footer buttons
+          <>
+            {hasChanges && (
+              <button
+                className="button button-secondary"
+                onClick={handleReset}
+                disabled={saving || restarting}
+              >
+                <i className="fa-solid fa-undo"></i>
+                <span>Cancel</span>
+              </button>
+            )}
+
+            {/* Show Restart button when no update available or has changes */}
+            {(hasChanges || (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED')) && (
+              <button
+                className="button button-primary"
+                onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
+                disabled={saving || restarting}
+              >
+                {saving || restarting ? (
+                  <>
+                    <div className="spinner-inline"></div>
+                    <span>{hasChanges ? 'Saving...' : 'Restarting...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i>
+                    <span>{hasChanges ? 'Save & Restart' : 'Restart'}</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Show Update button on the right when update available */}
+            {(container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED') && !hasChanges && (
+              <button
+                className="button button-accent"
+                onClick={() => {
+                  // Navigate to dashboard, which will handle the update
+                  navigate('/');
+                }}
+                disabled={saving || restarting}
+              >
+                <i className="fa-solid fa-arrow-up"></i>
+                <span>Update</span>
+              </button>
+            )}
+          </>
+        )}
       </div>
+
+      {/* Changes Warning - Shows when unsaved changes */}
+      {hasChanges && !restartProgress && (
+        <div className="changes-warning-banner">
+          <div className="warning-content">
+            <div className="warning-header">
+              <i className="fa-solid fa-exclamation-triangle"></i>
+              <strong>Container will be restarted</strong>
+            </div>
+            <div className="changes-list">
+              <span>Changes to apply:</span>
+              <ul>
+                {getChangeSummary().map((change, i) => (
+                  <li key={i}>{change}</li>
+                ))}
+              </ul>
+            </div>
+            {originalScript && (
+              <div className="warning-note">
+                <i className="fa-solid fa-info-circle"></i>
+                Pre-update check will run before restart
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
