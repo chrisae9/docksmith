@@ -68,7 +68,6 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 
 	// Setup orchestrator
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -83,12 +82,13 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	}
 
 	// Subscribe to events
-	eventsSub := bus.Subscribe(ctx, "test-subscriber")
+	eventsSub, unsubscribe := bus.Subscribe("*")
+	defer unsubscribe()
 	receivedEvents := make([]events.Event, 0)
 	go func() {
 		for {
 			select {
-			case event := <-eventsSub.Channel:
+			case event := <-eventsSub:
 				receivedEvents = append(receivedEvents, event)
 			case <-time.After(5 * time.Second):
 				return
@@ -195,7 +195,6 @@ func TestIntegration_RollbackFlowOnHealthCheckFailure(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -281,7 +280,6 @@ func TestIntegration_DependentContainerRestartOrdering(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -362,7 +360,6 @@ func TestIntegration_QueueProcessingWithConcurrentStacks(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -446,7 +443,6 @@ func TestIntegration_APIToOrchestratorToStorageFullStack(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -614,7 +610,6 @@ func TestIntegration_PermissionFailurePreventsPartialOperations(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -700,7 +695,6 @@ func TestIntegration_BatchUpdateWithMixedResults(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -766,7 +760,6 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -781,8 +774,10 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 	}
 
 	// Create multiple subscribers
-	sub1 := bus.Subscribe(ctx, "subscriber-1")
-	sub2 := bus.Subscribe(ctx, "subscriber-2")
+	sub1, unsub1 := bus.Subscribe("*")
+	defer unsub1()
+	sub2, unsub2 := bus.Subscribe("*")
+	defer unsub2()
 
 	received1 := make([]events.Event, 0)
 	received2 := make([]events.Event, 0)
@@ -796,7 +791,7 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 		timeout := time.After(3 * time.Second)
 		for {
 			select {
-			case event := <-sub1.Channel:
+			case event := <-sub1:
 				received1 = append(received1, event)
 			case <-timeout:
 				return
@@ -810,7 +805,7 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 		timeout := time.After(3 * time.Second)
 		for {
 			select {
-			case event := <-sub2.Channel:
+			case event := <-sub2:
 				received2 = append(received2, event)
 			case <-timeout:
 				return
@@ -907,7 +902,6 @@ func TestIntegration_StackUpdateWithTopologicalOrdering(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -1158,7 +1152,6 @@ func TestIntegration_MixedStackComposeAndStandalone(t *testing.T) {
 
 	mockStorage := NewTestMockStorage()
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
@@ -1269,7 +1262,6 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	tmpDir := t.TempDir()
 	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
 
@@ -1307,11 +1299,10 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 
 	mockStorage := NewTestMockStorage()
 	bus := events.NewBus()
-	defer bus.Close()
 
 	// Subscribe to events
-	sub := bus.Subscribe(ctx, "test-subscriber")
-	defer bus.Unsubscribe("test-subscriber")
+	sub, unsubscribe := bus.Subscribe("*")
+	defer unsubscribe()
 
 	capturedEvents := make([]events.Event, 0)
 	done := make(chan bool)
@@ -1321,7 +1312,7 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 		timeout := time.After(3 * time.Second)
 		for {
 			select {
-			case event := <-sub.Channel:
+			case event := <-sub:
 				capturedEvents = append(capturedEvents, event)
 			case <-timeout:
 				done <- true
@@ -1487,7 +1478,6 @@ func TestIntegration_StandaloneContainerSDKRecreation(t *testing.T) {
 
 	mockStorage := NewTestMockStorage()
 	bus := events.NewBus()
-	defer bus.Close()
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,

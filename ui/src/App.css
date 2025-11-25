@@ -23,6 +23,8 @@
   --color-error: #FF453A;               /* Alias for danger */
   --color-orange: #FF9F0A;              /* iOS Orange */
   --color-orange-dim: rgba(255, 159, 10, 0.2);
+  --color-purple: #AF52DE;              /* iOS Purple */
+  --color-purple-dim: rgba(175, 82, 222, 0.15);
 
   /* Background Colors */
   --color-bg-primary: #000000;          /* True black (OLED) */
@@ -248,7 +250,7 @@ h1 {
   margin: 0 0 12px;
 }
 
-.search-icon {
+.search-bar > i:first-child {
   position: absolute;
   left: 12px;
   top: 50%;
@@ -256,6 +258,7 @@ h1 {
   color: var(--color-text-tertiary);
   font-size: 14px;
   pointer-events: none;
+  z-index: 1;
 }
 
 .search-input {
@@ -281,7 +284,7 @@ h1 {
   box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
-.search-clear {
+.clear-search {
   position: absolute;
   right: 8px;
   top: 50%;
@@ -298,12 +301,12 @@ h1 {
   padding: 0;
 }
 
-.search-clear i {
+.clear-search i {
   color: var(--color-bg-tertiary);
   font-size: 10px;
 }
 
-.search-clear:hover {
+.clear-search:hover {
   background: var(--color-text-secondary);
 }
 
@@ -1372,8 +1375,9 @@ li.selected {
 .history-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 16px;
+  padding: 0 16px 16px;
   padding-left: calc(16px + var(--safe-area-inset-left));
   padding-right: calc(16px + var(--safe-area-inset-right));
   padding-bottom: calc(16px + var(--safe-area-inset-bottom));
@@ -1389,6 +1393,10 @@ li.selected {
   border-left: 4px solid #38383a;
   cursor: pointer;
   transition: background 0.2s;
+}
+
+.operation-card:first-child {
+  margin-top: 16px;
 }
 
 .operation-card:active {
@@ -2518,6 +2526,11 @@ li.selected {
 .change-badge.rebuild {
   background: var(--color-accent-dim);
   color: var(--color-accent);
+}
+
+.change-badge.pin {
+  background: var(--color-purple-dim);
+  color: var(--color-purple);
 }
 
 .dependencies-list {

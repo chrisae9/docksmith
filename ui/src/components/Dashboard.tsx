@@ -715,6 +715,11 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
   };
 
   const getChangeTypeBadge = () => {
+    // Show PIN badge for pinnable containers (migrating from :latest to semver)
+    if (container.status === 'UP_TO_DATE_PINNABLE') {
+      return <span className="change-badge pin">PIN</span>;
+    }
+
     if (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED') return null;
 
     switch (container.change_type) {
@@ -724,6 +729,9 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
         return <span className="change-badge minor">MINOR</span>;
       case ChangeType.PatchChange:
         return <span className="change-badge patch">PATCH</span>;
+      case ChangeType.UnknownChange:
+        // For :latest tag updates or when version parsing fails
+        return <span className="change-badge rebuild">REBUILD</span>;
       default:
         return null;
     }

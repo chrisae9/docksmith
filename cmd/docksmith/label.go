@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
 )
 
@@ -58,16 +58,55 @@ func NewLabelCommand() *LabelCommand {
 	}
 }
 
+// PrintUsage prints the command usage
+func (c *LabelCommand) PrintUsage() {
+	fmt.Println(`Manage container labels for docksmith
+
+Usage:
+  docksmith label <subcommand> <container> [flags]
+
+Subcommands:
+  get <container>          Show docksmith labels for a container
+  set <container> [flags]  Set docksmith labels on a container
+  remove <container> [flags]  Remove docksmith labels from a container
+
+Flags for 'set':
+  --ignore <true|false>      Set ignore flag (skip update checks)
+  --allow-latest <true|false>  Allow :latest tag updates
+  --script <path>            Set pre-update check script path
+  --no-restart               Don't restart container after updating labels
+  --force                    Skip pre-update checks before restarting
+  --json                     Output in JSON format
+
+Flags for 'remove':
+  --ignore                   Remove ignore flag
+  --allow-latest             Remove allow-latest flag
+  --script                   Remove pre-update script
+  --no-restart               Don't restart container after removing labels
+  --force                    Skip pre-update checks before restarting
+  --json                     Output in JSON format
+
+Examples:
+  docksmith label get nginx                     # Show labels for nginx
+  docksmith label set nginx --ignore true       # Ignore nginx for updates
+  docksmith label set nginx --script backup.sh  # Set pre-update script
+  docksmith label remove nginx --ignore         # Remove ignore flag
+  docksmith label set nginx --ignore false --no-restart  # Set without restart`)
+}
+
 // ParseFlags parses command-line flags for the label command
 func (c *LabelCommand) ParseFlags(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("missing subcommand (set, get, remove)")
+	// Handle help
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		c.PrintUsage()
+		return fmt.Errorf("") // Empty error to signal we showed help
 	}
 
 	c.options.Subcommand = args[0]
 
 	// For all subcommands, container name is the first positional argument
 	if len(args) < 2 {
+		c.PrintUsage()
 		return fmt.Errorf("missing container name")
 	}
 	c.options.Container = args[1]
@@ -182,13 +221,14 @@ func (c *LabelCommand) getLabels(ctx context.Context) error {
 	}
 
 	if c.options.OutputFormat == "json" {
-		output := map[string]interface{}{
+		return output.WriteJSONData(os.Stdout, map[string]interface{}{
 			"container": container.Name,
 			"labels":    docksmithLabels,
-		}
-		data, _ := json.MarshalIndent(output, "", "  ")
-		fmt.Println(string(data))
-	} else {
+		})
+	}
+
+	// Table output
+	{
 		fmt.Printf("Container: %s\n", container.Name)
 		fmt.Println("\nDocksmith Labels:")
 		if len(docksmithLabels) == 0 {
@@ -340,15 +380,10 @@ func (c *LabelCommand) setLabels(ctx context.Context) error {
 	result.Message = fmt.Sprintf("%d label(s) set successfully", len(result.LabelsModified))
 
 	if isJSON {
-		output, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(output))
-	} else {
-		fmt.Println("\n✓ Labels updated successfully")
+		return output.WriteJSONData(os.Stdout, result)
 	}
 
+	fmt.Println("\n✓ Labels updated successfully")
 	return nil
 }
 
@@ -443,19 +478,14 @@ func (c *LabelCommand) removeLabel(ctx context.Context) error {
 	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(c.options.LabelNames))
 
 	if isJSON {
-		output, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(output))
-	} else {
-		if len(c.options.LabelNames) == 1 {
-			fmt.Println("\n✓ Label removed successfully")
-		} else {
-			fmt.Printf("\n✓ %d labels removed successfully\n", len(c.options.LabelNames))
-		}
+		return output.WriteJSONData(os.Stdout, result)
 	}
 
+	if len(c.options.LabelNames) == 1 {
+		fmt.Println("\n✓ Label removed successfully")
+	} else {
+		fmt.Printf("\n✓ %d labels removed successfully\n", len(c.options.LabelNames))
+	}
 	return nil
 }
 

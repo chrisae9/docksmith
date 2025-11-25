@@ -4,6 +4,8 @@ import { triggerBatchUpdate } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
+import { STAGE_INFO, type LogEntry } from '../constants/progress';
+import '../styles/progress-common.css';
 import './UpdateProgressPage.css';
 
 interface ContainerToUpdate {
@@ -21,26 +23,6 @@ interface ContainerProgress {
   error?: string;
   operationId?: string;
 }
-
-interface LogEntry {
-  time: number;
-  message: string;
-  type: 'info' | 'success' | 'error' | 'stage';
-  icon?: string;
-}
-
-// Stage display information
-const STAGE_INFO: Record<string, { icon: string; label: string; description: string }> = {
-  'validating': { icon: 'fa-magnifying-glass', label: 'Validating', description: 'Checking container configuration...' },
-  'backup': { icon: 'fa-floppy-disk', label: 'Backup', description: 'Creating backup of current state...' },
-  'updating_compose': { icon: 'fa-file-pen', label: 'Updating Compose', description: 'Modifying compose file with new version...' },
-  'pulling_image': { icon: 'fa-cloud-arrow-down', label: 'Pulling Image', description: 'Downloading new container image...' },
-  'recreating': { icon: 'fa-rotate', label: 'Recreating', description: 'Recreating container with new image...' },
-  'health_check': { icon: 'fa-heart-pulse', label: 'Health Check', description: 'Waiting for container to become healthy...' },
-  'rolling_back': { icon: 'fa-rotate-left', label: 'Rolling Back', description: 'Reverting to previous version...' },
-  'complete': { icon: 'fa-circle-check', label: 'Complete', description: 'Update completed successfully' },
-  'failed': { icon: 'fa-circle-xmark', label: 'Failed', description: 'Update failed' },
-};
 
 export function UpdateProgressPage() {
   const navigate = useNavigate();
@@ -384,7 +366,7 @@ export function UpdateProgressPage() {
   };
 
   return (
-    <div className="update-progress-page">
+    <div className="progress-page update-progress-page">
       <header className="page-header">
         <button className="back-button" onClick={() => navigate('/')} disabled={!allComplete}>
           ← Back
@@ -409,7 +391,7 @@ export function UpdateProgressPage() {
         {!isComplete && inProgressCount > 0 && (
           <div className="current-progress-section">
             <div className="progress-bar-container">
-              <div className="progress-bar-fill" style={{ width: `${currentPercent}%` }} />
+              <div className="progress-bar-fill accent" style={{ width: `${currentPercent}%` }} />
               <span className="progress-bar-text">{currentPercent}%</span>
             </div>
           </div>

@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
+import { STAGE_INFO, type LogEntry } from '../constants/progress';
+import '../styles/progress-common.css';
 import './RollbackProgressPage.css';
 
 interface RollbackInfo {
@@ -11,26 +13,6 @@ interface RollbackInfo {
   oldVersion?: string;
   newVersion?: string;
 }
-
-interface LogEntry {
-  time: number;
-  message: string;
-  type: 'info' | 'success' | 'error' | 'stage';
-  icon?: string;
-}
-
-// Stage display information - same structure as UpdateProgressPage
-const STAGE_INFO: Record<string, { icon: string; label: string; description: string }> = {
-  'validating': { icon: 'fa-magnifying-glass', label: 'Validating', description: 'Checking container configuration...' },
-  'backup': { icon: 'fa-floppy-disk', label: 'Backup', description: 'Creating backup of current state...' },
-  'updating_compose': { icon: 'fa-file-pen', label: 'Updating Compose', description: 'Reverting compose file to previous version...' },
-  'pulling_image': { icon: 'fa-cloud-arrow-down', label: 'Pulling Image', description: 'Downloading previous container image...' },
-  'recreating': { icon: 'fa-rotate', label: 'Recreating', description: 'Recreating container with previous image...' },
-  'health_check': { icon: 'fa-heart-pulse', label: 'Health Check', description: 'Waiting for container to become healthy...' },
-  'rolling_back': { icon: 'fa-rotate-left', label: 'Rolling Back', description: 'Reverting to previous version...' },
-  'complete': { icon: 'fa-circle-check', label: 'Complete', description: 'Rollback completed successfully' },
-  'failed': { icon: 'fa-circle-xmark', label: 'Failed', description: 'Rollback failed' },
-};
 
 export function RollbackProgressPage() {
   const navigate = useNavigate();
@@ -237,7 +219,7 @@ export function RollbackProgressPage() {
   };
 
   return (
-    <div className="rollback-progress-page">
+    <div className="progress-page rollback-progress-page">
       <header className="page-header">
         <button className="back-button" onClick={() => navigate('/')} disabled={!isComplete}>
           ← Back
@@ -262,7 +244,7 @@ export function RollbackProgressPage() {
         {status === 'in_progress' && currentPercent > 0 && (
           <div className="current-progress-section">
             <div className="progress-bar-container">
-              <div className="progress-bar-fill" style={{ width: `${currentPercent}%` }} />
+              <div className="progress-bar-fill warning" style={{ width: `${currentPercent}%` }} />
               <span className="progress-bar-text">{currentPercent}%</span>
             </div>
           </div>

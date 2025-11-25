@@ -171,24 +171,19 @@ export function History({ onBack: _onBack }: HistoryProps) {
           <h1>History</h1>
         </div>
         <div className="search-bar">
-          <div className="search-container">
-            <i className="fa-solid fa-magnifying-glass search-icon"></i>
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search operations..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                className="search-clear"
-                onClick={() => setSearchQuery('')}
-              >
-                <i className="fa-solid fa-xmark"></i>
-              </button>
-            )}
-          </div>
+          <i className="fa-solid fa-search"></i>
+          <input
+            type="text"
+            placeholder="Search operations..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+          />
+          {searchQuery && (
+            <button className="clear-search" onClick={() => setSearchQuery('')}>
+              <i className="fa-solid fa-times"></i>
+            </button>
+          )}
         </div>
         <div className="filter-toolbar">
           <div className="segmented-control">

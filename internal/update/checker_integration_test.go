@@ -71,11 +71,23 @@ func (m *mockStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, end
 	return m.checkHistory, nil
 }
 
+func (m *mockStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]storage.CheckHistoryEntry, error) {
+	return m.checkHistory, nil
+}
+
+func (m *mockStorage) GetCheckHistorySince(ctx context.Context, since time.Time) ([]storage.CheckHistoryEntry, error) {
+	return m.checkHistory, nil
+}
+
 func (m *mockStorage) LogUpdate(ctx context.Context, containerName, operation, fromVer, toVer string, success bool, updateErr error) error {
 	return nil
 }
 
 func (m *mockStorage) GetUpdateLog(ctx context.Context, containerName string, limit int) ([]storage.UpdateLogEntry, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]storage.UpdateLogEntry, error) {
 	return nil, nil
 }
 
@@ -116,6 +128,18 @@ func (m *mockStorage) GetUpdateOperationsByStatus(ctx context.Context, status st
 	return nil, nil
 }
 
+func (m *mockStorage) GetUpdateOperations(ctx context.Context, limit int) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	return nil
 }
@@ -126,6 +150,14 @@ func (m *mockStorage) SaveComposeBackup(ctx context.Context, backup storage.Comp
 
 func (m *mockStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
 	return storage.ComposeBackup{}, false, nil
+}
+
+func (m *mockStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
+	return nil, nil
 }
 
 func (m *mockStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
@@ -146,6 +178,22 @@ func (m *mockStorage) DequeueUpdate(ctx context.Context, stackName string) (stor
 
 func (m *mockStorage) GetQueuedUpdates(ctx context.Context) ([]storage.UpdateQueue, error) {
 	return nil, nil
+}
+
+func (m *mockStorage) SaveScriptAssignment(ctx context.Context, assignment storage.ScriptAssignment) error {
+	return nil
+}
+
+func (m *mockStorage) GetScriptAssignment(ctx context.Context, containerName string) (storage.ScriptAssignment, bool, error) {
+	return storage.ScriptAssignment{}, false, nil
+}
+
+func (m *mockStorage) ListScriptAssignments(ctx context.Context, enabledOnly bool) ([]storage.ScriptAssignment, error) {
+	return nil, nil
+}
+
+func (m *mockStorage) DeleteScriptAssignment(ctx context.Context, containerName string) error {
+	return nil
 }
 
 func (m *mockStorage) Close() error {
@@ -514,11 +562,23 @@ func (f *failingStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, 
 	return nil, errors.New("storage error")
 }
 
+func (f *failingStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]storage.CheckHistoryEntry, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetCheckHistorySince(ctx context.Context, since time.Time) ([]storage.CheckHistoryEntry, error) {
+	return nil, errors.New("storage error")
+}
+
 func (f *failingStorage) LogUpdate(ctx context.Context, containerName, operation, fromVer, toVer string, success bool, updateErr error) error {
 	return errors.New("storage error")
 }
 
 func (f *failingStorage) GetUpdateLog(ctx context.Context, containerName string, limit int) ([]storage.UpdateLogEntry, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]storage.UpdateLogEntry, error) {
 	return nil, errors.New("storage error")
 }
 
@@ -559,6 +619,18 @@ func (f *failingStorage) GetUpdateOperationsByStatus(ctx context.Context, status
 	return nil, errors.New("storage error")
 }
 
+func (f *failingStorage) GetUpdateOperations(ctx context.Context, limit int) ([]storage.UpdateOperation, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]storage.UpdateOperation, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]storage.UpdateOperation, error) {
+	return nil, errors.New("storage error")
+}
+
 func (f *failingStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	return errors.New("storage error")
 }
@@ -569,6 +641,14 @@ func (f *failingStorage) SaveComposeBackup(ctx context.Context, backup storage.C
 
 func (f *failingStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
 	return storage.ComposeBackup{}, false, errors.New("storage error")
+}
+
+func (f *failingStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
+	return nil, errors.New("storage error")
 }
 
 func (f *failingStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
@@ -589,6 +669,22 @@ func (f *failingStorage) DequeueUpdate(ctx context.Context, stackName string) (s
 
 func (f *failingStorage) GetQueuedUpdates(ctx context.Context) ([]storage.UpdateQueue, error) {
 	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) SaveScriptAssignment(ctx context.Context, assignment storage.ScriptAssignment) error {
+	return errors.New("storage error")
+}
+
+func (f *failingStorage) GetScriptAssignment(ctx context.Context, containerName string) (storage.ScriptAssignment, bool, error) {
+	return storage.ScriptAssignment{}, false, errors.New("storage error")
+}
+
+func (f *failingStorage) ListScriptAssignments(ctx context.Context, enabledOnly bool) ([]storage.ScriptAssignment, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) DeleteScriptAssignment(ctx context.Context, containerName string) error {
+	return errors.New("storage error")
 }
 
 func (f *failingStorage) Close() error {

@@ -303,7 +303,11 @@ func (o *Orchestrator) checkContainer(ctx context.Context, container docker.Cont
 	// Check cache first if enabled (only for update check results, not container metadata)
 	var update ContainerUpdate
 	if o.cacheEnabled {
-		cacheKey := fmt.Sprintf("%s:%s", container.Image, container.ID[:12])
+		containerIDSuffix := container.ID
+		if len(containerIDSuffix) > 12 {
+			containerIDSuffix = containerIDSuffix[:12]
+		}
+		cacheKey := fmt.Sprintf("%s:%s", container.Image, containerIDSuffix)
 		if cached, found := o.cache.Get(cacheKey); found {
 			if cachedUpdate, ok := cached.(ContainerUpdate); ok {
 				update = cachedUpdate

@@ -797,6 +797,12 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		}
 	}
 
+	// Check if major version pinning is enabled
+	pinMajor := labels[scripts.VersionPinMajorLabel] == "true"
+	if pinMajor && currentVersion != nil {
+		log.Printf("findLatestVersion: Major version pinning enabled (current: %d.x)", currentVersion.Major)
+	}
+
 	// Check if minor version pinning is enabled
 	pinMinor := labels[scripts.VersionPinMinorLabel] == "true"
 	if pinMinor && currentVersion != nil {
@@ -826,6 +832,14 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		if isCurrentStable && tagInfo.Version.Prerelease != "" {
 			log.Printf("  Skipping tag %s: prerelease '%s' (current is stable)", tag, tagInfo.Version.Prerelease)
 			continue // Don't suggest upgrading from stable to prerelease
+		}
+
+		// Apply major version pinning filter
+		if pinMajor && currentVersion != nil {
+			if tagInfo.Version.Major != currentVersion.Major {
+				log.Printf("  Skipping tag %s: different major version (pinned to %d.x)", tag, currentVersion.Major)
+				continue
+			}
 		}
 
 		// Apply minor version pinning filter
@@ -899,7 +913,11 @@ func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, curren
 		return ""
 	}
 
-	log.Printf("Got %d tags with digests for %s, looking for digest %s", len(tagDigests), imageRef, currentDigest[:12])
+	truncatedDigest := currentDigest
+	if len(truncatedDigest) > 12 {
+		truncatedDigest = truncatedDigest[:12]
+	}
+	log.Printf("Got %d tags with digests for %s, looking for digest %s", len(tagDigests), imageRef, truncatedDigest)
 
 	// Debug: print first few tag→digest mappings
 	if len(tagDigests) > 0 {
@@ -945,7 +963,7 @@ func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, curren
 		}
 	}
 
-	log.Printf("Found %d matching semver tags for digest %s (latest=%v)", len(matchingVersions), currentDigest[:12], matchingLatest)
+	log.Printf("Found %d matching semver tags for digest %s (latest=%v)", len(matchingVersions), truncatedDigest, matchingLatest)
 
 	// If we found semantic version tags, return the "best" one
 	// Prefer the most specific version (e.g., "2.10.2" over "2.10" or "2")

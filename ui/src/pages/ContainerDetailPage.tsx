@@ -4,49 +4,9 @@ import { getContainerLabels, setLabels, restartContainer, checkContainers, getCo
 import type { ContainerInfo } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
 import { useElapsedTime } from '../hooks/useElapsedTime';
+import { RESTART_STAGES, type LogEntry } from '../constants/progress';
+import { getRegistryUrl } from '../utils/registry';
 import './ContainerDetailPage.css';
-
-// Generate a clickable URL for an image repository
-function getRegistryUrl(image: string): string | null {
-  // Remove tag if present
-  const imageWithoutTag = image.split(':')[0];
-
-  // GHCR
-  if (imageWithoutTag.startsWith('ghcr.io/')) {
-    const parts = imageWithoutTag.replace('ghcr.io/', '').split('/');
-    if (parts.length >= 2) {
-      const owner = parts[0];
-      const repo = parts.slice(1).join('/');
-      return `https://github.com/${owner}/${repo}/pkgs/container/${parts[parts.length - 1]}`;
-    }
-  }
-
-  // LinuxServer (lscr.io)
-  if (imageWithoutTag.startsWith('lscr.io/')) {
-    const path = imageWithoutTag.replace('lscr.io/', '');
-    return `https://fleet.linuxserver.io/image?name=${path}`;
-  }
-
-  // Quay.io
-  if (imageWithoutTag.startsWith('quay.io/')) {
-    const path = imageWithoutTag.replace('quay.io/', '');
-    return `https://quay.io/repository/${path}`;
-  }
-
-  // Docker Hub (docker.io or no registry prefix)
-  if (imageWithoutTag.startsWith('docker.io/') || !imageWithoutTag.includes('/') || (!imageWithoutTag.includes('.') && imageWithoutTag.includes('/'))) {
-    let path = imageWithoutTag.replace('docker.io/', '');
-    // Official images (no slash or library/)
-    if (!path.includes('/') || path.startsWith('library/')) {
-      const imageName = path.replace('library/', '');
-      return `https://hub.docker.com/_/${imageName}`;
-    }
-    return `https://hub.docker.com/r/${path}`;
-  }
-
-  // Generic registry - just return null, can't reliably link
-  return null;
-}
 
 export function ContainerDetailPage() {
   const navigate = useNavigate();
@@ -73,7 +33,7 @@ export function ContainerDetailPage() {
     message: string;
     description?: string;
     startTime: number;
-    logs: Array<{ time: number; message: string; type: 'info' | 'success' | 'error' | 'stage'; icon?: string }>;
+    logs: LogEntry[];
     dependentsRestarted?: string[];
     dependentsBlocked?: string[];
     errors?: string[];
@@ -601,22 +561,9 @@ export function ContainerDetailPage() {
   };
 
   const getRestartStageIcon = (stage: string) => {
-    switch (stage) {
-      case 'stopping':
-        return <i className="fa-solid fa-circle-stop"></i>;
-      case 'starting':
-        return <i className="fa-solid fa-circle-play"></i>;
-      case 'checking':
-        return <i className="fa-solid fa-heartbeat"></i>;
-      case 'dependents':
-        return <i className="fa-solid fa-link"></i>;
-      case 'complete':
-        return <i className="fa-solid fa-circle-check"></i>;
-      case 'failed':
-        return <i className="fa-solid fa-circle-xmark"></i>;
-      default:
-        return <i className="fa-solid fa-rotate-right"></i>;
-    }
+    const stageInfo = RESTART_STAGES[stage];
+    const icon = stageInfo?.icon || 'fa-rotate-right';
+    return <i className={`fa-solid ${icon}`}></i>;
   };
 
   const getStatusBadge = () => {
@@ -661,14 +608,14 @@ export function ContainerDetailPage() {
   // Show loading state while fetching container
   if (loadingContainer) {
     return (
-      <div className="container-detail-page">
-        <div className="page-header">
+      <div className="page container-detail-page">
+        <header className="page-header">
           <button className="back-button" onClick={() => navigate('/')}>
             ← Back
           </button>
           <h1>Loading...</h1>
           <div className="header-spacer"></div>
-        </div>
+        </header>
       </div>
     );
   }
@@ -679,16 +626,16 @@ export function ContainerDetailPage() {
   }
 
   return (
-    <div className="container-detail-page">
-      <div className="page-header">
+    <div className="page container-detail-page">
+      <header className="page-header">
         <button className="back-button" onClick={() => navigate('/')}>
           ← Back
         </button>
         <h1>{container.container_name}</h1>
         <div className="header-spacer"></div>
-      </div>
+      </header>
 
-      <div className="page-content">
+      <main className="page-content">
 
         {error && (
           <div className={`error-banner ${preCheckFailed ? 'error-with-action' : ''}`}>
@@ -1110,7 +1057,7 @@ export function ContainerDetailPage() {
             </div>
           )}
             </>
-      </div>
+      </main>
 
       {/* Restart Progress Modal Overlay */}
       {restartProgress && (
@@ -1212,7 +1159,7 @@ export function ContainerDetailPage() {
       )}
 
       {/* Page Footer */}
-      <div className="page-footer">
+      <footer className="page-footer">
         {restartProgress ? (
           // Show simple close button during restart (disabled until complete)
           <button
@@ -1305,7 +1252,7 @@ export function ContainerDetailPage() {
             )}
           </>
         )}
-      </div>
+      </footer>
 
       {/* Changes Warning - Shows when unsaved changes */}
       {hasChanges && !restartProgress && (

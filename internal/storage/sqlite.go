@@ -5,7 +5,9 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"database/sql"
@@ -29,19 +31,37 @@ const defaultVersionCacheTTL = 1 * time.Hour
 // Initializes the database connection, enables WAL mode, and runs migrations.
 // Returns nil and an error if initialization fails (graceful degradation).
 func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
-	// Ensure parent directory exists
+	// Check if parent directory exists and is writable
 	dir := filepath.Dir(dbPath)
 	if dir != "." && dir != "/" {
-		// Note: In production, the /data directory should be created by Docker
-		// For testing, we need to handle this gracefully
-		log.Printf("Database will be created at: %s", dbPath)
+		info, err := os.Stat(dir)
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("database directory does not exist: %s (set DB_PATH to a writable location)", dir)
+		} else if err != nil {
+			return nil, fmt.Errorf("cannot access database directory %s: %w", dir, err)
+		}
+
+		// Check if directory is writable by attempting to create a temp file
+		if !info.IsDir() {
+			return nil, fmt.Errorf("database path parent is not a directory: %s", dir)
+		}
+
+		// Try to check write permission
+		testFile := filepath.Join(dir, ".docksmith-write-test")
+		f, err := os.Create(testFile)
+		if err != nil {
+			return nil, fmt.Errorf("database directory is not writable: %s (set DB_PATH to a writable location)", dir)
+		}
+		f.Close()
+		os.Remove(testFile)
 	}
+
+	log.Printf("Database path: %s", dbPath)
 
 	// Open database connection
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		log.Printf("Failed to open database at %s: %v", dbPath, err)
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database at %s: %w", dbPath, err)
 	}
 
 	// Configure connection pool for SQLite
@@ -53,8 +73,12 @@ func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 	// Test the connection
 	if err := db.Ping(); err != nil {
 		db.Close()
-		log.Printf("Failed to ping database: %v", err)
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		// Translate common SQLite errors to clearer messages
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "unable to open database file") {
+			return nil, fmt.Errorf("cannot create database file at %s: check directory permissions", dbPath)
+		}
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	storage := &SQLiteStorage{

@@ -36,13 +36,59 @@ func NewRestartCommand() *RestartCommand {
 
 // ParseFlags parses the command flags
 func (c *RestartCommand) ParseFlags(args []string) error {
-	return c.flagSet.Parse(args)
+	// Check for help flag before parsing
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			c.PrintUsage()
+			return fmt.Errorf("") // Empty error to signal we showed help
+		}
+	}
+
+	if err := c.flagSet.Parse(args); err != nil {
+		return err
+	}
+
+	// Check for global JSON mode
+	if GlobalJSONMode {
+		c.json = true
+	}
+
+	return nil
+}
+
+// PrintUsage prints the command usage
+func (c *RestartCommand) PrintUsage() {
+	fmt.Println(`Restart containers and their dependents
+
+Usage:
+  docksmith restart <container-name> [flags]
+  docksmith restart --stack <stack-name> [flags]
+
+Arguments:
+  container-name    Name of the container to restart
+
+Flags:
+  --stack           Restart entire stack instead of single container
+  --force           Force restart, bypassing pre-update checks
+  --json            Output in JSON format
+
+Description:
+  Restarts the specified container and any containers that depend on it
+  (via the docksmith.restart-after label). Pre-update checks are run
+  on dependent containers before restarting them unless --force is used.
+
+Examples:
+  docksmith restart nginx                # Restart nginx and dependents
+  docksmith restart nginx --force        # Restart without pre-checks
+  docksmith restart --stack myapp        # Restart entire stack
+  docksmith restart nginx --json         # Output results as JSON`)
 }
 
 // Run executes the restart command
 func (c *RestartCommand) Run(ctx context.Context) error {
 	args := c.flagSet.Args()
 	if len(args) < 1 {
+		c.PrintUsage()
 		return fmt.Errorf("container or stack name required")
 	}
 

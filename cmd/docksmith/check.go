@@ -46,9 +46,45 @@ func NewCheckCommand() *CheckCommand {
 	}
 }
 
+// PrintUsage prints the command usage
+func (c *CheckCommand) PrintUsage() {
+	fmt.Println(`Check for available container updates
+
+Usage:
+  docksmith check [flags]
+
+Flags:
+  --filter <name>        Filter by container name (partial match)
+  --stack <name>         Filter by stack name
+  --type <type>          Filter by update type: major, minor, patch
+  --standalone           Show only standalone containers (not in stacks)
+  -v, --verbose          Show detailed information
+  --quiet                Quiet mode (exit codes only)
+  --no-progress          Disable progress indicators
+  --cache-ttl <duration> Cache TTL duration (default: 15m)
+  --stacks-file <file>   Manual stack definitions file
+  --json                 Output in JSON format
+
+Examples:
+  docksmith check                         # Check all containers
+  docksmith check --json                  # JSON output
+  docksmith check --stack myapp           # Check only 'myapp' stack
+  docksmith check --type major            # Show only major updates
+  docksmith check --filter nginx          # Filter containers by name
+  docksmith check --quiet                 # Exit code only (for scripts)`)
+}
+
 // ParseFlags parses command-line flags for the check command
 func (c *CheckCommand) ParseFlags(args []string) error {
-	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	// Check for help flag before parsing
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			c.PrintUsage()
+			return fmt.Errorf("") // Empty error to signal we showed help
+		}
+	}
+
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 
 	var jsonFlag bool
 	fs.StringVar(&c.options.OutputFormat, "format", c.options.OutputFormat, "Output format: table, json")

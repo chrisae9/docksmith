@@ -52,6 +52,28 @@ func (m *TestMockStorage) GetUpdateOperationsByStatus(ctx context.Context, statu
 	return ops, nil
 }
 
+func (m *TestMockStorage) GetUpdateOperations(ctx context.Context, limit int) ([]storage.UpdateOperation, error) {
+	ops := make([]storage.UpdateOperation, 0, len(m.operations))
+	for _, op := range m.operations {
+		ops = append(ops, op)
+	}
+	return ops, nil
+}
+
+func (m *TestMockStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]storage.UpdateOperation, error) {
+	ops := make([]storage.UpdateOperation, 0)
+	for _, op := range m.operations {
+		if op.ContainerName == containerName {
+			ops = append(ops, op)
+		}
+	}
+	return ops, nil
+}
+
+func (m *TestMockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
 func (m *TestMockStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	if op, found := m.operations[operationID]; found {
 		op.Status = status
@@ -69,6 +91,24 @@ func (m *TestMockStorage) SaveComposeBackup(ctx context.Context, backup storage.
 func (m *TestMockStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
 	backup, found := m.backups[operationID]
 	return backup, found, nil
+}
+
+func (m *TestMockStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
+	var backups []storage.ComposeBackup
+	for _, b := range m.backups {
+		if b.ContainerName == containerName {
+			backups = append(backups, b)
+		}
+	}
+	return backups, nil
+}
+
+func (m *TestMockStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
+	backups := make([]storage.ComposeBackup, 0, len(m.backups))
+	for _, b := range m.backups {
+		backups = append(backups, b)
+	}
+	return backups, nil
 }
 
 func (m *TestMockStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
@@ -126,11 +166,23 @@ func (m *TestMockStorage) GetCheckHistoryByTimeRange(ctx context.Context, start,
 	return nil, nil
 }
 
+func (m *TestMockStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]storage.CheckHistoryEntry, error) {
+	return nil, nil
+}
+
+func (m *TestMockStorage) GetCheckHistorySince(ctx context.Context, since time.Time) ([]storage.CheckHistoryEntry, error) {
+	return nil, nil
+}
+
 func (m *TestMockStorage) LogUpdate(ctx context.Context, containerName, operation, fromVer, toVer string, success bool, updateErr error) error {
 	return nil
 }
 
 func (m *TestMockStorage) GetUpdateLog(ctx context.Context, containerName string, limit int) ([]storage.UpdateLogEntry, error) {
+	return nil, nil
+}
+
+func (m *TestMockStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]storage.UpdateLogEntry, error) {
 	return nil, nil
 }
 
@@ -155,6 +207,22 @@ func (m *TestMockStorage) GetConfigSnapshotByID(ctx context.Context, snapshotID 
 }
 
 func (m *TestMockStorage) RevertToSnapshot(ctx context.Context, snapshotID int64) error {
+	return nil
+}
+
+func (m *TestMockStorage) SaveScriptAssignment(ctx context.Context, assignment storage.ScriptAssignment) error {
+	return nil
+}
+
+func (m *TestMockStorage) GetScriptAssignment(ctx context.Context, containerName string) (storage.ScriptAssignment, bool, error) {
+	return storage.ScriptAssignment{}, false, nil
+}
+
+func (m *TestMockStorage) ListScriptAssignments(ctx context.Context, enabledOnly bool) ([]storage.ScriptAssignment, error) {
+	return nil, nil
+}
+
+func (m *TestMockStorage) DeleteScriptAssignment(ctx context.Context, containerName string) error {
 	return nil
 }
 

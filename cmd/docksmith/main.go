@@ -153,30 +153,21 @@ func main() {
 		}
 	}
 
-	// Default to interactive mode if no args or only flags
-	if len(os.Args) == 1 || (len(os.Args) > 1 && os.Args[1][0] == '-') {
-		cmd := NewApplyCommand()
-		// Parse flags if provided
-		if len(os.Args) > 1 {
-			if err := cmd.ParseFlags(os.Args[1:]); err != nil {
-				if GlobalJSONMode {
-					output.WriteJSONError(os.Stdout, err)
-					os.Exit(1)
-				}
-				log.Fatalf("Failed to parse flags: %v", err)
-			}
-		}
+	// Show help if no command provided
+	if len(os.Args) == 1 {
+		printUsage()
+		return
+	}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
+	// Handle help flags
+	if os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help" {
+		printUsage()
+		return
+	}
 
-		if err := cmd.Run(ctx); err != nil {
-			if GlobalJSONMode {
-				output.WriteJSONError(os.Stdout, err)
-				os.Exit(1)
-			}
-			log.Fatalf("Interactive mode failed: %v", err)
-		}
+	// Handle version flag
+	if os.Args[1] == "-v" || os.Args[1] == "--version" || os.Args[1] == "version" {
+		fmt.Printf("docksmith %s\n", output.Version)
 		return
 	}
 
@@ -187,6 +178,10 @@ func main() {
 	if command == "check" {
 		cmd := NewCheckCommand()
 		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			// Check if it's a help request (empty error means help was shown)
+			if err.Error() == "" {
+				return
+			}
 			log.Fatalf("Failed to parse flags: %v", err)
 		}
 
@@ -201,7 +196,23 @@ func main() {
 
 	// Handle update command
 	if command == "update" {
-		if err := runUpdateCommand(os.Args[2:]); err != nil {
+		cmd := NewUpdateCommand()
+		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			// Check if it's a help request (empty error means help was shown)
+			if err.Error() == "" {
+				return
+			}
+			log.Fatalf("Failed to parse flags: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		if err := cmd.Run(ctx); err != nil {
+			if GlobalJSONMode {
+				output.WriteJSONError(os.Stdout, err)
+				os.Exit(1)
+			}
 			log.Fatalf("Update command failed: %v", err)
 		}
 		return
@@ -275,6 +286,10 @@ func main() {
 	if command == "scripts" {
 		cmd := NewScriptsCommand()
 		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			// Check if it's a help request (empty error means help was shown)
+			if err.Error() == "" {
+				return
+			}
 			log.Fatalf("Failed to parse flags: %v", err)
 		}
 
@@ -291,6 +306,10 @@ func main() {
 	if command == "label" {
 		cmd := NewLabelCommand()
 		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			// Check if it's a help request (empty error means help was shown)
+			if err.Error() == "" {
+				return
+			}
 			log.Fatalf("Failed to parse flags: %v", err)
 		}
 
@@ -307,6 +326,10 @@ func main() {
 	if command == "restart" {
 		cmd := NewRestartCommand()
 		if err := cmd.ParseFlags(os.Args[2:]); err != nil {
+			// Check if it's a help request (empty error means help was shown)
+			if err.Error() == "" {
+				return
+			}
 			log.Fatalf("Failed to parse flags: %v", err)
 		}
 
@@ -340,7 +363,46 @@ func main() {
 	}
 
 	// Unknown command
-	log.Fatalf("Unknown command: %s\nAvailable commands: check, update, operations, history, backups, rollback, scripts, label, restart, api, debug\nRun with no arguments for interactive mode", command)
+	fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
+	printUsage()
+	os.Exit(1)
+}
+
+// printUsage prints the CLI usage information
+func printUsage() {
+	fmt.Println(`docksmith - Docker container update manager
+
+Usage:
+  docksmith <command> [options]
+
+Commands:
+  check       Check for available container updates
+  update      Update containers to newer versions
+  rollback    Rollback a container to a previous version
+  restart     Restart containers and their dependents
+  history     View update history
+  operations  View detailed operation records
+  backups     Manage container backups
+  scripts     Manage pre-update check scripts
+  label       Manage container labels
+  api         Start the HTTP API server
+
+Global Options:
+  --json      Output in JSON format (works with all commands)
+  --help      Show this help message
+  --version   Show version information
+
+Examples:
+  docksmith check                    # Check all containers for updates
+  docksmith check --json             # Check for updates, output as JSON
+  docksmith check --stack myapp      # Check only containers in 'myapp' stack
+  docksmith update <container>       # Update a specific container
+  docksmith update --all             # Update all containers with available updates
+  docksmith rollback <operation-id>  # Rollback a previous update
+  docksmith api                      # Start the API server
+
+For more information on a command:
+  docksmith <command> --help`)
 }
 
 // runDebugMode runs the debug/analysis mode (old default behavior)

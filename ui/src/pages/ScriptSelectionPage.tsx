@@ -66,16 +66,16 @@ export function ScriptSelectionPage() {
   });
 
   return (
-    <div className="script-selection-page">
-      <div className="page-header">
+    <div className="page script-selection-page">
+      <header className="page-header">
         <button className="back-button" onClick={() => navigate(`/container/${containerName}`)}>
           ← Back
         </button>
         <h1>Select Script</h1>
         <div className="header-spacer"></div>
-      </div>
+      </header>
 
-      <div className="page-content">
+      <main className="page-content">
         {/* Info Section */}
         {hasChanges && (
           <div className="info-section">
@@ -212,10 +212,10 @@ export function ScriptSelectionPage() {
             )}
           </>
         )}
-      </div>
+      </main>
 
       {/* Footer */}
-      <div className="page-footer">
+      <footer className="page-footer">
         <button
           className="button button-secondary"
           onClick={() => navigate(`/container/${containerName}`)}
@@ -229,7 +229,7 @@ export function ScriptSelectionPage() {
         >
           Save
         </button>
-      </div>
+      </footer>
     </div>
   );
 }

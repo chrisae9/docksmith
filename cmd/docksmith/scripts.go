@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chis/docksmith/internal/config"
+	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 )
@@ -39,11 +39,42 @@ func NewScriptsCommand() *ScriptsCommand {
 	}
 }
 
+// PrintUsage prints the command usage
+func (c *ScriptsCommand) PrintUsage() {
+	fmt.Println(`Manage pre-update check scripts
+
+Usage:
+  docksmith scripts <subcommand> [arguments] [flags]
+
+Subcommands:
+  list                          List available scripts in /scripts folder
+  assigned                      List script assignments to containers
+  assign <container> <script>   Assign a script to a container
+  unassign <container>          Remove script assignment from a container
+
+Flags:
+  --json    Output in JSON format
+
+Description:
+  Pre-update check scripts run before a container is updated. If the script
+  returns a non-zero exit code, the update is blocked.
+
+  Scripts must be placed in the /scripts directory and marked as executable.
+
+Examples:
+  docksmith scripts list                         # List available scripts
+  docksmith scripts assigned                     # List assignments
+  docksmith scripts assign nginx backup-check    # Assign script to container
+  docksmith scripts unassign nginx               # Remove assignment
+  docksmith scripts list --json                  # JSON output`)
+}
+
 // ParseFlags parses command-line flags for the scripts command
 func (c *ScriptsCommand) ParseFlags(args []string) error {
-	// First argument should be the subcommand
-	if len(args) == 0 {
-		return fmt.Errorf("missing subcommand (list, assigned, assign, unassign)")
+	// Handle help
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		c.PrintUsage()
+		return fmt.Errorf("") // Empty error to signal we showed help
 	}
 
 	c.options.Subcommand = args[0]
@@ -112,16 +143,10 @@ func (c *ScriptsCommand) runList(ctx context.Context) error {
 	}
 
 	if c.options.OutputFormat == "json" {
-		output := map[string]interface{}{
+		return output.WriteJSONData(os.Stdout, map[string]interface{}{
 			"scripts": scriptsList,
 			"count":   len(scriptsList),
-		}
-		data, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		})
 	}
 
 	// Table output
@@ -167,16 +192,10 @@ func (c *ScriptsCommand) runAssigned(ctx context.Context) error {
 	}
 
 	if c.options.OutputFormat == "json" {
-		output := map[string]interface{}{
+		return output.WriteJSONData(os.Stdout, map[string]interface{}{
 			"assignments": assignments,
 			"count":       len(assignments),
-		}
-		data, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		})
 	}
 
 	// Table output
@@ -229,19 +248,13 @@ func (c *ScriptsCommand) runAssign(ctx context.Context) error {
 	}
 
 	if c.options.OutputFormat == "json" {
-		output := map[string]interface{}{
-			"success":       true,
-			"container":     containerName,
-			"script":        scriptPath,
-			"assigned_at":   time.Now().Format(time.RFC3339),
-			"next_step":     "Restart container for changes to take effect",
-		}
-		data, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return output.WriteJSONData(os.Stdout, map[string]interface{}{
+			"success":     true,
+			"container":   containerName,
+			"script":      scriptPath,
+			"assigned_at": time.Now().Format(time.RFC3339),
+			"next_step":   "Restart container for changes to take effect",
+		})
 	}
 
 	// Table output
@@ -274,18 +287,12 @@ func (c *ScriptsCommand) runUnassign(ctx context.Context) error {
 	}
 
 	if c.options.OutputFormat == "json" {
-		output := map[string]interface{}{
-			"success":     true,
-			"container":   containerName,
+		return output.WriteJSONData(os.Stdout, map[string]interface{}{
+			"success":       true,
+			"container":     containerName,
 			"unassigned_at": time.Now().Format(time.RFC3339),
-			"next_step":   "Restart container for changes to take effect",
-		}
-		data, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+			"next_step":     "Restart container for changes to take effect",
+		})
 	}
 
 	// Table output

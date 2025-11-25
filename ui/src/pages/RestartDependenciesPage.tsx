@@ -89,16 +89,16 @@ export function RestartDependenciesPage() {
   });
 
   return (
-    <div className="restart-dependencies-page">
-      <div className="page-header">
+    <div className="page restart-dependencies-page">
+      <header className="page-header">
         <button className="back-button" onClick={() => navigate(`/container/${containerName}`)}>
           ← Back
         </button>
         <h1>Restart Dependencies</h1>
         <div className="header-spacer"></div>
-      </div>
+      </header>
 
-      <div className="page-content">
+      <main className="page-content">
         {/* Info Section */}
         <div className="info-section">
           <div className="info-card">
@@ -208,10 +208,10 @@ export function RestartDependenciesPage() {
             )}
           </>
         )}
-      </div>
+      </main>
 
       {/* Footer */}
-      <div className="page-footer">
+      <footer className="page-footer">
         {selectedContainers.size > 0 && (
           <button className="button button-secondary" onClick={handleClear}>
             Clear All
@@ -224,7 +224,7 @@ export function RestartDependenciesPage() {
         >
           {selectedContainers.size > 0 ? `Save (${selectedContainers.size})` : 'Save'}
         </button>
-      </div>
+      </footer>
     </div>
   );
 }

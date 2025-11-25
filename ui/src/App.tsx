@@ -13,6 +13,7 @@ import { TabBar, type TabId } from './components/TabBar'
 import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
 import { STORAGE_KEY_TAB } from './utils/constants'
+import './styles/page-layout.css'
 import './App.css'
 
 function AppContent() {
