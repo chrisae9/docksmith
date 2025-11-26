@@ -1,10 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { getContainerLabels, setLabels, restartContainer, checkContainers, getContainerStatus } from '../api/client';
+import { getContainerLabels, checkContainers, getContainerStatus } from '../api/client';
 import type { ContainerInfo } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
-import { useElapsedTime } from '../hooks/useElapsedTime';
-import { RESTART_STAGES, type LogEntry } from '../constants/progress';
 import { getRegistryUrl } from '../utils/registry';
 import './ContainerDetailPage.css';
 
@@ -23,22 +21,8 @@ export function ContainerDetailPage() {
   const [versionPinMajor, setVersionPinMajor] = useState(false);
   const [versionPinMinor, setVersionPinMinor] = useState(false);
   const [restartDependsOn, setRestartDependsOn] = useState<string>('');
-  const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [preCheckFailed, setPreCheckFailed] = useState(false);
-  const [restarting, setRestarting] = useState(false);
   const [dependentContainers, setDependentContainers] = useState<string[]>([]);
-  const [restartProgress, setRestartProgress] = useState<{
-    stage: 'stopping' | 'starting' | 'checking' | 'dependents' | 'complete' | 'failed';
-    message: string;
-    description?: string;
-    startTime: number;
-    logs: LogEntry[];
-    dependentsRestarted?: string[];
-    dependentsBlocked?: string[];
-    errors?: string[];
-  } | null>(null);
-  const restartTimeoutsRef = useRef<number[]>([]);
 
   // Track original values to detect changes
   const [originalScript, setOriginalScript] = useState<string>('');
@@ -118,10 +102,6 @@ export function ContainerDetailPage() {
     const restartDependsOnChanged = restartDependsOn !== originalRestartDependsOn;
     setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinMajorChanged || versionPinMinorChanged || restartDependsOnChanged);
   }, [selectedScript, ignoreFlag, allowLatestFlag, versionPinMajor, versionPinMinor, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalVersionPinMajor, originalVersionPinMinor, originalRestartDependsOn]);
-
-  // Use custom hook for elapsed time tracking
-  const isRestarting = !!(restartProgress && restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed');
-  const restartElapsed = useElapsedTime(restartProgress?.startTime ?? null, isRestarting);
 
   const fetchData = async () => {
     if (!container) return;
@@ -218,184 +198,50 @@ export function ContainerDetailPage() {
     return changes;
   };
 
-  const handleSave = async (force = false) => {
+  const handleSave = (force = false) => {
     if (!container) {
       console.error('Container is undefined in handleSave');
       setError('Container not loaded');
       return;
     }
 
-    console.log('Starting handleSave, force:', force);
-    setSaving(true);
-    setError(null);
-    setPreCheckFailed(false);
+    // Build label changes
+    const labelChanges: Record<string, boolean | string> = {};
 
-    // Clear any existing timeouts
-    restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-    restartTimeoutsRef.current = [];
-
-    // Initialize progress tracking
-    const startTime = Date.now();
-    const addLog = (message: string, type: 'info' | 'success' | 'error' | 'stage' = 'info', icon?: string) => {
-      setRestartProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          logs: [...prev.logs, { time: Date.now(), message, type, icon }],
-        };
-      });
-    };
-
-    // Start progress view
-    console.log('Setting restart progress');
-    setRestartProgress({
-      stage: 'stopping',
-      message: 'Saving Settings',
-      description: 'Updating compose file with new settings...',
-      startTime,
-      logs: [
-        {
-          time: startTime,
-          message: force
-            ? `Saving settings with force restart for ${container.container_name}`
-            : `Saving settings for ${container.container_name}`,
-          type: 'info',
-          icon: 'fa-floppy-disk'
-        }
-      ],
-    });
-    console.log('Restart progress set');
-
-    try {
-      // Build label changes
-      const changes: any = {};
-
-      if (ignoreFlag !== originalIgnore) {
-        changes.ignore = ignoreFlag;
-      }
-      if (allowLatestFlag !== originalAllowLatest) {
-        changes.allow_latest = allowLatestFlag;
-      }
-      if (versionPinMajor !== originalVersionPinMajor) {
-        changes.version_pin_major = versionPinMajor;
-      }
-      if (versionPinMinor !== originalVersionPinMinor) {
-        changes.version_pin_minor = versionPinMinor;
-      }
-      if (selectedScript !== originalScript) {
-        changes.script = selectedScript || '';
-      }
-      if (restartDependsOn !== originalRestartDependsOn) {
-        changes.restart_depends_on = restartDependsOn || '';
-      }
-
-      if (Object.keys(changes).length === 0) {
-        setSaving(false);
-        setRestartProgress(null);
-        return;
-      }
-
-      addLog('Updating compose file...', 'stage', 'fa-file-pen');
-
-      // Simulate stages for visual feedback
-      const timeout1 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Updating Compose', description: 'Writing new settings to compose file...' } : null);
-      }, 300);
-      restartTimeoutsRef.current.push(timeout1);
-
-      const timeout2 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Restarting', description: 'Restarting container with new settings...' } : null);
-        addLog('Restarting container...', 'stage', 'fa-rotate');
-      }, 800);
-      restartTimeoutsRef.current.push(timeout2);
-
-      const timeout3 = window.setTimeout(() => {
-        setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Verifying', description: 'Checking that settings were applied...' } : null);
-        addLog('Verifying changes...', 'stage', 'fa-check-double');
-      }, 1200);
-      restartTimeoutsRef.current.push(timeout3);
-
-      // Call atomic API
-      if (!container) return;
-      const result = await setLabels(container.container_name, {
-        ...changes,
-        force,
-      });
-
-      // Clear all pending timeouts since API completed
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-
-      if (result.success && result.data) {
-        const data = result.data;
-
-        // Log what happened
-        addLog('Compose file updated', 'success', 'fa-check');
-
-        if (data.pre_check_ran && data.pre_check_passed) {
-          addLog('Pre-update check passed', 'success', 'fa-shield-check');
-        }
-
-        if (data.restarted) {
-          addLog('Container restarted successfully', 'success', 'fa-check');
-        }
-
-        // Update originals
-        setOriginalIgnore(ignoreFlag);
-        setOriginalAllowLatest(allowLatestFlag);
-        setOriginalVersionPinMajor(versionPinMajor);
-        setOriginalVersionPinMinor(versionPinMinor);
-        setOriginalScript(selectedScript);
-        setOriginalRestartDependsOn(restartDependsOn);
-
-        // Mark as complete
-        setRestartProgress(prev => prev ? {
-          ...prev,
-          stage: 'complete',
-          message: 'Complete',
-          description: 'Settings saved and container restarted',
-        } : null);
-
-        addLog('Settings saved successfully', 'success', 'fa-circle-check');
-
-        // Don't auto-refresh - let user close the modal first
-      } else {
-        throw new Error(result.error || 'Failed to update labels');
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      // Clear all pending timeouts on error
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-
-      // Check if it's a pre-update check failure
-      if (errorMessage.includes('pre-update check failed') || errorMessage.includes('script exited with code')) {
-        setRestartProgress(prev => prev ? {
-          ...prev,
-          stage: 'failed',
-          message: 'Pre-check Failed',
-          description: 'Pre-update check script returned an error',
-          errors: [errorMessage],
-        } : null);
-        addLog(`Pre-update check failed: ${errorMessage}`, 'error', 'fa-shield-xmark');
-        setPreCheckFailed(true);
-      } else {
-        setRestartProgress(prev => prev ? {
-          ...prev,
-          stage: 'failed',
-          message: 'Failed',
-          description: errorMessage,
-          errors: [errorMessage],
-        } : null);
-        addLog(`Save failed: ${errorMessage}`, 'error', 'fa-circle-xmark');
-      }
-    } finally {
-      // Ensure all timeouts are cleared
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-      setSaving(false);
+    if (ignoreFlag !== originalIgnore) {
+      labelChanges.ignore = ignoreFlag;
     }
+    if (allowLatestFlag !== originalAllowLatest) {
+      labelChanges.allow_latest = allowLatestFlag;
+    }
+    if (versionPinMajor !== originalVersionPinMajor) {
+      labelChanges.version_pin_major = versionPinMajor;
+    }
+    if (versionPinMinor !== originalVersionPinMinor) {
+      labelChanges.version_pin_minor = versionPinMinor;
+    }
+    if (selectedScript !== originalScript) {
+      labelChanges.script = selectedScript || '';
+    }
+    if (restartDependsOn !== originalRestartDependsOn) {
+      labelChanges.restart_depends_on = restartDependsOn || '';
+    }
+
+    if (Object.keys(labelChanges).length === 0) {
+      return;
+    }
+
+    // Navigate to restart progress page with save settings
+    navigate('/restart', {
+      state: {
+        restart: {
+          containerName: container.container_name,
+          force,
+          saveSettings: true,
+          labelChanges,
+        }
+      }
+    });
   };
 
   const handleReset = () => {
@@ -403,167 +249,23 @@ export function ContainerDetailPage() {
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
     setVersionPinMajor(originalVersionPinMajor);
+    setVersionPinMinor(originalVersionPinMinor);
     setRestartDependsOn(originalRestartDependsOn);
     setError(null);
-    setPreCheckFailed(false);
   };
 
-  const handleRestart = async (force = false) => {
+  const handleRestart = (force = false) => {
     if (!container) return;
 
-    setRestarting(true);
-    setError(null);
-
-    // Clear any existing timeouts
-    restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-    restartTimeoutsRef.current = [];
-
-    // Initialize progress tracking
-    const startTime = Date.now();
-    const addLog = (message: string, type: 'info' | 'success' | 'error' | 'stage' = 'info', icon?: string) => {
-      setRestartProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          logs: [...prev.logs, { time: Date.now(), message, type, icon }],
-        };
-      });
-    };
-
-    setRestartProgress({
-      stage: 'stopping',
-      message: force ? 'Force Restarting' : 'Restarting',
-      description: 'Stopping the container gracefully...',
-      startTime,
-      logs: [
-        {
-          time: startTime,
-          message: force
-            ? `Force restarting ${container.container_name} (bypassing pre-checks)`
-            : `Restarting ${container.container_name}`,
-          type: 'info',
-          icon: 'fa-rotate-right'
+    // Navigate to restart progress page
+    navigate('/restart', {
+      state: {
+        restart: {
+          containerName: container.container_name,
+          force,
         }
-      ],
-    });
-
-    // Simulate stages since backend doesn't emit events - store timeout IDs
-    const timeout1 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'stopping', message: 'Stopping', description: 'Stopping the container gracefully...' } : null);
-      addLog('Stopping container...', 'stage', 'fa-circle-stop');
-    }, 300);
-    restartTimeoutsRef.current.push(timeout1);
-
-    const timeout2 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'starting', message: 'Starting', description: 'Starting the container with current configuration...' } : null);
-      addLog('Starting container...', 'stage', 'fa-circle-play');
-    }, 800);
-    restartTimeoutsRef.current.push(timeout2);
-
-    const timeout3 = window.setTimeout(() => {
-      setRestartProgress(prev => prev ? { ...prev, stage: 'checking', message: 'Health Check', description: 'Verifying container is running correctly...' } : null);
-      addLog('Checking container status...', 'stage', 'fa-heart-pulse');
-    }, 1200);
-    restartTimeoutsRef.current.push(timeout3);
-
-    try {
-      const response = await restartContainer(container.container_name, force);
-
-      // Clear all pending timeouts since API completed
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-
-      if (response.success && response.data) {
-        addLog(`Container restarted successfully`, 'success', 'fa-check');
-
-        // Handle dependents
-        const hasDependents = dependentContainers.length > 0;
-        const dependentsRestarted = response.data.dependents_restarted || [];
-        const dependentsBlocked = response.data.dependents_blocked || [];
-        const errors = response.data.errors || [];
-
-        if (hasDependents) {
-          setRestartProgress(prev => prev ? { ...prev, stage: 'dependents', message: 'Processing Dependents', description: 'Restarting dependent containers...' } : null);
-          addLog(`Processing ${dependentContainers.length} dependent container(s)...`, 'stage', 'fa-link');
-        }
-
-        // Show which dependents were restarted
-        if (dependentsRestarted.length > 0) {
-          dependentsRestarted.forEach(dep => {
-            addLog(`Dependent restarted: ${dep}`, 'success', 'fa-check');
-          });
-        }
-
-        // Show which dependents were blocked
-        if (dependentsBlocked.length > 0) {
-          dependentsBlocked.forEach(dep => {
-            addLog(`Dependent blocked by pre-check: ${dep}`, 'error', 'fa-exclamation-triangle');
-          });
-        }
-
-        // Show any errors
-        if (errors.length > 0) {
-          errors.forEach(err => {
-            addLog(err, 'error', 'fa-xmark');
-          });
-        }
-
-        // Mark as complete
-        const hasErrors = dependentsBlocked.length > 0 || errors.length > 0;
-        setRestartProgress(prev => prev ? {
-          ...prev,
-          stage: 'complete',
-          message: hasErrors
-            ? 'Completed with Warnings'
-            : 'Complete',
-          description: hasErrors
-            ? 'Some dependents could not be restarted'
-            : 'Container restarted successfully',
-          dependentsRestarted,
-          dependentsBlocked,
-          errors,
-        } : null);
-
-        addLog(
-          hasErrors
-            ? 'Restart completed with warnings'
-            : 'Restart completed successfully',
-          hasErrors ? 'error' : 'success',
-          hasErrors ? 'fa-exclamation-triangle' : 'fa-circle-check'
-        );
-
-        // Don't auto-refresh - let user close the modal first
-      } else {
-        throw new Error(response.error || 'Failed to restart container');
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-
-      // Clear all pending timeouts on error
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-
-      setRestartProgress(prev => prev ? {
-        ...prev,
-        stage: 'failed',
-        message: 'Failed',
-        description: errorMessage,
-        errors: [errorMessage],
-      } : null);
-
-      addLog(`Restart failed: ${errorMessage}`, 'error', 'fa-circle-xmark');
-    } finally {
-      // Ensure all timeouts are cleared
-      restartTimeoutsRef.current.forEach(id => clearTimeout(id));
-      restartTimeoutsRef.current = [];
-      setRestarting(false);
-    }
-  };
-
-  const getRestartStageIcon = (stage: string) => {
-    const stageInfo = RESTART_STAGES[stage];
-    const icon = stageInfo?.icon || 'fa-rotate-right';
-    return <i className={`fa-solid ${icon}`}></i>;
+    });
   };
 
   const getStatusBadge = () => {
@@ -605,12 +307,42 @@ export function ContainerDetailPage() {
     );
   };
 
+  // Helper to get button class based on change type (matches badge colors)
+  const getUpdateButtonClass = (changeType: number): string => {
+    switch (changeType) {
+      case ChangeType.PatchChange:
+        return 'patch'; // blue (accent) - matches patch badge
+      case ChangeType.MinorChange:
+        return 'minor'; // orange - matches minor badge
+      case ChangeType.MajorChange:
+        return 'major'; // red (danger) - matches major badge
+      default:
+        return 'accent';
+    }
+  };
+
+  // Helper to get button label based on change type
+  const getUpdateButtonLabel = (changeType: number): string => {
+    switch (changeType) {
+      case ChangeType.PatchChange:
+        return 'Patch';
+      case ChangeType.MinorChange:
+        return 'Minor';
+      case ChangeType.MajorChange:
+        return 'Major';
+      case ChangeType.Downgrade:
+        return 'Downgrade';
+      default:
+        return 'Update';
+    }
+  };
+
   // Show loading state while fetching container
   if (loadingContainer) {
     return (
       <div className="page container-detail-page">
         <header className="page-header">
-          <button className="back-button" onClick={() => navigate('/')}>
+          <button className="back-button" onClick={() => navigate('/')} aria-label="Go back to dashboard">
             ← Back
           </button>
           <h1>Loading...</h1>
@@ -628,7 +360,7 @@ export function ContainerDetailPage() {
   return (
     <div className="page container-detail-page">
       <header className="page-header">
-        <button className="back-button" onClick={() => navigate('/')}>
+        <button className="back-button" onClick={() => navigate('/')} aria-label="Go back to dashboard">
           ← Back
         </button>
         <h1>{container.container_name}</h1>
@@ -638,31 +370,15 @@ export function ContainerDetailPage() {
       <main className="page-content">
 
         {error && (
-          <div className={`error-banner ${preCheckFailed ? 'error-with-action' : ''}`}>
+          <div className="error-banner">
             <div className="error-content">
               <i className="fa-solid fa-triangle-exclamation"></i>
               <div className="error-text">
-                <strong>{preCheckFailed ? 'Pre-Update Check Failed' : 'Error'}</strong>
+                <strong>Error</strong>
                 <p>{error}</p>
               </div>
-              {preCheckFailed && (
-                <button
-                  className="button button-danger"
-                  onClick={() => {
-                    setError(null);
-                    setPreCheckFailed(false);
-                    hasChanges ? handleSave(true) : handleRestart(true);
-                  }}
-                  style={{ marginLeft: '12px' }}
-                >
-                  <i className="fa-solid fa-bolt"></i> Force
-                </button>
-              )}
             </div>
-            <button className="error-dismiss" onClick={() => {
-              setError(null);
-              setPreCheckFailed(false);
-            }}>×</button>
+            <button className="error-dismiss" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
           </div>
         )}
 
@@ -694,7 +410,6 @@ export function ContainerDetailPage() {
                         type="checkbox"
                         checked={ignoreFlag}
                         onChange={(e) => setIgnoreFlag(e.target.checked)}
-                        disabled={saving}
                         className="toggle-input"
                       />
                       <span className="toggle-switch"></span>
@@ -712,7 +427,6 @@ export function ContainerDetailPage() {
                         type="checkbox"
                         checked={allowLatestFlag}
                         onChange={(e) => setAllowLatestFlag(e.target.checked)}
-                        disabled={saving}
                         className="toggle-input"
                       />
                       <span className="toggle-switch"></span>
@@ -730,7 +444,6 @@ export function ContainerDetailPage() {
                         type="checkbox"
                         checked={versionPinMajor}
                         onChange={(e) => setVersionPinMajor(e.target.checked)}
-                        disabled={saving}
                         className="toggle-input"
                       />
                       <span className="toggle-switch"></span>
@@ -748,7 +461,6 @@ export function ContainerDetailPage() {
                         type="checkbox"
                         checked={versionPinMinor}
                         onChange={(e) => setVersionPinMinor(e.target.checked)}
-                        disabled={saving}
                         className="toggle-input"
                       />
                       <span className="toggle-switch"></span>
@@ -770,7 +482,6 @@ export function ContainerDetailPage() {
                       onClick={() => {
                         navigate(`/container/${container.container_name}/tag-filter`);
                       }}
-                      disabled={saving}
                       style={{
                         width: '100%',
                         padding: '12px 16px',
@@ -809,7 +520,6 @@ export function ContainerDetailPage() {
                           state: { currentScript: selectedScript }
                         });
                       }}
-                      disabled={saving}
                       style={{
                         width: '100%',
                         padding: '12px 16px',
@@ -854,7 +564,6 @@ export function ContainerDetailPage() {
                           state: { currentDependencies: restartDependsOn }
                         });
                       }}
-                      disabled={saving}
                       style={{
                         width: '100%',
                         padding: '12px 16px',
@@ -1059,195 +768,111 @@ export function ContainerDetailPage() {
             </>
       </main>
 
-      {/* Restart Progress Modal Overlay */}
-      {restartProgress && (
-        <div className="progress-overlay">
-          <div className="progress-modal">
-            <div className="restart-progress-view">
-              {/* Container info */}
-              <div className="restart-container-info">
-                <div className="container-name-display">
-                  <i className="fa-solid fa-box"></i>
-                  <span>{container.container_name}</span>
-                </div>
-                <div className="restart-stats">
-                  <span>Elapsed: {restartElapsed}s</span>
-                  {dependentContainers.length > 0 && (
-                    <span>Dependents: {dependentContainers.length}</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Current stage indicator */}
-              <div className="restart-stage-display">
-                <div className={`restart-stage-icon ${restartProgress.stage === 'failed' ? 'failed' : restartProgress.stage === 'complete' ? 'complete' : 'in-progress'}`}>
-                  {restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed' ? (
-                    <div className="stage-icon-wrapper">
-                      {getRestartStageIcon(restartProgress.stage)}
-                      <div className="spinner-ring"></div>
-                    </div>
-                  ) : (
-                    getRestartStageIcon(restartProgress.stage)
-                  )}
-                </div>
-                <div className="restart-stage-message">{restartProgress.message}</div>
-                {restartProgress.description && (
-                  <div className="restart-stage-description">{restartProgress.description}</div>
-                )}
-              </div>
-
-              {/* Activity log */}
-              <div className="update-activity-log">
-                <div className="log-header">Activity Log:</div>
-                <div className="log-entries" style={{ maxHeight: '250px', overflowY: 'auto' }}>
-                  {restartProgress.logs.map((log, i) => (
-                    <div key={i} className={`log-entry log-${log.type}`}>
-                      <span className="log-time">
-                        [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
-                      </span>
-                      {log.icon && (
-                        <span className="log-icon">
-                          <i className={`fa-solid ${log.icon}`}></i>
-                        </span>
-                      )}
-                      <span className="log-message">{log.message}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Completion summary */}
-              {(restartProgress.stage === 'complete' || restartProgress.stage === 'failed') && (
-                <div className="restart-completion">
-                  {restartProgress.stage === 'complete' ? (
-                    <>
-                      <div className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'completion-warning' : 'completion-success'}>
-                        <i className={restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check'}></i>
-                        {' '}
-                        {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0
-                          ? 'Restart completed with warnings'
-                          : 'Container restarted successfully!'}
-                      </div>
-                      {restartProgress.dependentsRestarted && restartProgress.dependentsRestarted.length > 0 && (
-                        <div className="dependents-summary success">
-                          <i className="fa-solid fa-check-circle"></i> {restartProgress.dependentsRestarted.length} dependent(s) restarted
-                        </div>
-                      )}
-                      {restartProgress.dependentsBlocked && restartProgress.dependentsBlocked.length > 0 && (
-                        <div className="dependents-summary warning">
-                          <i className="fa-solid fa-exclamation-circle"></i> {restartProgress.dependentsBlocked.length} dependent(s) blocked by pre-checks
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="completion-error">
-                      <i className="fa-solid fa-xmark"></i> Restart failed
-                      {restartProgress.errors && restartProgress.errors.length > 0 && (
-                        <div style={{ marginTop: '8px', fontSize: '0.9em' }}>
-                          {restartProgress.errors.map((err, i) => (
-                            <div key={i}>{err}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Page Footer */}
       <footer className="page-footer">
-        {restartProgress ? (
-          // Show simple close button during restart (disabled until complete)
+        {/* Cancel button when there are changes */}
+        {hasChanges && (
+          <button
+            className="button button-secondary"
+            onClick={handleReset}
+          >
+            <i className="fa-solid fa-undo"></i>
+            <span>Cancel</span>
+          </button>
+        )}
+
+        {/* Restart/Save button - always show */}
+        {hasChanges ? (
+          // Save & Restart when there are label changes
           <button
             className="button button-primary"
-            onClick={() => {
-              setRestartProgress(null);
-              // Refresh container data after restart
-              if (containerName) {
-                const fetchContainerData = async () => {
-                  try {
-                    const [statusResponse, labelsResponse] = await Promise.all([
-                      getContainerStatus(),
-                      getContainerLabels(containerName),
-                    ]);
-
-                    if (statusResponse.success && statusResponse.data) {
-                      const foundContainer = statusResponse.data.containers.find(
-                        (c) => c.container_name === containerName
-                      );
-
-                      if (foundContainer && labelsResponse.success && labelsResponse.data) {
-                        setContainer({
-                          ...foundContainer,
-                          labels: labelsResponse.data.labels || {},
-                        });
-                      }
-                    }
-                  } catch (err) {
-                    console.error('Failed to refresh container data:', err);
-                  }
-                };
-                fetchContainerData();
-              }
-            }}
-            disabled={restartProgress.stage !== 'complete' && restartProgress.stage !== 'failed'}
-            style={{ width: '100%' }}
+            onClick={() => handleSave(false)}
           >
-            {restartProgress.stage === 'complete' || restartProgress.stage === 'failed'
-              ? 'Done'
-              : 'Restarting...'}
+            <i className="fa-solid fa-save"></i>
+            <span>Save & Restart</span>
           </button>
         ) : (
-          // Normal footer buttons
+          // Plain Restart when no changes
+          <button
+            className="button button-secondary"
+            onClick={() => handleRestart(false)}
+          >
+            <i className="fa-solid fa-rotate-right"></i>
+            <span>Restart</span>
+          </button>
+        )}
+
+        {/* Force Save & Restart when changes + blocked update */}
+        {hasChanges && container.status === 'UPDATE_AVAILABLE_BLOCKED' && (
+          <button
+            className="button button-warning"
+            onClick={() => handleSave(true)}
+            title="Force restart despite pre-update check failure"
+          >
+            <i className="fa-solid fa-triangle-exclamation"></i>
+            <span>Force</span>
+          </button>
+        )}
+
+        {/* Update button when update available (regardless of type) */}
+        {(container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE') && !hasChanges && (
           <>
-            {hasChanges && (
+            {/* Normal Update button */}
+            {container.status === 'UPDATE_AVAILABLE' && (
               <button
-                className="button button-secondary"
-                onClick={handleReset}
-                disabled={saving || restarting}
-              >
-                <i className="fa-solid fa-undo"></i>
-                <span>Cancel</span>
-              </button>
-            )}
-
-            {/* Show Restart button when no update available or has changes */}
-            {(hasChanges || (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED')) && (
-              <button
-                className="button button-primary"
-                onClick={() => hasChanges ? handleSave(false) : handleRestart(false)}
-                disabled={saving || restarting}
-              >
-                {saving || restarting ? (
-                  <>
-                    <div className="spinner-inline"></div>
-                    <span>{hasChanges ? 'Saving...' : 'Restarting...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <i className={hasChanges ? "fa-solid fa-save" : "fa-solid fa-rotate-right"}></i>
-                    <span>{hasChanges ? 'Save & Restart' : 'Restart'}</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* Show Update button on the right when update available */}
-            {(container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED') && !hasChanges && (
-              <button
-                className="button button-accent"
-                onClick={() => {
-                  // Navigate to dashboard, which will handle the update
-                  navigate('/');
-                }}
-                disabled={saving || restarting}
+                className={`button button-${getUpdateButtonClass(container.change_type)}`}
+                onClick={() => navigate('/update', {
+                  state: {
+                    containers: [{
+                      name: container.container_name,
+                      target_version: container.latest_version || container.recommended_tag || '',
+                      stack: container.stack || ''
+                    }]
+                  }
+                })}
               >
                 <i className="fa-solid fa-arrow-up"></i>
-                <span>Update</span>
+                <span>{getUpdateButtonLabel(container.change_type)}</span>
+              </button>
+            )}
+
+            {/* Force Update button when blocked - uses same color as change type */}
+            {container.status === 'UPDATE_AVAILABLE_BLOCKED' && (
+              <button
+                className={`button button-${getUpdateButtonClass(container.change_type)}`}
+                onClick={() => navigate('/update', {
+                  state: {
+                    containers: [{
+                      name: container.container_name,
+                      target_version: container.latest_version || '',
+                      stack: container.stack || '',
+                      force: true
+                    }]
+                  }
+                })}
+                title={`Force update despite: ${container.pre_update_check_fail || 'pre-update check failure'}`}
+              >
+                <i className="fa-solid fa-triangle-exclamation"></i>
+                <span>Force {getUpdateButtonLabel(container.change_type)}</span>
+              </button>
+            )}
+
+            {/* Pin button for pinnable containers */}
+            {container.status === 'UP_TO_DATE_PINNABLE' && (
+              <button
+                className="button button-pin"
+                onClick={() => navigate('/update', {
+                  state: {
+                    containers: [{
+                      name: container.container_name,
+                      target_version: container.recommended_tag || '',
+                      stack: container.stack || ''
+                    }]
+                  }
+                })}
+              >
+                <i className="fa-solid fa-thumbtack"></i>
+                <span>Pin</span>
               </button>
             )}
           </>
@@ -1255,7 +880,7 @@ export function ContainerDetailPage() {
       </footer>
 
       {/* Changes Warning - Shows when unsaved changes */}
-      {hasChanges && !restartProgress && (
+      {hasChanges && (
         <div className="changes-warning-banner">
           <div className="warning-content">
             <div className="warning-header">

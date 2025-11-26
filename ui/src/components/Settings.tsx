@@ -187,17 +187,6 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
                 <div className="btn-description">Clear cache and query registries for fresh data</div>
               </div>
             </button>
-            <button
-              onClick={fetchStatus}
-              className="settings-btn"
-              disabled={loading}
-            >
-              <i className="fa-solid fa-sync"></i>
-              <div>
-                <div className="btn-title">Refresh Display</div>
-                <div className="btn-description">Reload current status from cache</div>
-              </div>
-            </button>
           </div>
         </section>
 

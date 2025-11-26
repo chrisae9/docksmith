@@ -9,7 +9,9 @@ import { ScriptSelectionPage } from './pages/ScriptSelectionPage'
 import { RestartDependenciesPage } from './pages/RestartDependenciesPage'
 import { UpdateProgressPage } from './pages/UpdateProgressPage'
 import { RollbackProgressPage } from './pages/RollbackProgressPage'
+import { RestartProgressPage } from './pages/RestartProgressPage'
 import { TabBar, type TabId } from './components/TabBar'
+import { ToastProvider, ToastContainer } from './components/Toast'
 import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
 import { STORAGE_KEY_TAB } from './utils/constants'
@@ -31,7 +33,8 @@ function AppContent() {
   const isSubPage = location.pathname.startsWith('/container/') ||
                     location.pathname.startsWith('/tag-filter/') ||
                     location.pathname.startsWith('/update') ||
-                    location.pathname.startsWith('/rollback');
+                    location.pathname.startsWith('/rollback') ||
+                    location.pathname.startsWith('/restart');
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
@@ -100,6 +103,7 @@ function AppContent() {
           <Route path="/container/:containerName/restart-dependencies" element={<RestartDependenciesPage />} />
           <Route path="/update" element={<UpdateProgressPage />} />
           <Route path="/rollback" element={<RollbackProgressPage />} />
+          <Route path="/restart" element={<RestartProgressPage />} />
         </Routes>
       </div>
       {!isSubPage && (
@@ -115,9 +119,12 @@ function AppContent() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AppContent />
-    </BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
+        <AppContent />
+        <ToastContainer />
+      </BrowserRouter>
+    </ToastProvider>
   );
 }
 

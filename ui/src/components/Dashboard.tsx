@@ -7,6 +7,8 @@ import { useEventStream } from '../hooks/useEventStream';
 import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
 import { isUpdatable } from '../utils/status';
 import { STORAGE_KEY_FILTER, STORAGE_KEY_INITIAL_SWITCH } from '../utils/constants';
+import { useToast } from './Toast';
+import { SkeletonDashboard } from './Skeleton';
 
 type FilterType = 'all' | 'updates' | 'local';
 type SortType = 'stack' | 'name' | 'status';
@@ -17,6 +19,7 @@ interface DashboardProps {
 
 export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: DashboardProps) {
   const navigate = useNavigate();
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResult | null>(null);
@@ -152,14 +155,17 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         setTimeout(() => {
           setRestartingStack(null);
           backgroundRefresh();
+          toast.success(`Stack "${stackName}" restarted successfully`);
         }, 1000);
       } else {
-        setError(response.error || 'Failed to restart stack');
+        const errorMsg = response.error || 'Failed to restart stack';
         setRestartingStack(null);
+        toast.error(errorMsg);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to restart stack');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to restart stack';
       setRestartingStack(null);
+      toast.error(errorMsg);
     }
   };
 
@@ -318,26 +324,55 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
   if (loading) {
     return (
-      <div className="loading">
-        <div className="loading-content">
-          <div className="spinner"></div>
-          {checkProgress && (
-            <div className="check-progress">
-              <div className="check-progress-bar">
-                <div
-                  className="check-progress-bar-fill"
-                  style={{ width: `${checkProgress.percent}%` }}
-                />
-                <span className="check-progress-bar-text">
-                  {checkProgress.checked}/{checkProgress.total}
-                </span>
-              </div>
-              <div className="check-progress-message">
-                {checkProgress.message}
+      <div className="dashboard">
+        <header>
+          <div className="header-top">
+            <h1>Docksmith</h1>
+          </div>
+          <div className="search-bar search-bar-skeleton">
+            <i className="fa-solid fa-search"></i>
+            <input
+              type="text"
+              placeholder="Search containers..."
+              disabled
+              className="search-input"
+            />
+          </div>
+          <div className="filter-toolbar">
+            <div className="segmented-control">
+              <button className="active" disabled>All</button>
+              <button disabled>Updates</button>
+            </div>
+            <div className="toolbar-options">
+              <button className="icon-btn" disabled><i className="fa-solid fa-layer-group"></i></button>
+              <button className="icon-btn" disabled><i className="fa-solid fa-font"></i></button>
+              <button className="icon-btn" disabled>○</button>
+              <button className="icon-btn" disabled>▤</button>
+            </div>
+          </div>
+        </header>
+        <main className="main-loading">
+          {checkProgress ? (
+            <div className="check-progress-overlay">
+              <div className="check-progress">
+                <div className="check-progress-bar">
+                  <div
+                    className="check-progress-bar-fill"
+                    style={{ width: `${checkProgress.percent}%` }}
+                  />
+                  <span className="check-progress-bar-text">
+                    {checkProgress.checked}/{checkProgress.total}
+                  </span>
+                </div>
+                <div className="check-progress-message">
+                  {checkProgress.message}
+                </div>
               </div>
             </div>
+          ) : (
+            <SkeletonDashboard />
           )}
-        </div>
+        </main>
       </div>
     );
   }
@@ -464,17 +499,18 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           )}
         </div>
         <div className="search-bar">
-          <i className="fa-solid fa-search"></i>
+          <i className="fa-solid fa-search" aria-hidden="true"></i>
           <input
             type="text"
             placeholder="Search containers..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="search-input"
+            aria-label="Search containers"
           />
           {searchQuery && (
-            <button className="clear-search" onClick={() => setSearchQuery('')}>
-              <i className="fa-solid fa-times"></i>
+            <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="Clear search">
+              <i className="fa-solid fa-times" aria-hidden="true"></i>
             </button>
           )}
         </div>
@@ -499,21 +535,26 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 className="icon-btn"
                 onClick={toggleAllStacks}
                 title={collapsedStacks.size > 0 ? 'Expand all stacks' : 'Collapse all stacks'}
+                aria-label={collapsedStacks.size > 0 ? 'Expand all stacks' : 'Collapse all stacks'}
               >
-                <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`}></i>
+                <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`} aria-hidden="true"></i>
               </button>
             )}
             <button
               className={`icon-btn ${showIgnored ? 'active' : ''}`}
               onClick={() => setShowIgnored(!showIgnored)}
               title="Show ignored containers"
+              aria-label={showIgnored ? 'Hide ignored containers' : 'Show ignored containers'}
+              aria-pressed={showIgnored}
             >
-              <i className={`fa-solid fa-eye${showIgnored ? '' : '-slash'}`}></i>
+              <i className={`fa-solid fa-eye${showIgnored ? '' : '-slash'}`} aria-hidden="true"></i>
             </button>
             <button
               className={`icon-btn ${showLocalImages ? 'active' : ''}`}
               onClick={() => setShowLocalImages(!showLocalImages)}
               title="Show local images"
+              aria-label={showLocalImages ? 'Hide local images' : 'Show local images'}
+              aria-pressed={showLocalImages}
             >
               {showLocalImages ? '◉' : '○'}
             </button>
@@ -521,6 +562,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
               className={`icon-btn ${sort === 'stack' ? 'active' : ''}`}
               onClick={() => setSort(sort === 'stack' ? 'name' : 'stack')}
               title={sort === 'stack' ? 'Group by stack' : 'List view'}
+              aria-label={sort === 'stack' ? 'Switch to list view' : 'Group by stack'}
             >
               {sort === 'stack' ? '▤' : '≡'}
             </button>
@@ -570,17 +612,24 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
                 return (
                   <section key={stack.name} className="stack">
-                    <h2 onClick={() => toggleStack(stack.name)}>
-                      <span className="toggle">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
+                    <h2
+                      onClick={() => toggleStack(stack.name)}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={!collapsedStacks.has(stack.name)}
+                      onKeyDown={(e) => e.key === 'Enter' && toggleStack(stack.name)}
+                    >
+                      <span className="toggle" aria-hidden="true">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
                       {stack.name}
-                      {stack.has_updates && <span className="badge-dot"></span>}
+                      {stack.has_updates && <span className="badge-dot" aria-label="Has updates"></span>}
                       <button
                         className="stack-restart-btn"
                         onClick={(e) => handleStackRestart(stack.name, e)}
                         disabled={restartingStack === stack.name}
                         title={`Restart all containers in ${stack.name}`}
+                        aria-label={`Restart all containers in ${stack.name}`}
                       >
-                        <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`}></i>
+                        <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`} aria-hidden="true"></i>
                       </button>
                     </h2>
                     {!collapsedStacks.has(stack.name) && (
@@ -603,8 +652,14 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
               {result.standalone_containers.filter(filterContainer).length > 0 && (
                 <section className="stack">
-                  <h2 onClick={() => toggleStack('__standalone__')}>
-                    <span className="toggle">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
+                  <h2
+                    onClick={() => toggleStack('__standalone__')}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={!collapsedStacks.has('__standalone__')}
+                    onKeyDown={(e) => e.key === 'Enter' && toggleStack('__standalone__')}
+                  >
+                    <span className="toggle" aria-hidden="true">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
                     Standalone
                   </h2>
                   {!collapsedStacks.has('__standalone__') && (
@@ -780,6 +835,7 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
           type="checkbox"
           checked={selected}
           onChange={onToggle}
+          aria-label={`Select ${container.container_name} for update`}
         />
       )}
       <div className="container-info">
