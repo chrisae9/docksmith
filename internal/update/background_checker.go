@@ -133,8 +133,19 @@ func (bc *BackgroundChecker) runCheck() {
 	log.Printf("BACKGROUND_CHECKER: Running check")
 	startTime := time.Now()
 
+	// Check if cache is empty before cleanup (indicates fresh data will be fetched)
+	oldestCacheTime := bc.orchestrator.GetCacheOldestEntryTime()
+	cacheWasEmpty := oldestCacheTime.IsZero()
+
 	// Clean up expired cache entries before check
 	bc.orchestrator.CleanupCache()
+
+	// Re-check after cleanup - if cache is now empty, we'll fetch fresh data
+	oldestAfterCleanup := bc.orchestrator.GetCacheOldestEntryTime()
+	if !cacheWasEmpty && oldestAfterCleanup.IsZero() {
+		cacheWasEmpty = true // Cache became empty after cleanup (TTL expired)
+		log.Printf("BACKGROUND_CHECKER: Cache expired, will fetch fresh registry data")
+	}
 
 	ctx := context.Background()
 	result, err := bc.orchestrator.DiscoverAndCheck(ctx)
@@ -144,8 +155,9 @@ func (bc *BackgroundChecker) runCheck() {
 		now := time.Now()
 		bc.cache.mu.Lock()
 		bc.cache.result = &DiscoveryResult{Containers: []ContainerInfo{}}
-		// Only update lastCacheRefresh if cache was cleared
-		if bc.cache.cacheCleared {
+		// Update lastCacheRefresh if cache was cleared OR cache was empty (fresh data fetched)
+		if bc.cache.cacheCleared || cacheWasEmpty {
+			log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
 			bc.cache.lastCacheRefresh = now
 			bc.cache.cacheCleared = false
 			// Persist to database
@@ -166,8 +178,9 @@ func (bc *BackgroundChecker) runCheck() {
 	now := time.Now()
 	bc.cache.mu.Lock()
 	bc.cache.result = result
-	// Only update lastCacheRefresh if cache was cleared (cache refresh)
-	if bc.cache.cacheCleared {
+	// Update lastCacheRefresh if cache was cleared OR cache was empty (fresh data fetched)
+	if bc.cache.cacheCleared || cacheWasEmpty {
+		log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
 		bc.cache.lastCacheRefresh = now
 		bc.cache.cacheCleared = false
 		// Persist to database
