@@ -232,7 +232,7 @@ func (c *RollbackCommand) performFullRollback(ctx context.Context, operation sto
 	fmt.Printf("\n%sStarting full rollback...%s\n", terminal.Yellow(), terminal.Reset())
 
 	// Start the rollback operation
-	rollbackOpID, err := orchestrator.RollbackOperation(ctx, c.operationID)
+	rollbackOpID, err := orchestrator.RollbackOperation(ctx, c.operationID, c.force)
 	if err != nil {
 		return err
 	}

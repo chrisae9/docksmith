@@ -69,3 +69,10 @@ func WriteJSONData(w io.Writer, data interface{}) error {
 func WriteJSONError(w io.Writer, err error) error {
 	return WriteJSON(w, ErrorResponse(err))
 }
+
+// WriteJSONErrorWithData writes an error response that also includes data (for partial failures)
+func WriteJSONErrorWithData(w io.Writer, err error, data interface{}) error {
+	resp := ErrorResponse(err)
+	resp.Data = data
+	return WriteJSON(w, resp)
+}

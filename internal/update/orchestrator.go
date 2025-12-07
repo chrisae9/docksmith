@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
@@ -46,6 +48,8 @@ type ContainerInfo struct {
 	Dependencies   []string          `json:"dependencies,omitempty"`
 	PreUpdateCheck string            `json:"pre_update_check,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
+	ComposeLabels  map[string]string `json:"compose_labels,omitempty"`  // Docksmith labels from compose file
+	LabelsOutOfSync bool             `json:"labels_out_of_sync,omitempty"` // True if compose labels differ from running container
 }
 
 // Stack represents a group of related containers
@@ -350,7 +354,85 @@ func (o *Orchestrator) checkContainer(ctx context.Context, container docker.Cont
 		info.Dependencies = graph.ParseDependsOn(deps)
 	}
 
+	// Check label sync between compose file and running container
+	info.ComposeLabels, info.LabelsOutOfSync = o.checkLabelSync(container)
+
 	return info
+}
+
+// checkLabelSync compares docksmith labels between compose file and running container
+// Returns the compose file labels and whether they are out of sync
+func (o *Orchestrator) checkLabelSync(container docker.Container) (map[string]string, bool) {
+	// Get compose file path from container labels
+	composeFilePath, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok || composeFilePath == "" {
+		// Not a compose-managed container, no sync check needed
+		return nil, false
+	}
+
+	serviceName, ok := container.Labels["com.docker.compose.service"]
+	if !ok || serviceName == "" {
+		return nil, false
+	}
+
+	// Load compose file
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, container.Name)
+	if err != nil {
+		// Can't load compose file, skip sync check
+		return nil, false
+	}
+
+	// Find service in compose file
+	service, err := composeFile.FindServiceByContainerName(serviceName)
+	if err != nil {
+		return nil, false
+	}
+
+	// Extract all labels from compose file
+	allComposeLabels, err := service.GetAllLabels()
+	if err != nil {
+		return nil, false
+	}
+
+	// Filter to only docksmith.* labels
+	composeLabels := make(map[string]string)
+	for key, value := range allComposeLabels {
+		if strings.HasPrefix(key, "docksmith.") {
+			composeLabels[key] = value
+		}
+	}
+
+	// Extract docksmith.* labels from running container
+	containerLabels := make(map[string]string)
+	for key, value := range container.Labels {
+		if strings.HasPrefix(key, "docksmith.") {
+			containerLabels[key] = value
+		}
+	}
+
+	// Compare labels
+	outOfSync := false
+
+	// Check if compose has labels that container doesn't have (or different values)
+	for key, composeValue := range composeLabels {
+		containerValue, exists := containerLabels[key]
+		if !exists || containerValue != composeValue {
+			outOfSync = true
+			break
+		}
+	}
+
+	// Check if container has docksmith labels that compose doesn't have
+	if !outOfSync {
+		for key := range containerLabels {
+			if _, exists := composeLabels[key]; !exists {
+				outOfSync = true
+				break
+			}
+		}
+	}
+
+	return composeLabels, outOfSync
 }
 
 // groupIntoStacks groups containers into stacks

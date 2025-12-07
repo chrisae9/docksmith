@@ -386,6 +386,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var req struct {
 		OperationID string `json:"operation_id"`
+		Force       bool   `json:"force"`
 	}
 
 	if !decodeJSONRequest(w, r, &req) {
@@ -399,7 +400,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger the rollback operation
-	rollbackOpID, err := s.updateOrchestrator.RollbackOperation(ctx, req.OperationID)
+	rollbackOpID, err := s.updateOrchestrator.RollbackOperation(ctx, req.OperationID, req.Force)
 	if err != nil {
 		log.Printf("Rollback failed: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)

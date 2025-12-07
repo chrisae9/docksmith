@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -12,10 +15,16 @@ import (
 type HTTPClient struct {
 	config     *RegistryConfig
 	httpClient *http.Client
+	registry   string // The registry this client is configured for (e.g., "lscr.io")
 }
 
 // NewHTTPClient creates a new registry client.
 func NewHTTPClient(config *RegistryConfig) *HTTPClient {
+	return NewHTTPClientForRegistry(config, "")
+}
+
+// NewHTTPClientForRegistry creates a new registry client for a specific registry.
+func NewHTTPClientForRegistry(config *RegistryConfig, registry string) *HTTPClient {
 	if config == nil {
 		config = &RegistryConfig{
 			TimeoutSeconds: DefaultTimeoutSeconds,
@@ -31,6 +40,7 @@ func NewHTTPClient(config *RegistryConfig) *HTTPClient {
 		httpClient: &http.Client{
 			Timeout: time.Duration(config.TimeoutSeconds) * time.Second,
 		},
+		registry: registry,
 	}
 }
 
@@ -48,7 +58,7 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 	// Build the API URL
 	url := c.buildTagsURL(registry, repo)
 
-	// Make request
+	// Make initial request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -65,6 +75,27 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 	}
 	defer resp.Body.Close()
 
+	// Handle 401 Unauthorized - try to get a token
+	if resp.StatusCode == http.StatusUnauthorized {
+		token, err := c.getAuthToken(ctx, resp, repo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to authenticate: %w", err)
+		}
+
+		// Retry with token
+		req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err = c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch tags: %w", err)
+		}
+		defer resp.Body.Close()
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, handleHTTPError(resp, "fetch tags")
 	}
@@ -76,6 +107,90 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 	}
 
 	return tagsResp.Tags, nil
+}
+
+// getAuthToken obtains a bearer token from a registry's token service.
+// It parses the WWW-Authenticate header from a 401 response to find the token endpoint.
+func (c *HTTPClient) getAuthToken(ctx context.Context, resp *http.Response, repository string) (string, error) {
+	authHeader := resp.Header.Get("WWW-Authenticate")
+	if authHeader == "" {
+		return "", fmt.Errorf("no WWW-Authenticate header in 401 response")
+	}
+
+	// Parse WWW-Authenticate header
+	// Format: Bearer realm="https://auth.example.io/token",service="example.io",scope="repository:user/image:pull"
+	realm := extractAuthParam(authHeader, "realm")
+	service := extractAuthParam(authHeader, "service")
+	scope := extractAuthParam(authHeader, "scope")
+
+	if realm == "" {
+		return "", fmt.Errorf("no realm found in WWW-Authenticate header: %s", authHeader)
+	}
+
+	// Build token URL
+	tokenURL := realm
+	params := []string{}
+	if service != "" {
+		params = append(params, "service="+service)
+	}
+	if scope != "" {
+		params = append(params, "scope="+scope)
+	} else {
+		// Default scope for pulling
+		params = append(params, "scope=repository:"+repository+":pull")
+	}
+
+	if len(params) > 0 {
+		tokenURL += "?" + strings.Join(params, "&")
+	}
+
+	// Request token
+	req, err := http.NewRequestWithContext(ctx, "GET", tokenURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token request: %w", err)
+	}
+
+	tokenResp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch token: %w", err)
+	}
+	defer tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tokenResp.Body)
+		return "", fmt.Errorf("token request failed with status %d: %s", tokenResp.StatusCode, string(body))
+	}
+
+	// Parse token response
+	var tokenData struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err != nil {
+		return "", fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	// Some registries use "token", others use "access_token"
+	token := tokenData.Token
+	if token == "" {
+		token = tokenData.AccessToken
+	}
+	if token == "" {
+		return "", fmt.Errorf("no token in response")
+	}
+
+	return token, nil
+}
+
+// extractAuthParam extracts a parameter value from a WWW-Authenticate header.
+func extractAuthParam(header, param string) string {
+	// Match param="value" or param='value'
+	re := regexp.MustCompile(param + `="([^"]*)"`)
+	matches := re.FindStringSubmatch(header)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
 }
 
 // GetLatestTag returns the most recent tag (currently just returns "latest").
@@ -114,12 +229,16 @@ func (c *HTTPClient) ListTagsWithDigests(ctx context.Context, repository string)
 }
 
 // parseRepository extracts registry and repository from a full path.
+// If the client has a configured registry, it uses that.
 // Examples:
-//   - "linuxserver/plex" -> "docker.io", "linuxserver/plex"
-//   - "ghcr.io/linuxserver/plex" -> "ghcr.io", "linuxserver/plex"
+//   - "linuxserver/plex" with registry="lscr.io" -> "lscr.io", "linuxserver/plex"
+//   - "linuxserver/plex" with registry="" -> "docker.io", "linuxserver/plex"
 func (c *HTTPClient) parseRepository(repository string) (registry, repo string) {
-	// For now, simple implementation
-	// This will be enhanced with proper parsing logic
+	// Use the configured registry if set
+	if c.registry != "" {
+		return c.registry, repository
+	}
+	// Fall back to docker.io for backwards compatibility
 	return "docker.io", repository
 }
 

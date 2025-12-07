@@ -136,9 +136,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       };
     });
 
-    // Clear selection and navigate to update progress page
+    // Clear selection and navigate to progress page
     setSelectedContainers(new Set());
-    navigate('/update', { state: { containers: containersToUpdate } });
+    navigate('/operation', { state: { update: { containers: containersToUpdate } } });
   };
 
   const handleStackRestart = async (stackName: string, e: React.MouseEvent) => {
@@ -733,12 +733,12 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 
   // Check restart dependencies
-  const restartDependsOn = container.labels?.['docksmith.restart-depends-on'] || '';
-  const restartDeps = restartDependsOn ? restartDependsOn.split(',').map(d => d.trim()) : [];
+  const restartAfter = container.labels?.['docksmith.restart-after'] || '';
+  const restartDeps = restartAfter ? restartAfter.split(',').map(d => d.trim()) : [];
 
   // Find containers that depend on this one
   const dependents = allContainers.filter(c => {
-    const deps = c.labels?.['docksmith.restart-depends-on'] || '';
+    const deps = c.labels?.['docksmith.restart-after'] || '';
     if (!deps) return false;
     const depList = deps.split(',').map(d => d.trim());
     return depList.includes(container.container_name);
@@ -825,6 +825,15 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
     onContainerClick();
   };
 
+  // Get docksmith label settings
+  const hasTagRegex = !!container.labels?.['docksmith.tag-regex'];
+  const hasPreUpdateScript = !!container.labels?.['docksmith.pre-update-check'];
+  const allowsLatest = container.labels?.['docksmith.allow-latest'] === 'true';
+  const versionPinMajor = container.labels?.['docksmith.version-pin-major'] === 'true';
+  const versionPinMinor = container.labels?.['docksmith.version-pin-minor'] === 'true';
+  const versionPinPatch = container.labels?.['docksmith.version-pin-patch'] === 'true';
+  const versionPin = versionPinMajor ? 'major' : versionPinMinor ? 'minor' : versionPinPatch ? 'patch' : null;
+
   return (
     <li
       className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
@@ -861,6 +870,27 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
       {dependents.length > 0 && (
         <span className="warn restart-dep-by" title={`${dependents.length} container${dependents.length > 1 ? 's' : ''} will restart: ${dependents.join(', ')}`}>
           <i className="fa-solid fa-link"></i> {dependents.length}
+        </span>
+      )}
+      {/* Docksmith label indicators */}
+      {versionPin && (
+        <span className={`label-icon pin-${versionPin}`} title={`Version pinned to ${versionPin}`}>
+          <i className="fa-solid fa-thumbtack"></i>
+        </span>
+      )}
+      {hasTagRegex && (
+        <span className="label-icon regex" title="Tag regex filter applied">
+          <i className="fa-solid fa-filter"></i>
+        </span>
+      )}
+      {hasPreUpdateScript && !container.pre_update_check_pass && !container.pre_update_check_fail && (
+        <span className="label-icon script" title="Pre-update script configured">
+          <i className="fa-solid fa-terminal"></i>
+        </span>
+      )}
+      {allowsLatest && (
+        <span className="label-icon latest" title="Allows :latest tag">
+          <i className="fa-solid fa-tag"></i>
         </span>
       )}
     </li>

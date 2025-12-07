@@ -1,0 +1,72 @@
+# Docksmith Example Docker Compose Configuration
+#
+# This is a minimal example for self-hosting Docksmith.
+# Copy this file and adjust the volume mounts for your setup.
+
+services:
+  docksmith:
+    image: ghcr.io/chrisae9/docksmith:latest
+    container_name: docksmith
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Required: Docker socket access for managing containers
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Required: Database persistence
+      - ./data:/data
+
+      # Optional: Registry credentials for private images
+      # Uncomment if you have private images on Docker Hub or GHCR
+      # - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
+
+      # Your compose file directories (read-write for updates)
+      # Add all directories where your docker-compose.yml files live
+      # Example: mounting /home/user/stacks makes all stacks inside discoverable
+      - /path/to/your/stacks:/stacks:rw
+
+      # Optional: Pre-update check scripts
+      # - ./scripts:/scripts:ro
+
+    environment:
+      # How often to check for updates (Go duration: 5m, 1h, 24h)
+      - CHECK_INTERVAL=1h
+
+      # How long to cache registry responses
+      - CACHE_TTL=1h
+
+      # GitHub token for private GHCR images (optional)
+      # - GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+
+    # Start the API server with web UI
+    command: ["api", "--port", "8080"]
+
+# Example with Traefik reverse proxy:
+#
+# services:
+#   docksmith:
+#     image: ghcr.io/chrisae9/docksmith:latest
+#     container_name: docksmith
+#     restart: unless-stopped
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock
+#       - ./data:/data
+#       - /home/user/stacks:/stacks:rw
+#     environment:
+#       - CHECK_INTERVAL=1h
+#     command: ["api", "--port", "8080"]
+#     labels:
+#       - "traefik.enable=true"
+#       - "traefik.http.routers.docksmith.rule=Host(`docksmith.example.com`)"
+#       - "traefik.http.routers.docksmith.entrypoints=websecure"
+#       - "traefik.http.routers.docksmith.tls.certresolver=letsencrypt"
+#       - "traefik.http.services.docksmith.loadbalancer.server.port=8080"
+#       # Ignore docksmith from its own update checks
+#       - "docksmith.ignore=true"
+#     networks:
+#       - traefik
+#
+# networks:
+#   traefik:
+#     external: true

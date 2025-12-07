@@ -12,6 +12,8 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
+	"github.com/chis/docksmith/internal/storage"
+	"github.com/google/uuid"
 )
 
 // Docker Compose label names
@@ -32,7 +34,7 @@ type SetLabelsRequest struct {
 	VersionMin       *string `json:"version_min,omitempty"`
 	VersionMax       *string `json:"version_max,omitempty"`
 	Script           *string `json:"script,omitempty"`
-	RestartDependsOn *string `json:"restart_depends_on,omitempty"`
+	RestartAfter *string `json:"restart_after,omitempty"`
 	NoRestart        bool    `json:"no_restart,omitempty"`
 	Force            bool    `json:"force,omitempty"`
 }
@@ -50,6 +52,7 @@ type LabelOperationResult struct {
 	Success        bool              `json:"success"`
 	Container      string            `json:"container"`
 	Operation      string            `json:"operation"`
+	OperationID    string            `json:"operation_id,omitempty"`
 	LabelsModified map[string]string `json:"labels_modified,omitempty"`
 	LabelsRemoved  []string          `json:"labels_removed,omitempty"`
 	ComposeFile    string            `json:"compose_file"`
@@ -59,10 +62,33 @@ type LabelOperationResult struct {
 	Message        string            `json:"message,omitempty"`
 }
 
-// handleLabelsGet returns labels for a container
+// docksmithLabels are all the label keys that docksmith manages
+var docksmithLabels = []string{
+	scripts.IgnoreLabel,
+	scripts.AllowLatestLabel,
+	scripts.VersionPinMajorLabel,
+	scripts.VersionPinMinorLabel,
+	scripts.TagRegexLabel,
+	scripts.VersionMinLabel,
+	scripts.VersionMaxLabel,
+	scripts.PreUpdateCheckLabel,
+	scripts.RestartAfterLabel,
+}
+
+// getDocksmithLabels extracts all docksmith labels from a container's labels
+func getDocksmithLabels(containerLabels map[string]string) map[string]string {
+	result := make(map[string]string)
+	for _, key := range docksmithLabels {
+		if val, ok := containerLabels[key]; ok {
+			result[key] = val
+		}
+	}
+	return result
+}
+
+// handleLabelsGet returns ALL labels for a container
 // GET /api/labels/:container
-// For compose-managed containers, reads from compose file (source of truth).
-// For standalone containers, falls back to container labels.
+// Returns all container labels from Docker, useful for identifying the container.
 func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	containerName := r.PathValue("container")
 
@@ -80,85 +106,11 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract docksmith labels
-	docksmithLabels := make(map[string]string)
-
-	// Try to read from compose file first (source of truth for compose-managed containers)
-	composeFilePath, hasComposeFile := container.Labels[composeConfigFilesLabel]
-	if hasComposeFile && composeFilePath != "" {
-		// Container is managed by compose - read labels from compose file
-		composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
-		serviceName := container.Labels[composeServiceLabel]
-
-		// Load compose file
-		composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, containerName)
-		if err == nil {
-			// Find service
-			service, err := composeFile.FindServiceByContainerName(serviceName)
-			if err == nil {
-				// Get all labels from service
-				allLabels, err := service.GetAllLabels()
-				if err == nil {
-					// Extract docksmith labels from compose file
-					for labelKey, labelVal := range allLabels {
-						if labelKey == scripts.IgnoreLabel ||
-							labelKey == scripts.AllowLatestLabel ||
-							labelKey == scripts.VersionPinMajorLabel ||
-							labelKey == scripts.VersionPinMinorLabel ||
-							labelKey == scripts.TagRegexLabel ||
-							labelKey == scripts.VersionMinLabel ||
-							labelKey == scripts.VersionMaxLabel ||
-							labelKey == scripts.PreUpdateCheckLabel ||
-							labelKey == scripts.RestartAfterLabel {
-							docksmithLabels[labelKey] = labelVal
-						}
-					}
-				}
-			}
-		}
-		// If we successfully read from compose file, use those labels
-		if len(docksmithLabels) > 0 {
-			RespondSuccess(w, map[string]any{
-				"container": containerName,
-				"labels":    docksmithLabels,
-				"source":    "compose_file",
-			})
-			return
-		}
-	}
-
-	// Fall back to container labels (for standalone containers or if compose read failed)
-	if val, ok := container.Labels[scripts.IgnoreLabel]; ok {
-		docksmithLabels[scripts.IgnoreLabel] = val
-	}
-	if val, ok := container.Labels[scripts.AllowLatestLabel]; ok {
-		docksmithLabels[scripts.AllowLatestLabel] = val
-	}
-	if val, ok := container.Labels[scripts.VersionPinMajorLabel]; ok {
-		docksmithLabels[scripts.VersionPinMajorLabel] = val
-	}
-	if val, ok := container.Labels[scripts.VersionPinMinorLabel]; ok {
-		docksmithLabels[scripts.VersionPinMinorLabel] = val
-	}
-	if val, ok := container.Labels[scripts.TagRegexLabel]; ok {
-		docksmithLabels[scripts.TagRegexLabel] = val
-	}
-	if val, ok := container.Labels[scripts.VersionMinLabel]; ok {
-		docksmithLabels[scripts.VersionMinLabel] = val
-	}
-	if val, ok := container.Labels[scripts.VersionMaxLabel]; ok {
-		docksmithLabels[scripts.VersionMaxLabel] = val
-	}
-	if val, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok {
-		docksmithLabels[scripts.PreUpdateCheckLabel] = val
-	}
-	if val, ok := container.Labels[scripts.RestartAfterLabel]; ok {
-		docksmithLabels[scripts.RestartAfterLabel] = val
-	}
-
+	// Return ALL container labels (not just docksmith labels)
+	// This is useful for identifying what the container is
 	RespondSuccess(w, map[string]any{
 		"container": containerName,
-		"labels":    docksmithLabels,
+		"labels":    container.Labels,
 		"source":    "container_labels",
 	})
 }
@@ -179,7 +131,7 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 
 	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
-		req.Script == nil && req.RestartDependsOn == nil {
+		req.Script == nil && req.RestartAfter == nil {
 		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
 		return
 	}
@@ -239,10 +191,12 @@ func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 
 // setLabels implements the label setting logic (atomic: compose update + restart)
 func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
+	operationID := uuid.New().String()
 	result := &LabelOperationResult{
 		Success:        false,
 		Container:      req.Container,
 		Operation:      "set",
+		OperationID:    operationID,
 		LabelsModified: make(map[string]string),
 		Restarted:      false,
 		PreCheckRan:    false,
@@ -253,6 +207,10 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	if err != nil {
 		return nil, err
 	}
+
+	// Capture old labels before making any changes
+	oldLabels := getDocksmithLabels(container.Labels)
+	oldLabelsJSON, _ := json.Marshal(oldLabels)
 
 	// Get compose file path
 	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
@@ -265,6 +223,25 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 
 	result.ComposeFile = composeFilePath
 	serviceName := container.Labels[composeServiceLabel]
+	stackName := container.Labels[composeProjectLabel]
+
+	// Create operation record
+	now := time.Now()
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   container.ID,
+		ContainerName: container.Name,
+		StackName:     stackName,
+		OperationType: "label_change",
+		Status:        "in_progress",
+		OldVersion:    string(oldLabelsJSON),
+		StartedAt:     &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if s.storageService != nil {
+		s.storageService.SaveUpdateOperation(ctx, op)
+	}
 
 	// Run pre-update check if configured and not forced/no-restart
 	skipCheck := req.NoRestart || req.Force
@@ -272,11 +249,13 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	result.PreCheckRan = ran
 	result.PreCheckPassed = passed
 	if err != nil {
+		s.failLabelOperation(ctx, operationID, fmt.Sprintf("pre-update check failed: %v", err))
 		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
 	}
 
 	// Create backup
 	if err != nil {
+		s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to create backup: %v", err))
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
 	defer func() {
@@ -296,147 +275,53 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		return nil, fmt.Errorf("failed to find service: %w", err)
 	}
 
-	// Apply label updates
-	if req.Ignore != nil {
-		if *req.Ignore {
-			// Set to true (non-default)
-			if err := service.SetLabel(scripts.IgnoreLabel, "true"); err != nil {
-				return nil, fmt.Errorf("failed to set ignore label: %w", err)
+	// Apply boolean label updates
+	boolLabels := []struct {
+		value    *bool
+		labelKey string
+	}{
+		{req.Ignore, scripts.IgnoreLabel},
+		{req.AllowLatest, scripts.AllowLatestLabel},
+		{req.VersionPinMajor, scripts.VersionPinMajorLabel},
+		{req.VersionPinMinor, scripts.VersionPinMinorLabel},
+	}
+
+	for _, bl := range boolLabels {
+		if bl.value != nil {
+			val, err := applyBoolLabel(service, bl.labelKey, bl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
 			}
-			result.LabelsModified[scripts.IgnoreLabel] = "true"
-		} else {
-			// Remove label when false (default value)
-			if err := service.RemoveLabel(scripts.IgnoreLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove ignore label: %w", err)
-			}
-			result.LabelsModified[scripts.IgnoreLabel] = ""
+			result.LabelsModified[bl.labelKey] = val
 		}
 	}
 
-	if req.AllowLatest != nil {
-		if *req.AllowLatest {
-			// Set to true (non-default)
-			if err := service.SetLabel(scripts.AllowLatestLabel, "true"); err != nil {
-				return nil, fmt.Errorf("failed to set allow-latest label: %w", err)
-			}
-			result.LabelsModified[scripts.AllowLatestLabel] = "true"
-		} else {
-			// Remove label when false (default value)
-			if err := service.RemoveLabel(scripts.AllowLatestLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove allow-latest label: %w", err)
-			}
-			result.LabelsModified[scripts.AllowLatestLabel] = ""
+	// Validate tag regex before applying
+	if req.TagRegex != nil && *req.TagRegex != "" {
+		if err := validateRegexPattern(*req.TagRegex); err != nil {
+			return nil, fmt.Errorf("invalid tag regex: %w", err)
 		}
 	}
 
-	if req.VersionPinMajor != nil {
-		if *req.VersionPinMajor {
-			// Set to true (non-default)
-			if err := service.SetLabel(scripts.VersionPinMajorLabel, "true"); err != nil {
-				return nil, fmt.Errorf("failed to set version-pin-major label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionPinMajorLabel] = "true"
-		} else {
-			// Remove label when false (default value)
-			if err := service.RemoveLabel(scripts.VersionPinMajorLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove version-pin-major label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionPinMajorLabel] = ""
-		}
+	// Apply string label updates
+	stringLabels := []struct {
+		value    *string
+		labelKey string
+	}{
+		{req.TagRegex, scripts.TagRegexLabel},
+		{req.VersionMin, scripts.VersionMinLabel},
+		{req.VersionMax, scripts.VersionMaxLabel},
+		{req.Script, scripts.PreUpdateCheckLabel},
+		{req.RestartAfter, scripts.RestartAfterLabel},
 	}
 
-	if req.VersionPinMinor != nil {
-		if *req.VersionPinMinor {
-			// Set to true (non-default)
-			if err := service.SetLabel(scripts.VersionPinMinorLabel, "true"); err != nil {
-				return nil, fmt.Errorf("failed to set version-pin-minor label: %w", err)
+	for _, sl := range stringLabels {
+		if sl.value != nil {
+			val, err := applyStringLabel(service, sl.labelKey, sl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
 			}
-			result.LabelsModified[scripts.VersionPinMinorLabel] = "true"
-		} else {
-			// Remove label when false (default value)
-			if err := service.RemoveLabel(scripts.VersionPinMinorLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove version-pin-minor label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionPinMinorLabel] = ""
-		}
-	}
-
-	if req.TagRegex != nil {
-		// If regex is empty string, remove the label; otherwise validate and set it
-		if *req.TagRegex == "" {
-			if err := service.RemoveLabel(scripts.TagRegexLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove tag-regex label: %w", err)
-			}
-			result.LabelsModified[scripts.TagRegexLabel] = ""
-		} else {
-			// Validate regex before setting
-			if err := validateRegexPattern(*req.TagRegex); err != nil {
-				return nil, fmt.Errorf("invalid tag regex: %w", err)
-			}
-			if err := service.SetLabel(scripts.TagRegexLabel, *req.TagRegex); err != nil {
-				return nil, fmt.Errorf("failed to set tag-regex label: %w", err)
-			}
-			result.LabelsModified[scripts.TagRegexLabel] = *req.TagRegex
-		}
-	}
-
-	if req.VersionMin != nil {
-		// If version-min is empty string, remove the label; otherwise set it
-		if *req.VersionMin == "" {
-			if err := service.RemoveLabel(scripts.VersionMinLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove version-min label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionMinLabel] = ""
-		} else {
-			if err := service.SetLabel(scripts.VersionMinLabel, *req.VersionMin); err != nil {
-				return nil, fmt.Errorf("failed to set version-min label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionMinLabel] = *req.VersionMin
-		}
-	}
-
-	if req.VersionMax != nil {
-		// If version-max is empty string, remove the label; otherwise set it
-		if *req.VersionMax == "" {
-			if err := service.RemoveLabel(scripts.VersionMaxLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove version-max label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionMaxLabel] = ""
-		} else {
-			if err := service.SetLabel(scripts.VersionMaxLabel, *req.VersionMax); err != nil {
-				return nil, fmt.Errorf("failed to set version-max label: %w", err)
-			}
-			result.LabelsModified[scripts.VersionMaxLabel] = *req.VersionMax
-		}
-	}
-
-	if req.Script != nil {
-		// If script is empty string, remove the label; otherwise set it
-		if *req.Script == "" {
-			if err := service.RemoveLabel(scripts.PreUpdateCheckLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove script label: %w", err)
-			}
-			result.LabelsModified[scripts.PreUpdateCheckLabel] = ""
-		} else {
-			if err := service.SetLabel(scripts.PreUpdateCheckLabel, *req.Script); err != nil {
-				return nil, fmt.Errorf("failed to set script label: %w", err)
-			}
-			result.LabelsModified[scripts.PreUpdateCheckLabel] = *req.Script
-		}
-	}
-
-	if req.RestartDependsOn != nil {
-		// If restart-after is empty string, remove the label; otherwise set it
-		if *req.RestartDependsOn == "" {
-			if err := service.RemoveLabel(scripts.RestartAfterLabel); err != nil {
-				return nil, fmt.Errorf("failed to remove restart-after label: %w", err)
-			}
-			result.LabelsModified[scripts.RestartAfterLabel] = ""
-		} else {
-			if err := service.SetLabel(scripts.RestartAfterLabel, *req.RestartDependsOn); err != nil {
-				return nil, fmt.Errorf("failed to set restart-after label: %w", err)
-			}
-			result.LabelsModified[scripts.RestartAfterLabel] = *req.RestartDependsOn
+			result.LabelsModified[sl.labelKey] = val
 		}
 	}
 
@@ -448,6 +333,7 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	// Restart container to apply labels (unless --no-restart)
 	if !req.NoRestart {
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
+			s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to restart container: %v", err))
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true
@@ -456,15 +342,21 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	result.Success = true
 	result.Message = fmt.Sprintf("%d label(s) set successfully", len(result.LabelsModified))
 
+	// Complete the operation with new labels
+	newLabelsJSON, _ := json.Marshal(result.LabelsModified)
+	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
+
 	return result, nil
 }
 
 // removeLabels implements the label removal logic (atomic: compose update + restart)
 func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*LabelOperationResult, error) {
+	operationID := uuid.New().String()
 	result := &LabelOperationResult{
 		Success:       false,
 		Container:     req.Container,
 		Operation:     "remove",
+		OperationID:   operationID,
 		LabelsRemoved: req.LabelNames,
 		Restarted:     false,
 		PreCheckRan:   false,
@@ -475,6 +367,10 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	if err != nil {
 		return nil, err
 	}
+
+	// Capture old labels before making any changes
+	oldLabels := getDocksmithLabels(container.Labels)
+	oldLabelsJSON, _ := json.Marshal(oldLabels)
 
 	// Get compose file path
 	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
@@ -487,6 +383,25 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 
 	result.ComposeFile = composeFilePath
 	serviceName := container.Labels[composeServiceLabel]
+	stackName := container.Labels[composeProjectLabel]
+
+	// Create operation record
+	now := time.Now()
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   container.ID,
+		ContainerName: container.Name,
+		StackName:     stackName,
+		OperationType: "label_change",
+		Status:        "in_progress",
+		OldVersion:    string(oldLabelsJSON),
+		StartedAt:     &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if s.storageService != nil {
+		s.storageService.SaveUpdateOperation(ctx, op)
+	}
 
 	// Run pre-update check if configured and not forced/no-restart
 	skipCheck := req.NoRestart || req.Force
@@ -494,11 +409,13 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	result.PreCheckRan = ran
 	result.PreCheckPassed = passed
 	if err != nil {
+		s.failLabelOperation(ctx, operationID, fmt.Sprintf("pre-update check failed: %v", err))
 		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
 	}
 
 	// Create backup
 	if err != nil {
+		s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to create backup: %v", err))
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
 	defer func() {
@@ -533,6 +450,7 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	// Restart container to apply changes (unless --no-restart)
 	if !req.NoRestart {
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
+			s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to restart container: %v", err))
 			return nil, fmt.Errorf("failed to restart container: %w", err)
 		}
 		result.Restarted = true
@@ -541,7 +459,39 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	result.Success = true
 	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(req.LabelNames))
 
+	// Complete the operation - for remove, new labels is empty map for removed labels
+	newLabels := make(map[string]string)
+	for _, labelName := range req.LabelNames {
+		newLabels[labelName] = "" // Empty value indicates removed
+	}
+	newLabelsJSON, _ := json.Marshal(newLabels)
+	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
+
 	return result, nil
+}
+
+// failLabelOperation marks a label change operation as failed
+func (s *Server) failLabelOperation(ctx context.Context, operationID, errorMsg string) {
+	if s.storageService == nil {
+		return
+	}
+	s.storageService.UpdateOperationStatus(ctx, operationID, "failed", errorMsg)
+}
+
+// completeLabelOperation marks a label change operation as complete
+func (s *Server) completeLabelOperation(ctx context.Context, operationID, newLabelsJSON string) {
+	if s.storageService == nil {
+		return
+	}
+	op, found, _ := s.storageService.GetUpdateOperation(ctx, operationID)
+	if !found {
+		return
+	}
+	now := time.Now()
+	op.Status = "complete"
+	op.NewVersion = newLabelsJSON
+	op.CompletedAt = &now
+	s.storageService.SaveUpdateOperation(ctx, op)
 }
 
 // executeContainerPreUpdateCheck runs pre-update check if configured and not skipped.
@@ -645,4 +595,45 @@ func validateRegexPattern(pattern string) error {
 	}
 
 	return nil
+}
+
+// applyBoolLabel applies a boolean label change to a service.
+// If value is true, sets the label to "true". If false, removes the label.
+// Returns the value to store in LabelsModified ("true" or "").
+func applyBoolLabel(service *compose.Service, labelKey string, value *bool) (string, error) {
+	if value == nil {
+		return "", nil // No change requested
+	}
+
+	if *value {
+		if err := service.SetLabel(labelKey, "true"); err != nil {
+			return "", err
+		}
+		return "true", nil
+	}
+	// Remove label when false (default value)
+	if err := service.RemoveLabel(labelKey); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
+// applyStringLabel applies a string label change to a service.
+// If value is empty, removes the label. Otherwise sets it.
+// Returns the value to store in LabelsModified.
+func applyStringLabel(service *compose.Service, labelKey string, value *string) (string, error) {
+	if value == nil {
+		return "", nil // No change requested
+	}
+
+	if *value == "" {
+		if err := service.RemoveLabel(labelKey); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+	if err := service.SetLabel(labelKey, *value); err != nil {
+		return "", err
+	}
+	return *value, nil
 }

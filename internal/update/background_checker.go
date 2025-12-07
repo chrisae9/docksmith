@@ -76,11 +76,35 @@ func (bc *BackgroundChecker) Start() {
 
 	log.Printf("BACKGROUND_CHECKER: Starting with interval %v", bc.interval)
 
+	// Subscribe to container update events to refresh cache after updates/rollbacks
+	if bc.eventBus != nil {
+		eventChan, _ := bc.eventBus.Subscribe(events.EventContainerUpdated)
+		go bc.handleContainerUpdates(eventChan)
+	}
+
 	// Run initial check immediately
 	go bc.runCheck()
 
 	// Start ticker for periodic checks
 	go bc.checkLoop()
+}
+
+// handleContainerUpdates listens for container update events and triggers cache refresh
+func (bc *BackgroundChecker) handleContainerUpdates(eventChan events.Subscriber) {
+	for e := range eventChan {
+		// Only trigger refresh for actual container updates (not our own background check events)
+		if source, ok := e.Payload["source"].(string); ok && source == "background_checker" {
+			continue // Ignore our own events to prevent infinite loops
+		}
+		// Check if this is from an update/rollback operation
+		if _, hasOpID := e.Payload["operation_id"]; hasOpID {
+			log.Printf("BACKGROUND_CHECKER: Container updated, scheduling refresh in 2s")
+			// Wait a moment for the container to stabilize after restart
+			time.AfterFunc(2*time.Second, func() {
+				bc.TriggerCheck()
+			})
+		}
+	}
 }
 
 // Stop stops the background checker

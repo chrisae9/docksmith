@@ -217,7 +217,8 @@ func (s *Service) RemoveLabel(key string) error {
 		}
 
 		if !removed {
-			return fmt.Errorf("label not found: %s", key)
+			// Label doesn't exist - that's fine, it's already "removed"
+			return nil
 		}
 
 		labelsNode.Content = newContent
@@ -246,7 +247,8 @@ func (s *Service) RemoveLabel(key string) error {
 		}
 
 		if !removed {
-			return fmt.Errorf("label not found: %s", key)
+			// Label doesn't exist - that's fine, it's already "removed"
+			return nil
 		}
 
 		labelsNode.Content = newContent

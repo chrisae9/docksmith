@@ -36,6 +36,8 @@ export interface ContainerInfo {
   service?: string;
   dependencies?: string[];
   labels?: Record<string, string>;
+  compose_labels?: Record<string, string>; // Docksmith labels from compose file
+  labels_out_of_sync?: boolean; // True if compose labels differ from running container
 }
 
 // Stack (matches update.Stack)
@@ -172,6 +174,8 @@ export interface HealthResponse {
 export interface DockerRegistryInfo {
   registries: string[];
   config_path: string;
+  host_config_path?: string;
+  running_in_docker: boolean;
 }
 
 // Update Status Constants (matches update.UpdateStatus)
@@ -227,7 +231,7 @@ export interface SetLabelsRequest {
   version_min?: string;
   version_max?: string;
   script?: string;
-  restart_depends_on?: string;
+  restart_after?: string;
   no_restart?: boolean;
   force?: boolean;
 }

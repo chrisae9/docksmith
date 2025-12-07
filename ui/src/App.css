@@ -651,6 +651,43 @@ li.has-update .version {
   flex-shrink: 0;
 }
 
+.info {
+  color: var(--color-accent);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* Docksmith label indicators */
+.label-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.label-icon.pin-major {
+  color: var(--color-danger);
+}
+
+.label-icon.pin-minor {
+  color: var(--color-warning);
+}
+
+.label-icon.pin-patch {
+  color: var(--color-success);
+}
+
+.label-icon.regex {
+  color: var(--color-accent);
+}
+
+.label-icon.script {
+  color: var(--color-text-tertiary);
+}
+
+.label-icon.latest {
+  color: var(--color-warning);
+}
+
 /* Selected state */
 li.selected {
   background: var(--color-accent-dim);
@@ -1548,6 +1585,17 @@ li.selected {
   gap: 6px;
 }
 
+.container-link {
+  color: var(--color-accent);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.container-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
 .op-type-badge {
   font-size: 9px;
   font-weight: 600;
@@ -1571,6 +1619,51 @@ li.selected {
 .op-type-badge.rolled-back {
   background: var(--color-danger-dim);
   color: var(--color-danger);
+}
+
+.op-type-badge.restart {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.op-type-badge.labels {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+}
+
+.op-label-info {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* Type filter select */
+.type-filter-select {
+  padding: 6px 28px 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23888'%3E%3Cpath d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 16px;
+  min-width: 110px;
+  flex-shrink: 0;
+}
+
+.type-filter-select:hover {
+  border-color: var(--color-accent);
+}
+
+.type-filter-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
 .op-info {

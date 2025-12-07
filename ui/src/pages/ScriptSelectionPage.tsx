@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getScripts } from '../api/client';
 import type { Script } from '../types/api';
+import { useContainerData } from '../hooks/useContainerData';
+import { ContainerConfigCard } from '../components/ContainerConfigCard';
 import './ScriptSelectionPage.css';
 
 export function ScriptSelectionPage() {
@@ -9,6 +11,7 @@ export function ScriptSelectionPage() {
   const location = useLocation();
   const { containerName } = useParams<{ containerName: string }>();
 
+  const { container, loading: loadingContainer } = useContainerData(containerName);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,11 +35,12 @@ export function ScriptSelectionPage() {
     const fetchScripts = async () => {
       try {
         setLoading(true);
-        const response = await getScripts();
-        if (response.success && response.data) {
-          setScripts(response.data.scripts || []);
+        const scriptsResponse = await getScripts();
+
+        if (scriptsResponse.success && scriptsResponse.data) {
+          setScripts(scriptsResponse.data.scripts || []);
         } else {
-          setError(response.error || 'Failed to load scripts');
+          setError(scriptsResponse.error || 'Failed to load scripts');
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
@@ -48,9 +52,33 @@ export function ScriptSelectionPage() {
     fetchScripts();
   }, [containerName, navigate, currentScript]);
 
-  const handleSave = () => {
+  // Get other pending changes from location state (to preserve them)
+  const pendingTagRegex = (location.state as any)?.pendingTagRegex;
+  const pendingRestartAfter = (location.state as any)?.pendingRestartAfter;
+
+  const handleDone = () => {
+    if (!containerName) return;
+
+    // Navigate back to detail page with the selected script and any other pending changes
     navigate(`/container/${containerName}`, {
-      state: { selectedScript }
+      state: {
+        selectedScript: selectedScript,
+        tagRegex: pendingTagRegex,
+        restartAfter: pendingRestartAfter,
+      }
+    });
+  };
+
+  const handleCancel = () => {
+    if (!containerName) return;
+
+    // Navigate back, preserving other pending changes but not the script change
+    navigate(`/container/${containerName}`, {
+      state: {
+        selectedScript: originalScript, // Restore original
+        tagRegex: pendingTagRegex,
+        restartAfter: pendingRestartAfter,
+      }
     });
   };
 
@@ -76,18 +104,18 @@ export function ScriptSelectionPage() {
       </header>
 
       <main className="page-content">
-        {/* Info Section */}
-        {hasChanges && (
-          <div className="info-section">
-            <div className="info-card warning">
-              <i className="fa-solid fa-exclamation-triangle"></i>
-              <div>
-                <strong>Container will be restarted</strong>
-                <p>Changing the pre-update script requires a container restart to apply</p>
-              </div>
-            </div>
+        {/* Current Configuration */}
+        {loadingContainer && (
+          <div className="loading-state">
+            <span className="spinner" />
+            <p>Loading container data...</p>
           </div>
         )}
+
+        {!loadingContainer && container && (
+          <ContainerConfigCard container={container} />
+        )}
+
 
         {/* Current Selection */}
         {selectedScript && (
@@ -212,22 +240,23 @@ export function ScriptSelectionPage() {
             )}
           </>
         )}
+
       </main>
 
       {/* Footer */}
       <footer className="page-footer">
         <button
           className="button button-secondary"
-          onClick={() => navigate(`/container/${containerName}`)}
+          onClick={handleCancel}
         >
           Cancel
         </button>
         <button
           className="button button-primary"
-          onClick={handleSave}
+          onClick={handleDone}
           disabled={!hasChanges}
         >
-          Save
+          Done
         </button>
       </footer>
     </div>

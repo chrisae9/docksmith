@@ -1,8 +1,0 @@
-/* Rollback Progress Page - Page-specific styles only */
-/* Base styles are in ../styles/progress-common.css */
-
-/* Rollback uses warning (orange) color for stage logs instead of accent (blue) */
-.rollback-progress-page .log-entry.log-stage .log-message,
-.rollback-progress-page .log-entry.log-stage .log-icon {
-  color: var(--color-warning);
-}

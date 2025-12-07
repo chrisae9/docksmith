@@ -282,7 +282,22 @@ export interface RestartResponse {
   errors?: string[];
 }
 
-// Restart a single container
+// Start a restart operation via orchestrator (returns operation_id for SSE tracking)
+export interface StartRestartResponse {
+  operation_id: string;
+  container_name: string;
+  force: boolean;
+  status: string;
+}
+
+export async function startRestart(containerName: string, force = false): Promise<APIResponse<StartRestartResponse>> {
+  const url = force ? `/restart/start/${containerName}?force=true` : `/restart/start/${containerName}`;
+  return fetchAPI(url, {
+    method: 'POST',
+  });
+}
+
+// Restart a single container (legacy - no SSE progress)
 export async function restartContainer(containerName: string, force = false): Promise<APIResponse<RestartResponse>> {
   const url = force ? `/restart/container/${containerName}?force=true` : `/restart/container/${containerName}`;
   return fetchAPI(url, {
@@ -298,8 +313,10 @@ export async function restartStack(stackName: string): Promise<APIResponse<Resta
 }
 
 // Registry tags (for regex testing UI)
+// Note: imageRef is not encoded because the backend uses a wildcard path pattern {imageRef...}
+// that expects literal slashes in the path (e.g., /registry/tags/linuxserver/syncthing)
 export async function getRegistryTags(imageRef: string): Promise<RegistryTagsAPIResponse> {
-  return fetchAPI(`/registry/tags/${encodeURIComponent(imageRef)}`);
+  return fetchAPI(`/registry/tags/${imageRef}`);
 }
 
 // Trigger background check (uses cached registry data)

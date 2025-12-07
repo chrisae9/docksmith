@@ -57,6 +57,11 @@ export const STAGE_INFO: Record<string, StageInfo> = {
 
 // Restart-specific stages (for ContainerDetailPage)
 export const RESTART_STAGES: Record<string, StageInfo> = {
+  'saving': {
+    icon: 'fa-floppy-disk',
+    label: 'Saving',
+    description: 'Saving settings to compose file...'
+  },
   'stopping': {
     icon: 'fa-circle-stop',
     label: 'Stopping',
@@ -77,6 +82,11 @@ export const RESTART_STAGES: Record<string, StageInfo> = {
     label: 'Processing Dependents',
     description: 'Restarting dependent containers...'
   },
+  'restarting_dependents': {
+    icon: 'fa-rotate',
+    label: 'Restarting Dependents',
+    description: 'Restarting dependent containers...'
+  },
   'complete': {
     icon: 'fa-circle-check',
     label: 'Complete',
@@ -93,7 +103,7 @@ export const RESTART_STAGES: Record<string, StageInfo> = {
 export interface LogEntry {
   time: number;
   message: string;
-  type: 'info' | 'success' | 'error' | 'stage';
+  type: 'info' | 'success' | 'error' | 'warning' | 'stage';
   icon?: string;
 }
 

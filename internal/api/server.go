@@ -207,6 +207,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/rollback", s.handleRollback)
 
 	// Restart operations
+	mux.HandleFunc("POST /api/restart/start/{name}", s.handleStartRestart) // New SSE-based restart
 	mux.HandleFunc("POST /api/restart/container/{name}", s.handleRestartContainer)
 	mux.HandleFunc("POST /api/restart/stack/{name}", s.handleRestartStack)
 	mux.HandleFunc("POST /api/restart", s.handleRestartContainerBody)

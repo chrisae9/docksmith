@@ -204,3 +204,8 @@ func (pt *PathTranslator) GetMappings() map[string]string {
 	}
 	return result
 }
+
+// IsRunningInDocker returns true if docksmith is running inside a Docker container
+func (pt *PathTranslator) IsRunningInDocker() bool {
+	return pt.inDocker
+}

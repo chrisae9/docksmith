@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -11,7 +12,8 @@ import (
 type Manager struct {
 	dockerHubClient *DockerHubClient
 	ghcrClient      *GHCRClient
-	genericClient   *HTTPClient
+	genericClients  map[string]*HTTPClient // registry -> client
+	genericClientMu sync.RWMutex
 	cache           *RegistryCache
 	cacheEnabled    bool
 }
@@ -22,7 +24,7 @@ func NewManager(githubToken string) *Manager {
 	return &Manager{
 		dockerHubClient: NewDockerHubClient(),
 		ghcrClient:      NewGHCRClient(githubToken),
-		genericClient:   NewHTTPClient(nil),
+		genericClients:  make(map[string]*HTTPClient),
 		cache:           NewRegistryCache(15 * time.Minute),
 		cacheEnabled:    true, // Enable caching by default
 	}
@@ -196,7 +198,32 @@ func (m *Manager) getClient(registry string) Client {
 	case "ghcr.io":
 		return m.ghcrClient
 	default:
-		// Use generic V2 API client for other registries
-		return m.genericClient
+		// Use registry-specific generic V2 API client
+		return m.getOrCreateGenericClient(registry)
 	}
+}
+
+// getOrCreateGenericClient returns or creates a generic client for the specified registry.
+func (m *Manager) getOrCreateGenericClient(registry string) *HTTPClient {
+	// Fast path: check if client exists
+	m.genericClientMu.RLock()
+	client, exists := m.genericClients[registry]
+	m.genericClientMu.RUnlock()
+	if exists {
+		return client
+	}
+
+	// Slow path: create new client
+	m.genericClientMu.Lock()
+	defer m.genericClientMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if client, exists = m.genericClients[registry]; exists {
+		return client
+	}
+
+	// Create new registry-specific client
+	client = NewHTTPClientForRegistry(nil, registry)
+	m.genericClients[registry] = client
+	return client
 }

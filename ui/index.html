@@ -10,9 +10,288 @@
     <title>Docksmith</title>
     <!-- Font Awesome for clean icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <!-- Inline loading skeleton styles -->
+    <style>
+      /* Base styles for immediate render */
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+        background: #000000;
+        color: #FFFFFF;
+        min-height: 100vh;
+        min-height: 100dvh;
+      }
+
+      /* Loading skeleton container */
+      .loading-skeleton {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+      }
+
+      /* Header skeleton */
+      .skeleton-header {
+        padding: 16px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .skeleton-logo {
+        width: 32px;
+        height: 32px;
+        opacity: 0.8;
+      }
+
+      .skeleton-title {
+        height: 24px;
+        width: 120px;
+        background: linear-gradient(90deg, #1C1C1E 0%, #2C2C2E 50%, #1C1C1E 100%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 6px;
+      }
+
+      /* Filter bar skeleton */
+      .skeleton-filters {
+        display: flex;
+        gap: 8px;
+        padding: 0 20px 16px;
+      }
+
+      .skeleton-filter-btn {
+        height: 32px;
+        width: 70px;
+        background: #1C1C1E;
+        border-radius: 8px;
+      }
+
+      .skeleton-filter-btn:first-child {
+        background: linear-gradient(90deg, #2C2C2E 0%, #3A3A3C 50%, #2C2C2E 100%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+      }
+
+      /* Container list skeleton */
+      .skeleton-list {
+        flex: 1;
+        padding: 0 20px 100px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .skeleton-card {
+        background: #1C1C1E;
+        border-radius: 12px;
+        padding: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .skeleton-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(90deg, #2C2C2E 0%, #3A3A3C 50%, #2C2C2E 100%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 10px;
+        flex-shrink: 0;
+      }
+
+      .skeleton-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .skeleton-line {
+        height: 14px;
+        background: linear-gradient(90deg, #2C2C2E 0%, #3A3A3C 50%, #2C2C2E 100%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 4px;
+      }
+
+      .skeleton-line.short { width: 60%; }
+      .skeleton-line.medium { width: 80%; }
+      .skeleton-line.tiny { width: 40%; height: 10px; }
+
+      .skeleton-badge {
+        width: 80px;
+        height: 24px;
+        background: linear-gradient(90deg, #2C2C2E 0%, #3A3A3C 50%, #2C2C2E 100%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 6px;
+        flex-shrink: 0;
+      }
+
+      /* Tab bar skeleton */
+      .skeleton-tabbar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(28, 28, 30, 0.9);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0));
+        display: flex;
+        justify-content: space-around;
+        border-top: 1px solid #38383A;
+      }
+
+      .skeleton-tab {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 16px;
+      }
+
+      .skeleton-tab-icon {
+        width: 24px;
+        height: 24px;
+        background: #3A3A3C;
+        border-radius: 6px;
+      }
+
+      .skeleton-tab-icon.active {
+        background: #64D2FF;
+        opacity: 0.6;
+      }
+
+      .skeleton-tab-label {
+        width: 40px;
+        height: 10px;
+        background: #3A3A3C;
+        border-radius: 3px;
+      }
+
+      /* Shimmer animation */
+      @keyframes shimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+
+      /* Stagger animation delays for cards */
+      .skeleton-card:nth-child(1) .skeleton-icon,
+      .skeleton-card:nth-child(1) .skeleton-line,
+      .skeleton-card:nth-child(1) .skeleton-badge { animation-delay: 0s; }
+
+      .skeleton-card:nth-child(2) .skeleton-icon,
+      .skeleton-card:nth-child(2) .skeleton-line,
+      .skeleton-card:nth-child(2) .skeleton-badge { animation-delay: 0.1s; }
+
+      .skeleton-card:nth-child(3) .skeleton-icon,
+      .skeleton-card:nth-child(3) .skeleton-line,
+      .skeleton-card:nth-child(3) .skeleton-badge { animation-delay: 0.2s; }
+
+      .skeleton-card:nth-child(4) .skeleton-icon,
+      .skeleton-card:nth-child(4) .skeleton-line,
+      .skeleton-card:nth-child(4) .skeleton-badge { animation-delay: 0.3s; }
+
+      .skeleton-card:nth-child(5) .skeleton-icon,
+      .skeleton-card:nth-child(5) .skeleton-line,
+      .skeleton-card:nth-child(5) .skeleton-badge { animation-delay: 0.4s; }
+
+      /* Respect reduced motion preference */
+      @media (prefers-reduced-motion: reduce) {
+        .skeleton-title,
+        .skeleton-filter-btn:first-child,
+        .skeleton-icon,
+        .skeleton-line,
+        .skeleton-badge {
+          animation: none;
+          background: #2C2C2E;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Loading skeleton - replaced when React mounts -->
+      <div class="loading-skeleton">
+        <div class="skeleton-header">
+          <img src="/docksmith-logo.svg" alt="" class="skeleton-logo" />
+          <div class="skeleton-title"></div>
+        </div>
+
+        <div class="skeleton-filters">
+          <div class="skeleton-filter-btn"></div>
+          <div class="skeleton-filter-btn"></div>
+          <div class="skeleton-filter-btn"></div>
+        </div>
+
+        <div class="skeleton-list">
+          <div class="skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line medium"></div>
+              <div class="skeleton-line tiny"></div>
+            </div>
+            <div class="skeleton-badge"></div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line short"></div>
+              <div class="skeleton-line tiny"></div>
+            </div>
+            <div class="skeleton-badge"></div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line medium"></div>
+              <div class="skeleton-line tiny"></div>
+            </div>
+            <div class="skeleton-badge"></div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line short"></div>
+              <div class="skeleton-line tiny"></div>
+            </div>
+            <div class="skeleton-badge"></div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line medium"></div>
+              <div class="skeleton-line tiny"></div>
+            </div>
+            <div class="skeleton-badge"></div>
+          </div>
+        </div>
+
+        <div class="skeleton-tabbar">
+          <div class="skeleton-tab">
+            <div class="skeleton-tab-icon active"></div>
+            <div class="skeleton-tab-label"></div>
+          </div>
+          <div class="skeleton-tab">
+            <div class="skeleton-tab-icon"></div>
+            <div class="skeleton-tab-label"></div>
+          </div>
+          <div class="skeleton-tab">
+            <div class="skeleton-tab-icon"></div>
+            <div class="skeleton-tab-label"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -256,10 +256,8 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
             {dockerConfig && dockerConfig.registries.length > 0 ? (
               dockerConfig.registries.map((registry, index) => (
                 <div key={index} className="setting-row">
-                  <span className="setting-label">
-                    <i className="fa-solid fa-check-circle" style={{ color: 'var(--color-success)' }}></i>
-                  </span>
-                  <span className="setting-value monospace">{registry}</span>
+                  <span className="setting-label monospace">{registry}</span>
+                  <i className="fa-solid fa-check-circle" style={{ color: 'var(--color-success)', fontSize: '18px' }}></i>
                 </div>
               ))
             ) : (
@@ -269,7 +267,11 @@ export function Settings({ onBack: _onBack }: SettingsProps) {
             )}
             <div className="setting-info">
               <i className="fa-solid fa-circle-info"></i>
-              Credentials are stored in {dockerConfig?.config_path || '~/.docker/config.json'}
+              {dockerConfig?.running_in_docker ? (
+                <>Mounted from host: {dockerConfig?.host_config_path || '~/.docker/config.json'}</>
+              ) : (
+                <>Credentials stored in {dockerConfig?.config_path || '~/.docker/config.json'}</>
+              )}
             </div>
           </div>
         </section>

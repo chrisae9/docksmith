@@ -17,8 +17,10 @@ type DockerConfig struct {
 
 // DockerRegistryInfo contains information about configured registries
 type DockerRegistryInfo struct {
-	Registries []string `json:"registries"`
-	ConfigPath string   `json:"config_path"`
+	Registries        []string `json:"registries"`
+	ConfigPath        string   `json:"config_path"`
+	HostConfigPath    string   `json:"host_config_path,omitempty"`
+	RunningInDocker   bool     `json:"running_in_docker"`
 }
 
 // handleDockerConfig returns information about configured Docker registries
@@ -60,9 +62,15 @@ func (s *Server) handleDockerConfig(w http.ResponseWriter, r *http.Request) {
 		registries = append(registries, cleanName)
 	}
 
+	// Translate to host path if running in Docker
+	hostConfigPath := s.pathTranslator.TranslateToHost(configPath)
+	runningInDocker := s.pathTranslator.IsRunningInDocker()
+
 	info := DockerRegistryInfo{
-		Registries: registries,
-		ConfigPath: configPath,
+		Registries:      registries,
+		ConfigPath:      configPath,
+		HostConfigPath:  hostConfigPath,
+		RunningInDocker: runningInDocker,
 	}
 
 	RespondSuccess(w, info)

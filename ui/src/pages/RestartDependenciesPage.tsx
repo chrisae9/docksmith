@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getContainerStatus } from '../api/client';
 import type { ContainerInfo } from '../types/api';
+import { useContainerData } from '../hooks/useContainerData';
+import { ContainerConfigCard } from '../components/ContainerConfigCard';
 import './RestartDependenciesPage.css';
 
 export function RestartDependenciesPage() {
@@ -9,11 +11,13 @@ export function RestartDependenciesPage() {
   const location = useLocation();
   const { containerName } = useParams<{ containerName: string }>();
 
+  const { container, loading: loadingContainer } = useContainerData(containerName);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
+  const [originalDependencies, setOriginalDependencies] = useState<Set<string>>(new Set());
 
   // Get current dependencies from location state or empty
   const currentDependencies = (location.state as any)?.currentDependencies || '';
@@ -28,20 +32,22 @@ export function RestartDependenciesPage() {
     if (currentDependencies) {
       const deps = currentDependencies.split(',').map((d: string) => d.trim()).filter(Boolean);
       setSelectedContainers(new Set(deps));
+      setOriginalDependencies(new Set(deps));
     }
 
-    const fetchContainers = async () => {
+    const fetchContainersList = async () => {
       try {
         setLoading(true);
-        const response = await getContainerStatus();
-        if (response.success && response.data) {
-          // Filter out the current container from the list
-          const allContainers = response.data.containers.filter(
+        const statusResponse = await getContainerStatus();
+
+        if (statusResponse.success && statusResponse.data) {
+          // Filter out the current container from the list of available containers
+          const allContainers = statusResponse.data.containers.filter(
             c => c.container_name !== containerName
           );
           setContainers(allContainers);
         } else {
-          setError(response.error || 'Failed to load containers');
+          setError(statusResponse.error || 'Failed to load containers');
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
@@ -50,7 +56,7 @@ export function RestartDependenciesPage() {
       }
     };
 
-    fetchContainers();
+    fetchContainersList();
   }, [containerName, navigate, currentDependencies]);
 
   const toggleContainer = (name: string) => {
@@ -65,17 +71,47 @@ export function RestartDependenciesPage() {
     });
   };
 
-  const handleSave = () => {
-    const dependenciesString = Array.from(selectedContainers).join(', ');
+  // Get other pending changes from location state (to preserve them)
+  const pendingTagRegex = (location.state as any)?.pendingTagRegex;
+  const pendingScript = (location.state as any)?.pendingScript;
+
+  const handleDone = () => {
+    if (!containerName) return;
+
+    const dependenciesString = Array.from(selectedContainers).join(',');
+
+    // Navigate back to detail page with the selected dependencies and any other pending changes
     navigate(`/container/${containerName}`, {
-      state: { restartDependsOn: dependenciesString }
+      state: {
+        restartAfter: dependenciesString,
+        tagRegex: pendingTagRegex,
+        selectedScript: pendingScript,
+      }
     });
   };
 
-  const handleClear = () => {
+  const handleCancel = () => {
+    if (!containerName) return;
+
+    const originalDepsString = Array.from(originalDependencies).join(',');
+
+    // Navigate back, preserving other pending changes but not the dependencies change
     navigate(`/container/${containerName}`, {
-      state: { restartDependsOn: '' }
+      state: {
+        restartAfter: originalDepsString, // Restore original
+        tagRegex: pendingTagRegex,
+        selectedScript: pendingScript,
+      }
     });
+  };
+
+  // Check if there are changes from original
+  const hasChanges = () => {
+    if (selectedContainers.size !== originalDependencies.size) return true;
+    for (const dep of selectedContainers) {
+      if (!originalDependencies.has(dep)) return true;
+    }
+    return false;
   };
 
   const filteredContainers = containers.filter(container => {
@@ -99,6 +135,18 @@ export function RestartDependenciesPage() {
       </header>
 
       <main className="page-content">
+        {/* Current Configuration */}
+        {loadingContainer && (
+          <div className="loading-state">
+            <span className="spinner" />
+            <p>Loading container data...</p>
+          </div>
+        )}
+
+        {!loadingContainer && container && (
+          <ContainerConfigCard container={container} />
+        )}
+
         {/* Info Section */}
         <div className="info-section">
           <div className="info-card">
@@ -208,21 +256,23 @@ export function RestartDependenciesPage() {
             )}
           </>
         )}
+
       </main>
 
       {/* Footer */}
       <footer className="page-footer">
-        {selectedContainers.size > 0 && (
-          <button className="button button-secondary" onClick={handleClear}>
-            Clear All
-          </button>
-        )}
+        <button
+          className="button button-secondary"
+          onClick={handleCancel}
+        >
+          Cancel
+        </button>
         <button
           className="button button-primary"
-          onClick={handleSave}
-          disabled={loading}
+          onClick={handleDone}
+          disabled={!hasChanges()}
         >
-          {selectedContainers.size > 0 ? `Save (${selectedContainers.size})` : 'Save'}
+          {selectedContainers.size > 0 ? `Done (${selectedContainers.size})` : 'Done'}
         </button>
       </footer>
     </div>

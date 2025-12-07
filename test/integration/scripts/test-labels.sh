@@ -231,38 +231,74 @@ test_restart_after() {
     fi
 }
 
-# Test 6: Label atomicity (set label via API)
-test_label_atomicity() {
-    print_info "Test: Label atomicity (compose file + container restart)"
+# Test 6: Label sync detection (compose file vs running container)
+test_label_sync_detection() {
+    print_info "Test: Label sync detection (compose file vs running container)"
 
     local container="test-labels-restart-deps"  # From labels environment
 
-    # Set a label via API
-    print_info "Setting label via API..."
+    # First ensure no stale labels - set and restart to apply
+    print_info "Ensuring clean state..."
+    local body='{"container":"'"$container"'","label_names":["docksmith.allow-latest"]}'
+    curl_api POST "/labels/remove" "$body" > /dev/null 2>&1 || true
+    sleep 5
+
+    # Trigger check to refresh
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Now set a label with no_restart - this creates out-of-sync state
+    print_info "Setting label via API with no_restart..."
     local body='{"container":"'"$container"'","allow_latest":true,"no_restart":true}'
     local response=$(curl_api POST "/labels/set" "$body")
     assert_api_success "$response" "Label set via API"
 
+    sleep 3
+
+    # Trigger check to detect out-of-sync
+    curl_api POST "/trigger-check" > /dev/null
     sleep 5
 
-    # Verify label exists
-    local labels_response=$(curl_api GET "/labels/$container")
-    local allow_latest=$(echo "$labels_response" | jq -r '.data.labels."docksmith.allow-latest"')
+    # Check container status for labels_out_of_sync
+    local status_response=$(curl_api GET "/status")
+    local labels_out_of_sync=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .labels_out_of_sync')
+    local compose_allow_latest=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .compose_labels."docksmith.allow-latest"')
+    local container_allow_latest=$(echo "$status_response" | jq -r '.data.containers[] | select(.container_name=="'"$container"'") | .labels."docksmith.allow-latest"')
 
-    TESTS_RUN=$((TESTS_RUN + 1))
+    TESTS_RUN=$((TESTS_RUN + 3))
 
-    if [ "$allow_latest" = "true" ]; then
-        print_success "Label persisted in compose file and container"
+    # Test 1: labels_out_of_sync should be true
+    if [ "$labels_out_of_sync" = "true" ]; then
+        print_success "Labels out of sync detected correctly"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        print_error "Label not persisted correctly"
+        print_error "Labels out of sync not detected (got: $labels_out_of_sync)"
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 
-    # Clean up - remove label
-    local body='{"container":"'"$container"'","label_names":["docksmith.allow-latest"],"no_restart":true}'
+    # Test 2: compose_labels should have the new value
+    if [ "$compose_allow_latest" = "true" ]; then
+        print_success "Compose file label shows new value"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Compose file label not showing new value (got: $compose_allow_latest)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Test 3: container labels should NOT have the new value (no restart occurred)
+    if [ "$container_allow_latest" = "null" ] || [ "$container_allow_latest" = "" ]; then
+        print_success "Running container still has old labels (no restart)"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        print_error "Running container should not have new label yet (got: $container_allow_latest)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    # Clean up - remove label (with restart this time to fully clean)
+    print_info "Cleaning up..."
+    local body='{"container":"'"$container"'","label_names":["docksmith.allow-latest"]}'
     curl_api POST "/labels/remove" "$body" > /dev/null
-    sleep 3
+    sleep 5
 }
 
 # Test 7: docksmith.version-pin-minor label
@@ -485,15 +521,19 @@ test_combined_constraints() {
 
     local container="test-labels-node"
 
-    # Set both pin-minor and version-max
+    # Set both pin-minor and version-max (with restart to apply labels)
     print_info "Setting multiple constraints (pin-minor + version-max)..."
-    local body='{"container":"'"$container"'","version_pin_minor":true,"version_max":"20.99","no_restart":true}'
+    local body='{"container":"'"$container"'","version_pin_minor":true,"version_max":"20.99"}'
     local response=$(curl_api POST "/labels/set" "$body")
     assert_api_success "$response" "Multiple constraints set"
 
-    sleep 3
+    sleep 8
 
-    # Verify both labels persisted
+    # Trigger check to refresh container info
+    curl_api POST "/trigger-check" > /dev/null
+    sleep 5
+
+    # Verify both labels persisted (check running container labels after restart)
     local labels_response=$(curl_api GET "/labels/$container")
     local pin_minor=$(echo "$labels_response" | jq -r '.data.labels."docksmith.version-pin-minor"')
     local version_max=$(echo "$labels_response" | jq -r '.data.labels."docksmith.version-max"')
@@ -516,10 +556,10 @@ test_combined_constraints() {
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 
-    # Clean up
-    local body='{"container":"'"$container"'","label_names":["docksmith.version-pin-minor","docksmith.version-max"],"no_restart":true}'
+    # Clean up (with restart to apply removal)
+    local body='{"container":"'"$container"'","label_names":["docksmith.version-pin-minor","docksmith.version-max"]}'
     curl_api POST "/labels/remove" "$body" > /dev/null
-    sleep 2
+    sleep 5
 }
 
 # Main test execution
@@ -538,7 +578,7 @@ main() {
     test_pre_check_pass
     test_pre_check_fail
     test_restart_after
-    test_label_atomicity
+    test_label_sync_detection
 
     # Run new version constraint tests
     test_version_pin_minor

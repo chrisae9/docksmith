@@ -1,10 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getContainerLabels, checkContainers, getContainerStatus } from '../api/client';
 import type { ContainerInfo } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
 import { getRegistryUrl } from '../utils/registry';
 import './ContainerDetailPage.css';
+
+// Fetch fresh container data with re-run precheck
+async function fetchContainerWithCheck(containerName: string): Promise<ContainerInfo | null> {
+  const response = await checkContainers();
+  if (response.success && response.data) {
+    const foundContainer = response.data.containers.find(
+      (c) => c.container_name === containerName
+    );
+    return foundContainer || null;
+  }
+  return null;
+}
 
 export function ContainerDetailPage() {
   const navigate = useNavigate();
@@ -18,19 +30,20 @@ export function ContainerDetailPage() {
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [ignoreFlag, setIgnoreFlag] = useState(false);
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
-  const [versionPinMajor, setVersionPinMajor] = useState(false);
-  const [versionPinMinor, setVersionPinMinor] = useState(false);
-  const [restartDependsOn, setRestartDependsOn] = useState<string>('');
+  const [versionPin, setVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
+  const [restartAfter, setRestartAfter] = useState<string>('');
+  const [tagRegex, setTagRegex] = useState<string>('');
   const [hasChanges, setHasChanges] = useState(false);
   const [dependentContainers, setDependentContainers] = useState<string[]>([]);
+  const [refreshingPrecheck, setRefreshingPrecheck] = useState(false);
 
   // Track original values to detect changes
   const [originalScript, setOriginalScript] = useState<string>('');
   const [originalIgnore, setOriginalIgnore] = useState(false);
   const [originalAllowLatest, setOriginalAllowLatest] = useState(false);
-  const [originalVersionPinMajor, setOriginalVersionPinMajor] = useState(false);
-  const [originalVersionPinMinor, setOriginalVersionPinMinor] = useState(false);
-  const [originalRestartDependsOn, setOriginalRestartDependsOn] = useState<string>('');
+  const [originalVersionPin, setOriginalVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
+  const [originalRestartAfter, setOriginalRestartAfter] = useState<string>('');
+  const [originalTagRegex, setOriginalTagRegex] = useState<string>('');
 
   // Fetch container data when component mounts or containerName changes
   useEffect(() => {
@@ -72,15 +85,25 @@ export function ContainerDetailPage() {
     fetchContainerData();
   }, [containerName, navigate]);
 
+  // Track pending state from sub-pages (to avoid overwriting in fetchData)
+  const pendingStateRef = useRef<{ selectedScript?: string; restartAfter?: string; tagRegex?: string }>({});
+
   // Handle location state updates (from sub-pages)
   useEffect(() => {
     const state = location.state as any;
-    if (state) {
+    if (state && (state.selectedScript !== undefined || state.restartAfter !== undefined || state.tagRegex !== undefined)) {
+      // Store pending values so fetchData won't overwrite them
       if ('selectedScript' in state) {
+        pendingStateRef.current.selectedScript = state.selectedScript;
         setSelectedScript(state.selectedScript);
       }
-      if ('restartDependsOn' in state) {
-        setRestartDependsOn(state.restartDependsOn);
+      if ('restartAfter' in state) {
+        pendingStateRef.current.restartAfter = state.restartAfter;
+        setRestartAfter(state.restartAfter);
+      }
+      if ('tagRegex' in state) {
+        pendingStateRef.current.tagRegex = state.tagRegex;
+        setTagRegex(state.tagRegex);
       }
       // Clear the state after handling to prevent re-applying on back navigation
       navigate(location.pathname, { replace: true, state: {} });
@@ -97,11 +120,11 @@ export function ContainerDetailPage() {
     const scriptChanged = selectedScript !== originalScript;
     const ignoreChanged = ignoreFlag !== originalIgnore;
     const allowLatestChanged = allowLatestFlag !== originalAllowLatest;
-    const versionPinMajorChanged = versionPinMajor !== originalVersionPinMajor;
-    const versionPinMinorChanged = versionPinMinor !== originalVersionPinMinor;
-    const restartDependsOnChanged = restartDependsOn !== originalRestartDependsOn;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinMajorChanged || versionPinMinorChanged || restartDependsOnChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPinMajor, versionPinMinor, restartDependsOn, originalScript, originalIgnore, originalAllowLatest, originalVersionPinMajor, originalVersionPinMinor, originalRestartDependsOn]);
+    const versionPinChanged = versionPin !== originalVersionPin;
+    const restartAfterChanged = restartAfter !== originalRestartAfter;
+    const tagRegexChanged = tagRegex !== originalTagRegex;
+    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinChanged || restartAfterChanged || tagRegexChanged);
+  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPin, restartAfter, tagRegex, originalScript, originalIgnore, originalAllowLatest, originalVersionPin, originalRestartAfter, originalTagRegex]);
 
   const fetchData = async () => {
     if (!container) return;
@@ -120,32 +143,56 @@ export function ContainerDetailPage() {
         const scriptPath = labels['docksmith.pre-update-check'] || '';
         const ignore = labels['docksmith.ignore'] === 'true';
         const allowLatest = labels['docksmith.allow-latest'] === 'true';
-        const pinMajor = labels['docksmith.version-pin-major'] === 'true';
-        const pinMinor = labels['docksmith.version-pin-minor'] === 'true';
-        const restartDeps = labels['docksmith.restart-depends-on'] || '';
+        const restartDeps = labels['docksmith.restart-after'] || '';
+        const tagRegexValue = labels['docksmith.tag-regex'] || '';
 
-        setSelectedScript(scriptPath);
+        // Convert version pin labels to single value
+        let pin: 'none' | 'patch' | 'minor' | 'major' = 'none';
+        if (labels['docksmith.version-pin-major'] === 'true') {
+          pin = 'major';
+        } else if (labels['docksmith.version-pin-minor'] === 'true') {
+          pin = 'minor';
+        } else if (labels['docksmith.version-pin-patch'] === 'true') {
+          pin = 'patch';
+        }
+
+        // Don't overwrite values that came from location.state (sub-page navigation)
+        const hasPendingScript = pendingStateRef.current.selectedScript !== undefined;
+        const hasPendingRestartAfter = pendingStateRef.current.restartAfter !== undefined;
+        const hasPendingTagRegex = pendingStateRef.current.tagRegex !== undefined;
+
+        if (!hasPendingScript) {
+          setSelectedScript(scriptPath);
+        }
         setIgnoreFlag(ignore);
         setAllowLatestFlag(allowLatest);
-        setVersionPinMajor(pinMajor);
-        setVersionPinMinor(pinMinor);
-        setRestartDependsOn(restartDeps);
+        setVersionPin(pin);
+        if (!hasPendingRestartAfter) {
+          setRestartAfter(restartDeps);
+        }
+        if (!hasPendingTagRegex) {
+          setTagRegex(tagRegexValue);
+        }
 
+        // Always set original values from API (these are the "saved" values)
         setOriginalScript(scriptPath);
         setOriginalIgnore(ignore);
         setOriginalAllowLatest(allowLatest);
-        setOriginalVersionPinMajor(pinMajor);
-        setOriginalVersionPinMinor(pinMinor);
-        setOriginalRestartDependsOn(restartDeps);
+        setOriginalVersionPin(pin);
+        setOriginalRestartAfter(restartDeps);
+        setOriginalTagRegex(tagRegexValue);
+
+        // Clear pending state after applying originals (so change detection works)
+        pendingStateRef.current = {};
       }
 
       // Load all containers and find which ones depend on this container
       if (containersResponse.success && containersResponse.data) {
         const containers = containersResponse.data.containers || [];
 
-        // Find containers that have this container in their restart-depends-on label
+        // Find containers that have this container in their restart-after label
         const dependentContainersData = containers.filter(c => {
-          const deps = c.labels?.['docksmith.restart-depends-on'] || '';
+          const deps = c.labels?.['docksmith.restart-after'] || '';
           if (!deps) return false;
           const depList = deps.split(',').map(d => d.trim());
           return depList.includes(container.container_name);
@@ -170,11 +217,12 @@ export function ContainerDetailPage() {
     if (allowLatestFlag !== originalAllowLatest) {
       changes.push(`${allowLatestFlag ? 'Allow' : 'Disallow'} :latest tag`);
     }
-    if (versionPinMajor !== originalVersionPinMajor) {
-      changes.push(`${versionPinMajor ? 'Pin' : 'Unpin'} to major version`);
-    }
-    if (versionPinMinor !== originalVersionPinMinor) {
-      changes.push(`${versionPinMinor ? 'Pin' : 'Unpin'} to minor version`);
+    if (versionPin !== originalVersionPin) {
+      if (versionPin === 'none') {
+        changes.push('Remove version pin');
+      } else {
+        changes.push(`Pin to ${versionPin} version`);
+      }
     }
     if (selectedScript !== originalScript) {
       if (selectedScript && !originalScript) {
@@ -185,13 +233,22 @@ export function ContainerDetailPage() {
         changes.push('Change pre-update script');
       }
     }
-    if (restartDependsOn !== originalRestartDependsOn) {
-      if (restartDependsOn && !originalRestartDependsOn) {
+    if (restartAfter !== originalRestartAfter) {
+      if (restartAfter && !originalRestartAfter) {
         changes.push('Add restart dependencies');
-      } else if (!restartDependsOn && originalRestartDependsOn) {
+      } else if (!restartAfter && originalRestartAfter) {
         changes.push('Remove restart dependencies');
       } else {
         changes.push('Update restart dependencies');
+      }
+    }
+    if (tagRegex !== originalTagRegex) {
+      if (tagRegex && !originalTagRegex) {
+        changes.push('Add tag filter');
+      } else if (!tagRegex && originalTagRegex) {
+        changes.push('Remove tag filter');
+      } else {
+        changes.push('Update tag filter');
       }
     }
 
@@ -214,25 +271,28 @@ export function ContainerDetailPage() {
     if (allowLatestFlag !== originalAllowLatest) {
       labelChanges.allow_latest = allowLatestFlag;
     }
-    if (versionPinMajor !== originalVersionPinMajor) {
-      labelChanges.version_pin_major = versionPinMajor;
-    }
-    if (versionPinMinor !== originalVersionPinMinor) {
-      labelChanges.version_pin_minor = versionPinMinor;
+    if (versionPin !== originalVersionPin) {
+      // Clear all pin labels first, then set the new one
+      labelChanges.version_pin_major = versionPin === 'major';
+      labelChanges.version_pin_minor = versionPin === 'minor';
+      labelChanges.version_pin_patch = versionPin === 'patch';
     }
     if (selectedScript !== originalScript) {
       labelChanges.script = selectedScript || '';
     }
-    if (restartDependsOn !== originalRestartDependsOn) {
-      labelChanges.restart_depends_on = restartDependsOn || '';
+    if (restartAfter !== originalRestartAfter) {
+      labelChanges.restart_after = restartAfter || '';
+    }
+    if (tagRegex !== originalTagRegex) {
+      labelChanges.tag_regex = tagRegex || '';
     }
 
     if (Object.keys(labelChanges).length === 0) {
       return;
     }
 
-    // Navigate to restart progress page with save settings
-    navigate('/restart', {
+    // Navigate to operation progress page with save settings
+    navigate('/operation', {
       state: {
         restart: {
           containerName: container.container_name,
@@ -248,17 +308,17 @@ export function ContainerDetailPage() {
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
-    setVersionPinMajor(originalVersionPinMajor);
-    setVersionPinMinor(originalVersionPinMinor);
-    setRestartDependsOn(originalRestartDependsOn);
+    setVersionPin(originalVersionPin);
+    setRestartAfter(originalRestartAfter);
+    setTagRegex(originalTagRegex);
     setError(null);
   };
 
   const handleRestart = (force = false) => {
     if (!container) return;
 
-    // Navigate to restart progress page
-    navigate('/restart', {
+    // Navigate to operation progress page
+    navigate('/operation', {
       state: {
         restart: {
           containerName: container.container_name,
@@ -266,6 +326,32 @@ export function ContainerDetailPage() {
         }
       }
     });
+  };
+
+  const handleRefreshPrecheck = async () => {
+    if (!container || refreshingPrecheck) return;
+
+    setRefreshingPrecheck(true);
+    try {
+      const updatedContainer = await fetchContainerWithCheck(container.container_name);
+      if (updatedContainer) {
+        // Update container with fresh precheck status
+        const labelsResponse = await getContainerLabels(container.container_name);
+        if (labelsResponse.success && labelsResponse.data) {
+          setContainer({
+            ...updatedContainer,
+            labels: labelsResponse.data.labels || {},
+          });
+        } else {
+          setContainer(updatedContainer);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh precheck:', err);
+      setError('Failed to refresh precheck status');
+    } finally {
+      setRefreshingPrecheck(false);
+    }
   };
 
   const getStatusBadge = () => {
@@ -283,8 +369,10 @@ export function ContainerDetailPage() {
         return <span className="status-badge local">Local Image</span>;
       case 'IGNORED':
         return <span className="status-badge ignored">Ignored</span>;
+      case 'METADATA_UNAVAILABLE':
+        return <span className="status-badge metadata">Metadata Unavailable</span>;
       default:
-        return <span className="status-badge">{container.status}</span>;
+        return <span className="status-badge unknown">{container.status}</span>;
     }
   };
 
@@ -382,18 +470,89 @@ export function ContainerDetailPage() {
           </div>
         )}
 
-        {/* Status Badge */}
-        <div className="status-section">
-          {getStatusBadge()}
-          {getChangeTypeBadge()}
+        {/* Hero Status Card */}
+        <div className="hero-status-card">
+          <div className="hero-status-icon">
+            {container.status === 'UPDATE_AVAILABLE' && <i className="fa-solid fa-arrow-up-circle"></i>}
+            {container.status === 'UPDATE_AVAILABLE_BLOCKED' && <i className="fa-solid fa-ban"></i>}
+            {container.status === 'UP_TO_DATE' && <i className="fa-solid fa-circle-check"></i>}
+            {container.status === 'UP_TO_DATE_PINNABLE' && <i className="fa-solid fa-thumbtack"></i>}
+            {container.status === 'LOCAL_IMAGE' && <i className="fa-solid fa-hard-drive"></i>}
+            {container.status === 'IGNORED' && <i className="fa-solid fa-eye-slash"></i>}
+            {container.status === 'METADATA_UNAVAILABLE' && <i className="fa-solid fa-circle-question"></i>}
+          </div>
+          <div className="hero-status-content">
+            <div className="hero-status-badges">
+              {getStatusBadge()}
+              {getChangeTypeBadge()}
+            </div>
+            {(container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED') &&
+             container.current_version && container.latest_version && (
+              <div className="hero-version-info">
+                <span className="version-current">{container.current_version}</span>
+                <i className="fa-solid fa-arrow-right"></i>
+                <span className="version-latest">{container.latest_version}</span>
+              </div>
+            )}
+            {container.status === 'UP_TO_DATE' && container.current_version && (
+              <div className="hero-version-info">
+                <span className="version-current">{container.current_version}</span>
+              </div>
+            )}
+            {container.status === 'METADATA_UNAVAILABLE' && (
+              <div className="hero-version-info metadata-unavailable-info">
+                {container.current_tag && (
+                  <span className="version-current">Tag: {container.current_tag}</span>
+                )}
+                {container.error && (
+                  <span className="metadata-error">{container.error}</span>
+                )}
+                {!container.error && !container.current_tag && (
+                  <span className="metadata-error">Unable to fetch version information from registry</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Labels Out of Sync Warning */}
+        {container.labels_out_of_sync && (
+          <div className="labels-sync-warning">
+            <div className="sync-warning-content">
+              <i className="fa-solid fa-rotate"></i>
+              <div className="sync-warning-text">
+                <strong>Labels Out of Sync</strong>
+                <p>Compose file labels differ from running container. Restart to apply changes.</p>
+              </div>
+            </div>
+            <button
+              className="button button-small button-warning"
+              onClick={() => handleRestart(false)}
+            >
+              <i className="fa-solid fa-rotate-right"></i>
+              Sync
+            </button>
+          </div>
+        )}
+
+        {/* Unsaved Changes Warning */}
+        {hasChanges && (
+          <div className="changes-warning">
+            <div className="changes-warning-content">
+              <i className="fa-solid fa-exclamation-triangle"></i>
+              <div className="changes-warning-text">
+                <strong>Container will be restarted</strong>
+                <p>Changes: {getChangeSummary().join(', ')}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
           {/* Normal content */}
           <>
               {/* Container Settings */}
               <div className="detail-section settings-section">
-            <h3 className="section-title">
-              <i className="fa-solid fa-cog"></i> Container Settings
-            </h3>
+            <h3 className="section-title"><i className="fa-solid fa-sliders"></i>Settings</h3>
 
             {loading ? (
               <div className="loading-inline">
@@ -404,244 +563,155 @@ export function ContainerDetailPage() {
               <>
                 <div className="settings-grid">
                   {/* Ignore Flag */}
-                  <div className="setting-item">
-                    <label className="toggle-label">
-                      <input
-                        type="checkbox"
-                        checked={ignoreFlag}
-                        onChange={(e) => setIgnoreFlag(e.target.checked)}
-                        className="toggle-input"
-                      />
-                      <span className="toggle-switch"></span>
-                      <span className="toggle-text">
-                        <strong>Ignore Container</strong>
-                        <small>Exclude from update checks</small>
-                      </span>
-                    </label>
-                  </div>
+                  <label className="checkbox-row">
+                    <span className="row-label">Ignore Container</span>
+                    <input
+                      type="checkbox"
+                      checked={ignoreFlag}
+                      onChange={(e) => setIgnoreFlag(e.target.checked)}
+                    />
+                  </label>
 
                   {/* Allow Latest Flag */}
-                  <div className="setting-item">
-                    <label className="toggle-label">
-                      <input
-                        type="checkbox"
-                        checked={allowLatestFlag}
-                        onChange={(e) => setAllowLatestFlag(e.target.checked)}
-                        className="toggle-input"
-                      />
-                      <span className="toggle-switch"></span>
-                      <span className="toggle-text">
-                        <strong>Allow :latest Tag</strong>
-                        <small>Don't suggest semver migration</small>
-                      </span>
-                    </label>
-                  </div>
+                  <label className="checkbox-row">
+                    <span className="row-label">Allow :latest Tag</span>
+                    <input
+                      type="checkbox"
+                      checked={allowLatestFlag}
+                      onChange={(e) => setAllowLatestFlag(e.target.checked)}
+                    />
+                  </label>
 
-                  {/* Pin to Major Version */}
-                  <div className="setting-item">
-                    <label className="toggle-label">
-                      <input
-                        type="checkbox"
-                        checked={versionPinMajor}
-                        onChange={(e) => setVersionPinMajor(e.target.checked)}
-                        className="toggle-input"
-                      />
-                      <span className="toggle-switch"></span>
-                      <span className="toggle-text">
-                        <strong>Pin to Major Version</strong>
-                        <small>Only allow minor/patch updates</small>
-                      </span>
-                    </label>
-                  </div>
-
-                  {/* Pin to Minor Version */}
-                  <div className="setting-item">
-                    <label className="toggle-label">
-                      <input
-                        type="checkbox"
-                        checked={versionPinMinor}
-                        onChange={(e) => setVersionPinMinor(e.target.checked)}
-                        className="toggle-input"
-                      />
-                      <span className="toggle-switch"></span>
-                      <span className="toggle-text">
-                        <strong>Pin to Minor Version</strong>
-                        <small>Only allow patch updates</small>
-                      </span>
-                    </label>
+                  {/* Version Pin - Segmented Control */}
+                  <div className="setting-item segmented-row">
+                    <span className="nav-title">Pin to Version</span>
+                    <div className="segmented-control">
+                      {(['none', 'patch', 'minor', 'major'] as const).map((option) => (
+                        <button
+                          key={option}
+                          className={`segment ${versionPin === option ? 'active' : ''}`}
+                          onClick={() => setVersionPin(option)}
+                        >
+                          {option === 'none' ? 'None' : option.charAt(0).toUpperCase() + option.slice(1)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Tag Filter - Navigate to regex tester */}
-                  <div className="setting-item full-width">
-                    <label className="select-label">
-                      <strong>Tag Filter (Regex)</strong>
-                      <small>Filter which tags are considered</small>
-                    </label>
-                    <button
-                      className="setting-button"
-                      onClick={() => {
-                        navigate(`/container/${container.container_name}/tag-filter`);
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '12px 16px',
-                        background: 'var(--color-bg-tertiary)',
-                        border: '1px solid var(--color-separator)',
-                        borderRadius: '10px',
-                        color: 'var(--color-accent)',
-                        fontSize: '15px',
-                        fontWeight: '500',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span>
-                        {container.labels?.['docksmith.tag-regex']
-                          ? `Pattern: ${container.labels['docksmith.tag-regex']}`
-                          : 'Set tag filter pattern...'}
-                      </span>
-                      <span style={{ marginLeft: '8px' }}>→</span>
-                    </button>
+                  <div
+                    className="setting-item nav-row"
+                    onClick={() => navigate(`/container/${container.container_name}/tag-filter`, { state: {
+                      currentTagRegex: tagRegex,
+                      pendingScript: selectedScript !== originalScript ? selectedScript : undefined,
+                      pendingRestartAfter: restartAfter !== originalRestartAfter ? restartAfter : undefined,
+                    } })}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && navigate(`/container/${container.container_name}/tag-filter`, { state: {
+                      currentTagRegex: tagRegex,
+                      pendingScript: selectedScript !== originalScript ? selectedScript : undefined,
+                      pendingRestartAfter: restartAfter !== originalRestartAfter ? restartAfter : undefined,
+                    } })}
+                  >
+                    <span className="nav-title">Tag Filter</span>
+                    <span className="nav-value">
+                      {tagRegex || 'None'}
+                      <span className="nav-arrow">›</span>
+                    </span>
                   </div>
 
                   {/* Pre-Update Check */}
-                  <div className="setting-item full-width">
-                    <label className="select-label">
-                      <strong>Pre-Update Check</strong>
-                      <small>Run script before updates</small>
-                    </label>
-                    <button
-                      className="setting-button"
-                      onClick={() => {
-                        navigate(`/container/${container.container_name}/script-selection`, {
-                          state: { currentScript: selectedScript }
-                        });
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '12px 16px',
-                        background: 'var(--color-bg-tertiary)',
-                        border: '1px solid var(--color-separator)',
-                        borderRadius: '10px',
-                        color: 'var(--color-accent)',
-                        fontSize: '15px',
-                        fontWeight: '500',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
+                  <div className="setting-item precheck-row">
+                    <div
+                      className="precheck-nav-area"
+                      onClick={() => navigate(`/container/${container.container_name}/script-selection`, { state: {
+                        currentScript: selectedScript,
+                        pendingTagRegex: tagRegex !== originalTagRegex ? tagRegex : undefined,
+                        pendingRestartAfter: restartAfter !== originalRestartAfter ? restartAfter : undefined,
+                      } })}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => e.key === 'Enter' && navigate(`/container/${container.container_name}/script-selection`, { state: {
+                        currentScript: selectedScript,
+                        pendingTagRegex: tagRegex !== originalTagRegex ? tagRegex : undefined,
+                        pendingRestartAfter: restartAfter !== originalRestartAfter ? restartAfter : undefined,
+                      } })}
                     >
-                      <span>
-                        {selectedScript
-                          ? selectedScript.split('/').pop()
-                          : 'No script selected'}
+                      <span className="nav-title">
+                        Pre-Update Script
+                        {/* Show status indicator if a check has run (pass or fail results exist) */}
+                        {(container.pre_update_check_pass || container.pre_update_check_fail) && (
+                          <span className={`precheck-status ${container.pre_update_check_pass ? 'pass' : 'fail'}`} title={container.pre_update_check_pass ? 'Check passed' : (container.pre_update_check_fail || 'Check failed')}>
+                            {container.pre_update_check_pass ? (
+                              <i className="fa-solid fa-circle-check"></i>
+                            ) : (
+                              <i className="fa-solid fa-circle-xmark"></i>
+                            )}
+                          </span>
+                        )}
                       </span>
-                      <span style={{ marginLeft: '8px' }}>→</span>
-                    </button>
-                    {selectedScript && (
-                      <div className="current-script-indicator">
-                        <i className="fa-solid fa-shield-alt"></i>
-                        <strong>Current:</strong> {selectedScript.split('/').pop()}
-                      </div>
+                      <span className="nav-value">
+                        {selectedScript ? selectedScript.split('/').pop() : 'None'}
+                        <span className="nav-arrow">›</span>
+                      </span>
+                    </div>
+                    {/* Refresh button - show if a script is configured (from label or selectedScript) */}
+                    {(selectedScript || container.pre_update_check) && (
+                      <button
+                        className="precheck-refresh-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRefreshPrecheck();
+                        }}
+                        disabled={refreshingPrecheck}
+                        title="Re-run pre-update check"
+                        aria-label="Refresh pre-update check"
+                      >
+                        <i className={`fa-solid fa-rotate-right ${refreshingPrecheck ? 'spinning' : ''}`}></i>
+                      </button>
                     )}
                   </div>
 
                   {/* Restart Dependencies */}
-                  <div className="setting-item full-width">
-                    <label className="select-label">
-                      <strong>Restart When These Restart</strong>
-                      <small>Select containers this depends on</small>
-                    </label>
-                    <button
-                      className="setting-button"
-                      onClick={() => {
-                        navigate(`/container/${container.container_name}/restart-dependencies`, {
-                          state: { currentDependencies: restartDependsOn }
-                        });
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '12px 16px',
-                        background: 'var(--color-bg-tertiary)',
-                        border: '1px solid var(--color-separator)',
-                        borderRadius: '10px',
-                        color: 'var(--color-accent)',
-                        fontSize: '15px',
-                        fontWeight: '500',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span>
-                        {restartDependsOn
-                          ? `${restartDependsOn.split(',').length} container${restartDependsOn.split(',').length > 1 ? 's' : ''} selected`
-                          : 'No dependencies'}
-                      </span>
-                      <span style={{ marginLeft: '8px' }}>→</span>
-                    </button>
-                    {restartDependsOn && (
-                      <div className="current-script-indicator">
-                        <i className="fa-solid fa-link"></i>
-                        <strong>Current:</strong> {restartDependsOn}
-                      </div>
-                    )}
-
-                    {/* Info: This container will restart when */}
-                    {restartDependsOn && (
-                      <div className="info-box" style={{ marginTop: '8px' }}>
-                        <i className="fa-solid fa-link"></i>
-                        <div>
-                          <strong>This container will restart when:</strong>
-                          <p style={{ marginTop: '4px' }}>
-                            {restartDependsOn.split(',').map((dep, i, arr) => (
-                              <span key={dep}>
-                                <code>{dep.trim()}</code>
-                                {i < arr.length - 1 ? ', ' : ' restarts'}
-                              </span>
-                            ))}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Info: Containers that depend on this one */}
-                    {dependentContainers.length > 0 && (
-                      <div className="info-box warn-box" style={{ marginTop: '8px' }}>
-                        <i className="fa-solid fa-triangle-exclamation"></i>
-                        <div>
-                          <strong>Restarting this container will also restart:</strong>
-                          <p style={{ marginTop: '4px' }}>
-                            {dependentContainers.map((dep, i) => (
-                              <span key={dep}>
-                                <code>{dep}</code>
-                                {i < dependentContainers.length - 1 ? ', ' : ''}
-                              </span>
-                            ))}
-                          </p>
-                          <p style={{ marginTop: '8px', fontSize: '12px', opacity: 0.8 }}>
-                            Pre-update checks will run before restarting dependents. Use Force Restart to bypass.
-                          </p>
-                        </div>
-                      </div>
-                    )}
+                  <div
+                    className="setting-item nav-row"
+                    onClick={() => navigate(`/container/${container.container_name}/restart-dependencies`, { state: {
+                      currentDependencies: restartAfter,
+                      pendingTagRegex: tagRegex !== originalTagRegex ? tagRegex : undefined,
+                      pendingScript: selectedScript !== originalScript ? selectedScript : undefined,
+                    } })}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && navigate(`/container/${container.container_name}/restart-dependencies`, { state: {
+                      currentDependencies: restartAfter,
+                      pendingTagRegex: tagRegex !== originalTagRegex ? tagRegex : undefined,
+                      pendingScript: selectedScript !== originalScript ? selectedScript : undefined,
+                    } })}
+                  >
+                    <span className="nav-title">Restart Dependencies</span>
+                    <span className="nav-value">
+                      {restartAfter ? `${restartAfter.split(',').length}` : 'None'}
+                      <span className="nav-arrow">›</span>
+                    </span>
                   </div>
+
+                  {/* Docker Compose Dependencies (read-only) */}
+                  {container.dependencies && container.dependencies.length > 0 && (
+                    <div className="setting-item compose-deps">
+                      <span className="nav-title">Compose Dependencies</span>
+                      <span className="nav-value">
+                        {container.dependencies.join(', ')}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {!hasChanges && (
-                  <div className="info-box">
-                    <i className="fa-solid fa-info-circle"></i>
-                    <div>
-                      <strong>Settings are stored in Docker Compose labels</strong>
-                      <p>Changes are applied atomically: compose file → restart container → verify</p>
-                    </div>
+                {/* Compact warning for dependents */}
+                {dependentContainers.length > 0 && (
+                  <div className="dependents-note">
+                    <i className="fa-solid fa-exclamation-triangle"></i>
+                    <span>Restart affects: {dependentContainers.join(', ')}</span>
                   </div>
                 )}
               </>
@@ -650,9 +720,7 @@ export function ContainerDetailPage() {
 
           {/* Image Information */}
           <div className="detail-section">
-            <h3 className="section-title">
-              <i className="fa-solid fa-box"></i> Image
-            </h3>
+            <h3 className="section-title"><i className="fa-solid fa-cube"></i>Image Details</h3>
             <div className="detail-grid">
               <div className="detail-item">
                 <span className="detail-label">Repository</span>
@@ -696,16 +764,13 @@ export function ContainerDetailPage() {
                   <span className="detail-value mono">{container.recommended_tag}</span>
                 </div>
               )}
-              {getChangeTypeBadge()}
             </div>
           </div>
 
           {/* Stack & Service */}
           {(container.stack || container.service) && (
             <div className="detail-section">
-              <h3 className="section-title">
-                <i className="fa-solid fa-layer-group"></i> Stack & Service
-              </h3>
+              <h3 className="section-title"><i className="fa-solid fa-layer-group"></i>Stack</h3>
               <div className="detail-grid">
                 {container.stack && (
                   <div className="detail-item">
@@ -723,28 +788,12 @@ export function ContainerDetailPage() {
             </div>
           )}
 
-          {/* Dependencies */}
-          {container.dependencies && container.dependencies.length > 0 && (
-            <div className="detail-section">
-              <h3 className="section-title">
-                <i className="fa-solid fa-link"></i> Dependencies
-              </h3>
-              <div className="dependencies-list">
-                {container.dependencies.map(dep => (
-                  <span key={dep} className="dependency-tag">{dep}</span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* All Labels - READ ONLY */}
-          {container.labels && Object.keys(container.labels).length > 0 && (
-            <div className="detail-section">
-              <h3 className="section-title">
-                <i className="fa-solid fa-tags"></i> All Container Labels
-              </h3>
-              <div className="labels-list">
-                {Object.entries(container.labels)
+          {/* All Labels - Always show */}
+          <div className="detail-section labels-section">
+            <h3 className="section-title"><i className="fa-solid fa-tags"></i>Container Labels</h3>
+            <div className="labels-list">
+              {container.labels && Object.keys(container.labels).length > 0 ? (
+                Object.entries(container.labels)
                   .sort(([a], [b]) => {
                     // Sort docksmith labels first
                     const aIsDocksmith = a.startsWith('docksmith.');
@@ -755,16 +804,44 @@ export function ContainerDetailPage() {
                   })
                   .map(([key, value]) => {
                     const isDocksmith = key.startsWith('docksmith.');
+                    const getLabelIcon = (labelKey: string) => {
+                      switch (labelKey) {
+                        case 'docksmith.ignore':
+                          return <i className="fa-solid fa-eye-slash label-icon-inline"></i>;
+                        case 'docksmith.allow-latest':
+                          return <i className="fa-solid fa-tag label-icon-inline"></i>;
+                        case 'docksmith.version-pin-major':
+                        case 'docksmith.version-pin-minor':
+                        case 'docksmith.version-pin-patch':
+                          return <i className="fa-solid fa-thumbtack label-icon-inline"></i>;
+                        case 'docksmith.tag-regex':
+                          return <i className="fa-solid fa-filter label-icon-inline"></i>;
+                        case 'docksmith.pre-update-check':
+                          return <i className="fa-solid fa-terminal label-icon-inline"></i>;
+                        case 'docksmith.restart-after':
+                          return <i className="fa-solid fa-link label-icon-inline"></i>;
+                        default:
+                          if (labelKey.startsWith('docksmith.')) {
+                            return <i className="fa-solid fa-gear label-icon-inline"></i>;
+                          }
+                          return null;
+                      }
+                    };
                     return (
                       <div key={key} className={`label-item ${isDocksmith ? 'docksmith-label' : ''}`}>
-                        <span className="label-key">{key}</span>
-                        <span className="label-value">{value}</span>
+                        <span className="label-key">
+                          {getLabelIcon(key)}
+                          {key}
+                        </span>
+                        <span className="label-value">{value || '(empty)'}</span>
                       </div>
                     );
-                  })}
-              </div>
+                  })
+              ) : (
+                <div className="empty-labels">No labels defined</div>
+              )}
             </div>
-          )}
+          </div>
             </>
       </main>
 
@@ -821,13 +898,15 @@ export function ContainerDetailPage() {
             {container.status === 'UPDATE_AVAILABLE' && (
               <button
                 className={`button button-${getUpdateButtonClass(container.change_type)}`}
-                onClick={() => navigate('/update', {
+                onClick={() => navigate('/operation', {
                   state: {
-                    containers: [{
-                      name: container.container_name,
-                      target_version: container.latest_version || container.recommended_tag || '',
-                      stack: container.stack || ''
-                    }]
+                    update: {
+                      containers: [{
+                        name: container.container_name,
+                        target_version: container.latest_version || container.recommended_tag || '',
+                        stack: container.stack || ''
+                      }]
+                    }
                   }
                 })}
               >
@@ -840,14 +919,16 @@ export function ContainerDetailPage() {
             {container.status === 'UPDATE_AVAILABLE_BLOCKED' && (
               <button
                 className={`button button-${getUpdateButtonClass(container.change_type)}`}
-                onClick={() => navigate('/update', {
+                onClick={() => navigate('/operation', {
                   state: {
-                    containers: [{
-                      name: container.container_name,
-                      target_version: container.latest_version || '',
-                      stack: container.stack || '',
-                      force: true
-                    }]
+                    update: {
+                      containers: [{
+                        name: container.container_name,
+                        target_version: container.latest_version || '',
+                        stack: container.stack || '',
+                        force: true
+                      }]
+                    }
                   }
                 })}
                 title={`Force update despite: ${container.pre_update_check_fail || 'pre-update check failure'}`}
@@ -861,13 +942,15 @@ export function ContainerDetailPage() {
             {container.status === 'UP_TO_DATE_PINNABLE' && (
               <button
                 className="button button-pin"
-                onClick={() => navigate('/update', {
+                onClick={() => navigate('/operation', {
                   state: {
-                    containers: [{
-                      name: container.container_name,
-                      target_version: container.recommended_tag || '',
-                      stack: container.stack || ''
-                    }]
+                    update: {
+                      containers: [{
+                        name: container.container_name,
+                        target_version: container.recommended_tag || '',
+                        stack: container.stack || ''
+                      }]
+                    }
                   }
                 })}
               >
@@ -879,31 +962,6 @@ export function ContainerDetailPage() {
         )}
       </footer>
 
-      {/* Changes Warning - Shows when unsaved changes */}
-      {hasChanges && (
-        <div className="changes-warning-banner">
-          <div className="warning-content">
-            <div className="warning-header">
-              <i className="fa-solid fa-exclamation-triangle"></i>
-              <strong>Container will be restarted</strong>
-            </div>
-            <div className="changes-list">
-              <span>Changes to apply:</span>
-              <ul>
-                {getChangeSummary().map((change, i) => (
-                  <li key={i}>{change}</li>
-                ))}
-              </ul>
-            </div>
-            {originalScript && (
-              <div className="warning-note">
-                <i className="fa-solid fa-info-circle"></i>
-                Pre-update check will run before restart
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

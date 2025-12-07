@@ -13,14 +13,22 @@ interface RollbackConfirmation {
   containerName: string;
   oldVersion?: string;
   newVersion?: string;
+  force?: boolean;
 }
+
+// Operation types that support rollback (not restart, rollback, or label_change)
+const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack'];
+
+// All operation types for filtering
+type OperationType = 'all' | 'single' | 'batch' | 'stack' | 'rollback' | 'restart' | 'label_change';
 
 export function History({ onBack: _onBack }: HistoryProps) {
   const navigate = useNavigate();
   const [operations, setOperations] = useState<UpdateOperation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'complete' | 'failed'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'failed'>('all');
+  const [typeFilter, setTypeFilter] = useState<OperationType>('single');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
@@ -64,17 +72,18 @@ export function History({ onBack: _onBack }: HistoryProps) {
     setRollbackConfirm(null);
   };
 
-  const executeRollback = () => {
+  const executeRollback = (force = false) => {
     if (!rollbackConfirm) return;
 
-    // Navigate to rollback progress page with rollback info
-    navigate('/rollback', {
+    // Navigate to operation progress page with rollback info
+    navigate('/operation', {
       state: {
         rollback: {
           operationId: rollbackConfirm.operationId,
           containerName: rollbackConfirm.containerName,
           oldVersion: rollbackConfirm.oldVersion,
           newVersion: rollbackConfirm.newVersion,
+          force,
         }
       }
     });
@@ -115,8 +124,11 @@ export function History({ onBack: _onBack }: HistoryProps) {
 
   const filteredOperations = operations.filter(op => {
     // Status filter
-    if (filter === 'complete' && op.status !== 'complete') return false;
-    if (filter === 'failed' && !(op.status === 'failed' || op.rollback_occurred)) return false;
+    if (statusFilter === 'complete' && op.status !== 'complete') return false;
+    if (statusFilter === 'failed' && !(op.status === 'failed' || op.rollback_occurred)) return false;
+
+    // Type filter
+    if (typeFilter !== 'all' && op.operation_type !== typeFilter) return false;
 
     // Search filter
     if (searchQuery) {
@@ -126,14 +138,22 @@ export function History({ onBack: _onBack }: HistoryProps) {
       const matchesId = op.operation_id.toLowerCase().includes(query);
       const matchesOldVersion = op.old_version?.toLowerCase().includes(query);
       const matchesNewVersion = op.new_version?.toLowerCase().includes(query);
+      const matchesType = op.operation_type?.toLowerCase().includes(query);
 
-      if (!matchesContainer && !matchesStack && !matchesId && !matchesOldVersion && !matchesNewVersion) {
+      if (!matchesContainer && !matchesStack && !matchesId && !matchesOldVersion && !matchesNewVersion && !matchesType) {
         return false;
       }
     }
 
     return true;
   });
+
+  // Check if an operation type supports rollback
+  const canRollback = (op: UpdateOperation): boolean => {
+    return ROLLBACK_SUPPORTED_TYPES.includes(op.operation_type) &&
+           (op.status === 'complete' || op.status === 'failed') &&
+           !op.rollback_occurred;
+  };
 
   if (loading) {
     return (
@@ -188,24 +208,38 @@ export function History({ onBack: _onBack }: HistoryProps) {
         <div className="filter-toolbar">
           <div className="segmented-control">
             <button
-              className={filter === 'all' ? 'active' : ''}
-              onClick={() => setFilter('all')}
+              className={statusFilter === 'all' ? 'active' : ''}
+              onClick={() => setStatusFilter('all')}
             >
               All
             </button>
             <button
-              className={filter === 'complete' ? 'active' : ''}
-              onClick={() => setFilter('complete')}
+              className={statusFilter === 'complete' ? 'active' : ''}
+              onClick={() => setStatusFilter('complete')}
             >
               Success
             </button>
             <button
-              className={filter === 'failed' ? 'active' : ''}
-              onClick={() => setFilter('failed')}
+              className={statusFilter === 'failed' ? 'active' : ''}
+              onClick={() => setStatusFilter('failed')}
             >
               Failed
             </button>
           </div>
+          <select
+            className="type-filter-select"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as OperationType)}
+            aria-label="Filter by operation type"
+          >
+            <option value="all">All Types</option>
+            <option value="single">Updates</option>
+            <option value="batch">Batch</option>
+            <option value="stack">Stack</option>
+            <option value="rollback">Rollback</option>
+            <option value="restart">Restart</option>
+            <option value="label_change">Labels</option>
+          </select>
         </div>
       </header>
 
@@ -228,11 +262,27 @@ export function History({ onBack: _onBack }: HistoryProps) {
                     {op.operation_type === 'batch' ? (
                       <>{op.stack_name || 'Batch'} <span className="op-type-badge batch">BATCH</span></>
                     ) : (
-                      op.container_name || op.stack_name || 'Unknown'
+                      <span
+                        className="container-link"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (op.container_name) {
+                            navigate(`/container/${op.container_name}`);
+                          }
+                        }}
+                      >
+                        {op.container_name || op.stack_name || 'Unknown'}
+                      </span>
                     )}
                   </span>
                   {op.operation_type === 'rollback' && (
                     <span className="op-type-badge rollback">ROLLBACK</span>
+                  )}
+                  {op.operation_type === 'restart' && (
+                    <span className="op-type-badge restart">RESTART</span>
+                  )}
+                  {op.operation_type === 'label_change' && (
+                    <span className="op-type-badge labels">LABELS</span>
                   )}
                   {op.rollback_occurred && (
                     <span className="op-type-badge rolled-back">ROLLED BACK</span>
@@ -242,7 +292,10 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   {op.operation_type === 'batch' && op.error_message && (
                     <span className="op-batch-summary">{op.error_message.replace('Batch update completed: ', '')}</span>
                   )}
-                  {op.operation_type !== 'batch' && op.new_version && (
+                  {op.operation_type === 'label_change' && (
+                    <span className="op-label-info">Label configuration changed</span>
+                  )}
+                  {op.operation_type !== 'batch' && op.operation_type !== 'label_change' && op.operation_type !== 'restart' && op.new_version && (
                     <span className="op-version">
                       {op.old_version && op.old_version !== op.new_version ? (
                         <>{op.old_version} → {op.new_version}</>
@@ -302,7 +355,15 @@ export function History({ onBack: _onBack }: HistoryProps) {
                       <div className="batch-details-list">
                         {op.batch_details.map((detail, idx) => (
                           <div key={idx} className="batch-detail-item">
-                            <span className="batch-container-name">{detail.container_name}</span>
+                            <span
+                              className="batch-container-name container-link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/container/${detail.container_name}`);
+                              }}
+                            >
+                              {detail.container_name}
+                            </span>
                             <span className="batch-version-change">
                               {detail.old_version} → {detail.new_version}
                             </span>
@@ -320,7 +381,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   )}
 
                   <div className="op-actions">
-                    {(op.status === 'complete' || op.status === 'failed') && !op.rollback_occurred && (
+                    {canRollback(op) && (
                       <button
                         className="rollback-btn"
                         onClick={(e) => {
@@ -360,7 +421,10 @@ export function History({ onBack: _onBack }: HistoryProps) {
             </div>
             <div className="confirm-dialog-actions">
               <button className="confirm-cancel" onClick={cancelRollback}>Cancel</button>
-              <button className="confirm-proceed" onClick={executeRollback}>Rollback</button>
+              <button className="confirm-proceed" onClick={() => executeRollback(false)}>Rollback</button>
+              <button className="confirm-force" onClick={() => executeRollback(true)} title="Skip pre-update checks on dependent containers">
+                <i className="fa-solid fa-bolt"></i> Force
+              </button>
             </div>
           </div>
         </div>

@@ -18,7 +18,7 @@ import (
 	"github.com/chis/docksmith/internal/graph"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
-	"github.com/docker/docker/api/types/container"
+	dockerContainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
@@ -358,13 +358,9 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
 		log.Printf("UPDATE: Running pre-update check for container %s: %s", container.Name, scriptPath)
 
-		// Translate path if needed
-		translatedPath := scriptPath
-		if o.pathTranslator != nil {
-			translatedPath = o.pathTranslator.TranslateToHost(scriptPath)
-		}
-
-		if err := runPreUpdateCheck(ctx, container, translatedPath); err != nil {
+		// NOTE: Do NOT translate the script path - the orchestrator runs inside the container
+		// where the script path (e.g., /scripts/...) is already valid
+		if err := runPreUpdateCheck(ctx, container, scriptPath); err != nil {
 			o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Pre-update check failed: %v", err))
 			return
 		}
@@ -450,9 +446,18 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	}
 
 	// Restart dependent containers (those with docksmith.restart-after label)
-	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
-		log.Printf("UPDATE: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
+	// For regular updates, run pre-update checks on dependents
+	depResult, depErr := o.restartDependentContainers(ctx, container.Name, false)
+	if depErr != nil {
+		log.Printf("UPDATE: Warning - failed to restart dependent containers for %s: %v", container.Name, depErr)
 		// Don't fail the update if dependent restarts fail
+	} else if depResult != nil {
+		if len(depResult.Blocked) > 0 {
+			log.Printf("UPDATE: Blocked dependents for %s: %v", container.Name, depResult.Blocked)
+		}
+		if len(depResult.Restarted) > 0 {
+			log.Printf("UPDATE: Restarted dependents for %s: %v", container.Name, depResult.Restarted)
+		}
 	}
 
 	// Execute post-update actions if configured
@@ -600,7 +605,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		cont := orderedContainers[i]
 		log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
 		timeout := 10
-		if err := o.dockerSDK.ContainerStop(ctx, cont.Name, container.StopOptions{Timeout: &timeout}); err != nil {
+		if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
 			log.Printf("BATCH UPDATE: Warning - failed to stop %s: %v", cont.Name, err)
 		}
 	}
@@ -624,7 +629,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 
 		// Remove container
-		if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, container.RemoveOptions{}); err != nil {
+		if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
 			log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
 			failCount++
 			continue
@@ -644,7 +649,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 
 		// Start container
-		if err := o.dockerSDK.ContainerStart(ctx, cont.Name, container.StartOptions{}); err != nil {
+		if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
 			log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
 			failCount++
 			continue
@@ -926,20 +931,107 @@ func (o *UpdateOrchestrator) restartContainerWithSDK(ctx context.Context, operat
 	return nil, fmt.Errorf("SDK-based recreation not supported - container must be managed by docker compose")
 }
 
-// restartDependentContainers finds and restarts containers that have the given container
-// listed in their docksmith.restart-after label
-func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string) error {
+// DependentRestartResult contains the results of restarting dependent containers
+type DependentRestartResult struct {
+	Restarted []string // Containers successfully restarted
+	Blocked   []string // Containers blocked by pre-update check failure
+	Errors    []string // Error messages for blocked containers
+}
+
+// DependentPreCheckResult contains the result of validating dependent containers' pre-update checks.
+type DependentPreCheckResult struct {
+	Dependents []string          // All dependent container names
+	Failed     []string          // Dependents that failed pre-update checks
+	Errors     map[string]string // Error messages keyed by container name
+}
+
+// validateDependentPreChecks finds containers that depend on the given container and runs
+// their pre-update checks WITHOUT restarting anything. This allows failing early if a
+// dependent's pre-update check would fail, before the main container is restarted.
+func (o *UpdateOrchestrator) validateDependentPreChecks(ctx context.Context, containerName string) (*DependentPreCheckResult, error) {
+	result := &DependentPreCheckResult{
+		Dependents: make([]string, 0),
+		Failed:     make([]string, 0),
+		Errors:     make(map[string]string),
+	}
+
 	// Get docker service
 	dockerService, err := docker.NewService()
 	if err != nil {
-		return fmt.Errorf("failed to create docker service: %w", err)
+		return result, fmt.Errorf("failed to create docker service: %w", err)
+	}
+	defer dockerService.Close()
+
+	// Get all containers to find those that depend on the container being restarted
+	containers, err := dockerService.ListContainers(ctx)
+	if err != nil {
+		return result, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Find all containers that have containerName in their restart-after label
+	var dependentContainers []*docker.Container
+	for i := range containers {
+		c := &containers[i]
+		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+			dependencies := strings.Split(restartAfter, ",")
+			for _, dep := range dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == containerName {
+					result.Dependents = append(result.Dependents, c.Name)
+					dependentContainers = append(dependentContainers, c)
+					break
+				}
+			}
+		}
+	}
+
+	if len(dependentContainers) == 0 {
+		log.Printf("RESTART: No containers depend on %s", containerName)
+		return result, nil
+	}
+
+	log.Printf("RESTART: Found %d dependent container(s) for %s: %v", len(dependentContainers), containerName, result.Dependents)
+
+	// Run pre-update checks for each dependent (without restarting)
+	for _, depContainer := range dependentContainers {
+		if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+			log.Printf("RESTART: Pre-validating pre-update check for dependent %s", depContainer.Name)
+
+			if err := runPreUpdateCheck(ctx, depContainer, scriptPath); err != nil {
+				log.Printf("RESTART: Pre-update check FAILED for dependent %s: %v", depContainer.Name, err)
+				result.Failed = append(result.Failed, depContainer.Name)
+				result.Errors[depContainer.Name] = err.Error()
+			} else {
+				log.Printf("RESTART: Pre-update check passed for dependent %s", depContainer.Name)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// restartDependentContainers finds and restarts containers that have the given container
+// listed in their docksmith.restart-after label.
+// If skipPreChecks is true, pre-update checks are skipped (used for rollback operations).
+// Returns a DependentRestartResult with information about which dependents were restarted or blocked.
+func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string, skipPreChecks bool) (*DependentRestartResult, error) {
+	result := &DependentRestartResult{
+		Restarted: make([]string, 0),
+		Blocked:   make([]string, 0),
+		Errors:    make([]string, 0),
+	}
+
+	// Get docker service
+	dockerService, err := docker.NewService()
+	if err != nil {
+		return result, fmt.Errorf("failed to create docker service: %w", err)
 	}
 	defer dockerService.Close()
 
 	// Get all containers to find those that depend on the restarted container
 	containers, err := dockerService.ListContainers(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
+		return result, fmt.Errorf("failed to list containers: %w", err)
 	}
 
 	// Find all containers that have containerName in their restart-after label
@@ -960,7 +1052,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 
 	if len(dependents) == 0 {
 		log.Printf("UPDATE: No containers depend on %s", containerName)
-		return nil
+		return result, nil
 	}
 
 	log.Printf("UPDATE: Found %d dependent container(s) for %s: %v", len(dependents), containerName, dependents)
@@ -976,41 +1068,59 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 			continue
 		}
 
-		// Run pre-update check if configured
-		if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-			log.Printf("UPDATE: Running pre-update check for dependent %s", depName)
+		// Run pre-update check if configured (unless skipped for rollback)
+		if !skipPreChecks {
+			if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+				log.Printf("UPDATE: Running pre-update check for dependent %s", depName)
 
-			// Translate path if needed
-			translatedPath := scriptPath
-			if o.pathTranslator != nil {
-				translatedPath = o.pathTranslator.TranslateToHost(scriptPath)
+				// NOTE: Do NOT translate the script path - the orchestrator runs inside the container
+				// where the script path (e.g., /scripts/...) is already valid
+				if err := runPreUpdateCheck(ctx, depContainer, scriptPath); err != nil {
+					log.Printf("UPDATE: Pre-update check failed for dependent %s: %v (skipping restart)", depName, err)
+					result.Blocked = append(result.Blocked, depName)
+					result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", depName, err))
+					continue
+				}
+				log.Printf("UPDATE: Pre-update check passed for dependent %s", depName)
 			}
-
-			if err := runPreUpdateCheck(ctx, depContainer, translatedPath); err != nil {
-				log.Printf("UPDATE: Pre-update check failed for dependent %s: %v (skipping restart)", depName, err)
-				continue
-			}
-			log.Printf("UPDATE: Pre-update check passed for dependent %s", depName)
+		} else {
+			log.Printf("UPDATE: Skipping pre-update check for dependent %s (rollback operation)", depName)
 		}
 
 		// Restart the dependent container
 		log.Printf("UPDATE: Restarting dependent container: %s", depName)
-		err := dockerService.GetClient().ContainerRestart(ctx, depName, container.StopOptions{})
+		err := dockerService.GetClient().ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
 		if err != nil {
 			log.Printf("UPDATE: Failed to restart dependent %s: %v", depName, err)
+			result.Blocked = append(result.Blocked, depName)
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: restart failed: %v", depName, err))
 			continue
 		}
 
+		// Wait for dependent to be healthy/running
+		if healthErr := o.waitForHealthy(ctx, depName, o.healthCheckCfg.Timeout); healthErr != nil {
+			log.Printf("UPDATE: Health check warning for dependent %s: %v", depName, healthErr)
+			// Don't fail - container was restarted
+		}
+
 		log.Printf("UPDATE: Successfully restarted dependent container: %s", depName)
+		result.Restarted = append(result.Restarted, depName)
 
 		// Recursively restart this container's dependents (cascade the restart chain)
-		if err := o.restartDependentContainers(ctx, depName); err != nil {
-			log.Printf("UPDATE: Warning - failed to restart cascaded dependents for %s: %v", depName, err)
+		cascadeResult, cascadeErr := o.restartDependentContainers(ctx, depName, skipPreChecks)
+		if cascadeErr != nil {
+			log.Printf("UPDATE: Warning - failed to restart cascaded dependents for %s: %v", depName, cascadeErr)
 			// Don't fail the parent operation if cascaded restarts fail
+		}
+		// Merge cascade results
+		if cascadeResult != nil {
+			result.Restarted = append(result.Restarted, cascadeResult.Restarted...)
+			result.Blocked = append(result.Blocked, cascadeResult.Blocked...)
+			result.Errors = append(result.Errors, cascadeResult.Errors...)
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
 // waitForHealthy waits for a container to become healthy or confirms it's running.
@@ -1051,18 +1161,29 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 			}
 		}
 	} else {
-		time.Sleep(o.healthCheckCfg.FallbackWait)
+		// Poll every second until container is running or timeout
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
 
-		inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
-		if err != nil {
-			return fmt.Errorf("failed to inspect container: %w", err)
+		// Use FallbackWait as the timeout for containers without health checks
+		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, o.healthCheckCfg.FallbackWait)
+		defer fallbackCancel()
+
+		for {
+			select {
+			case <-fallbackCtx.Done():
+				return fmt.Errorf("container did not start within timeout")
+			case <-ticker.C:
+				inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
+				if err != nil {
+					return fmt.Errorf("failed to inspect container: %w", err)
+				}
+
+				if inspect.State.Running {
+					return nil
+				}
+			}
 		}
-
-		if !inspect.State.Running {
-			return fmt.Errorf("container is not running")
-		}
-
-		return nil
 	}
 }
 
@@ -1178,11 +1299,11 @@ func (o *UpdateOrchestrator) rollbackUpdate(ctx context.Context, operationID str
 	// Restart container using SDK
 	log.Printf("ROLLBACK: Restarting container %s", cont.Name)
 	timeout := 10
-	if err := o.dockerSDK.ContainerStop(ctx, cont.Name, container.StopOptions{Timeout: &timeout}); err != nil {
+	if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
 		log.Printf("ROLLBACK: Warning - failed to stop container: %v", err)
 	}
 
-	if err := o.dockerSDK.ContainerStart(ctx, cont.Name, container.StartOptions{}); err != nil {
+	if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container during rollback: %w", err)
 	}
 
@@ -1213,7 +1334,7 @@ func (o *UpdateOrchestrator) attemptRollback(ctx context.Context, operationID st
 
 // RollbackOperation performs a rollback of a previous update operation.
 // Creates a new rollback operation, updates the compose file, and recreates the container.
-func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOperationID string) (string, error) {
+func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOperationID string, force bool) (string, error) {
 	// Get original operation
 	origOp, found, err := o.storage.GetUpdateOperation(ctx, originalOperationID)
 	if err != nil {
@@ -1268,7 +1389,35 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 		return "", fmt.Errorf("no old version found in operation %s", originalOperationID)
 	}
 
-	log.Printf("ROLLBACK: Rolling back %s from %s to %s", origOp.ContainerName, origOp.NewVersion, targetVersion)
+	// Find dependent containers and check their pre-update scripts BEFORE starting rollback
+	if !force {
+		dependents := o.findDependentContainerNames(containers, origOp.ContainerName)
+		if len(dependents) > 0 {
+			containerMap := docker.CreateContainerMap(containers)
+			var failedChecks []string
+
+			for _, depName := range dependents {
+				depContainer := containerMap[depName]
+				if depContainer == nil {
+					continue
+				}
+
+				if scriptPath, ok := depContainer.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+					log.Printf("ROLLBACK: Running pre-update check for dependent %s", depName)
+					if err := runPreUpdateCheck(ctx, depContainer, scriptPath); err != nil {
+						log.Printf("ROLLBACK: Pre-update check failed for dependent %s: %v", depName, err)
+						failedChecks = append(failedChecks, depName)
+					}
+				}
+			}
+
+			if len(failedChecks) > 0 {
+				return "", fmt.Errorf("pre-update check failed for dependent container(s): %s (use force to skip)", strings.Join(failedChecks, ", "))
+			}
+		}
+	}
+
+	log.Printf("ROLLBACK: Rolling back %s from %s to %s (force=%v)", origOp.ContainerName, origOp.NewVersion, targetVersion, force)
 
 	// Create rollback operation
 	rollbackOpID := uuid.New().String()
@@ -1291,13 +1440,32 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 	}
 
 	// Execute rollback in background with a fresh context (not tied to HTTP request)
-	go o.executeRollback(context.Background(), rollbackOpID, originalOperationID, targetContainer, targetVersion)
+	// Pass force flag so dependent restarts know whether to skip pre-checks
+	go o.executeRollback(context.Background(), rollbackOpID, originalOperationID, targetContainer, targetVersion, force)
 
 	return rollbackOpID, nil
 }
 
+// findDependentContainerNames finds all container names that depend on the given container
+func (o *UpdateOrchestrator) findDependentContainerNames(containers []docker.Container, containerName string) []string {
+	var dependents []string
+	for _, c := range containers {
+		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+			dependencies := strings.Split(restartAfter, ",")
+			for _, dep := range dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == containerName {
+					dependents = append(dependents, c.Name)
+					break
+				}
+			}
+		}
+	}
+	return dependents
+}
+
 // executeRollback performs the actual rollback process using the old version from database
-func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, originalOpID string, container *docker.Container, oldVersion string) {
+func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, originalOpID string, container *docker.Container, oldVersion string, force bool) {
 	stackName := container.Labels["com.docker.compose.project"]
 
 	// Stage 1: Update compose file with old version (10-20%)
@@ -1373,9 +1541,13 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 	}
 
 	// Restart dependent containers (those with docksmith.restart-after label)
-	if err := o.restartDependentContainers(ctx, container.Name); err != nil {
-		log.Printf("ROLLBACK: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
+	// For rollback, skip pre-update checks - rollback is a recovery operation
+	depResult, depErr := o.restartDependentContainers(ctx, container.Name, true)
+	if depErr != nil {
+		log.Printf("ROLLBACK: Warning - failed to restart dependent containers for %s: %v", container.Name, depErr)
 		// Don't fail the rollback if dependent restarts fail
+	} else if depResult != nil && len(depResult.Restarted) > 0 {
+		log.Printf("ROLLBACK: Restarted dependents for %s: %v", container.Name, depResult.Restarted)
 	}
 
 	// Stage 6: Complete (100%)
@@ -1626,6 +1798,235 @@ func (o *UpdateOrchestrator) CancelQueuedOperation(ctx context.Context, operatio
 	}
 
 	return o.storage.UpdateOperationStatus(ctx, operationID, "cancelled", "Cancelled by user")
+}
+
+// RestartSingleContainer initiates a restart for a single container with SSE progress events.
+// This is the main entry point for restarting containers via the API.
+func (o *UpdateOrchestrator) RestartSingleContainer(ctx context.Context, containerName string, force bool) (string, error) {
+	operationID := uuid.New().String()
+
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for _, c := range containers {
+		if c.Name == containerName {
+			targetContainer = &c
+			break
+		}
+	}
+
+	if targetContainer == nil {
+		return "", fmt.Errorf("container not found: %s", containerName)
+	}
+
+	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
+
+	// Find all dependents first
+	dependents := o.findDependentContainerNames(containers, containerName)
+
+	// Create operation record
+	op := storage.UpdateOperation{
+		OperationID:        operationID,
+		ContainerID:        targetContainer.ID,
+		ContainerName:      containerName,
+		StackName:          stackName,
+		OperationType:      "restart",
+		Status:             "validating",
+		DependentsAffected: dependents,
+		CreatedAt:          time.Now(),
+	}
+
+	if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+		log.Printf("RESTART: Failed to save operation: %v", err)
+	}
+
+	// Check if stack is locked
+	if stackName != "" && !o.acquireStackLock(stackName) {
+		// Queue the operation
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "restart"); err != nil {
+			return "", fmt.Errorf("failed to queue operation: %w", err)
+		}
+		o.publishProgress(operationID, containerName, stackName, "queued", 0, "Operation queued - stack is busy")
+		return operationID, nil
+	}
+
+	// Start restart in background with a fresh context (not tied to HTTP request)
+	go o.executeRestart(context.Background(), operationID, targetContainer, stackName, force)
+
+	return operationID, nil
+}
+
+// executeRestart performs the actual restart process with SSE progress events.
+func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID string, container *docker.Container, stackName string, force bool) {
+	defer o.releaseStackLock(stackName)
+
+	log.Printf("RESTART: Starting executeRestart for operation=%s container=%s", operationID, container.Name)
+
+	// Stage 1: Validating (0-10%)
+	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Validating permissions")
+
+	if err := o.checkPermissions(ctx, container); err != nil {
+		o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Permission check failed: %v", err))
+		return
+	}
+
+	log.Printf("RESTART: Permissions OK for operation=%s", operationID)
+
+	// Stage 2: Pre-update check for main container (10-15%)
+	if !force {
+		if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+			o.publishProgress(operationID, container.Name, stackName, "validating", 10, "Running pre-update check")
+			log.Printf("RESTART: Running pre-update check for container %s: %s", container.Name, scriptPath)
+
+			if err := runPreUpdateCheck(ctx, container, scriptPath); err != nil {
+				o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Pre-update check failed: %v", err))
+				return
+			}
+			log.Printf("RESTART: Pre-update check passed for container %s", container.Name)
+		}
+	} else {
+		log.Printf("RESTART: Skipping pre-update check for %s (force=true)", container.Name)
+	}
+
+	// Stage 2b: Pre-validate dependent containers' pre-update checks (15-20%)
+	// This ensures we fail BEFORE restarting the main container if any dependent would fail
+	if !force {
+		o.publishProgress(operationID, container.Name, stackName, "validating", 15, "Validating dependent containers")
+		log.Printf("RESTART: Pre-validating dependent containers for %s", container.Name)
+
+		depPreCheck, err := o.validateDependentPreChecks(ctx, container.Name)
+		if err != nil {
+			log.Printf("RESTART: Warning - failed to validate dependent pre-checks: %v", err)
+			// Continue anyway - we'll handle failures during actual restart
+		} else if len(depPreCheck.Failed) > 0 {
+			// One or more dependents failed their pre-update checks - fail the entire operation
+			failedNames := strings.Join(depPreCheck.Failed, ", ")
+			errMsg := fmt.Sprintf("Dependent container(s) failed pre-update check: %s. Use force restart to skip checks.", failedNames)
+			log.Printf("RESTART: %s", errMsg)
+			o.failOperation(ctx, operationID, "validating", errMsg)
+			return
+		} else if len(depPreCheck.Dependents) > 0 {
+			log.Printf("RESTART: All %d dependent(s) passed pre-update checks", len(depPreCheck.Dependents))
+			o.publishProgress(operationID, container.Name, stackName, "validating", 18, fmt.Sprintf("All %d dependent(s) validated", len(depPreCheck.Dependents)))
+		}
+	} else {
+		log.Printf("RESTART: Skipping dependent pre-update checks for %s (force=true)", container.Name)
+	}
+
+	// Set started_at timestamp
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	// Stage 3: Stopping container (20-40%)
+	o.publishProgress(operationID, container.Name, stackName, "stopping", 20, "Stopping container")
+
+	// Stage 4: Starting container (40-60%)
+	o.publishProgress(operationID, container.Name, stackName, "starting", 40, "Restarting container")
+
+	// Restart the container using docker compose if available
+	composeFilePath := o.getComposeFilePath(container)
+	if composeFilePath != "" {
+		hostComposeFilePath := o.getComposeFilePathForHost(container)
+		recreator := compose.NewRecreator(o.dockerClient)
+
+		// Use RecreateWithCompose which does a force-recreate
+		if err := recreator.RecreateWithCompose(ctx, container, hostComposeFilePath, composeFilePath); err != nil {
+			// Fall back to simple restart
+			log.Printf("RESTART: Compose restart failed, falling back to Docker API: %v", err)
+			if restartErr := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerContainer.StopOptions{}); restartErr != nil {
+				o.failOperation(ctx, operationID, "starting", fmt.Sprintf("Failed to restart container: %v", restartErr))
+				return
+			}
+		}
+	} else {
+		// No compose file - use Docker API directly
+		if err := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerContainer.StopOptions{}); err != nil {
+			o.failOperation(ctx, operationID, "starting", fmt.Sprintf("Failed to restart container: %v", err))
+			return
+		}
+	}
+
+	o.publishProgress(operationID, container.Name, stackName, "starting", 60, "Container restarted")
+	log.Printf("RESTART: Container %s restarted", container.Name)
+
+	// Stage 5: Health check (60-80%)
+	o.publishProgress(operationID, container.Name, stackName, "health_check", 60, "Verifying container health")
+
+	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
+		log.Printf("RESTART: Health check warning for %s: %v", container.Name, err)
+		o.publishProgress(operationID, container.Name, stackName, "health_check", 70, fmt.Sprintf("Health check warning: %v", err))
+		// Don't fail the restart - container was restarted, just health check had issues
+	} else {
+		o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Health check passed")
+		log.Printf("RESTART: Health check passed for %s", container.Name)
+	}
+
+	// Stage 6: Restart dependent containers (80-95%)
+	o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 80, "Restarting dependent containers")
+
+	// For restart, skip pre-checks on dependents if force was used
+	depResult, err := o.restartDependentContainers(ctx, container.Name, force)
+	if err != nil {
+		log.Printf("RESTART: Warning - failed to restart dependent containers for %s: %v", container.Name, err)
+		o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 90, fmt.Sprintf("Warning: %v", err))
+		// Don't fail the restart if dependent restarts fail
+	} else if depResult != nil {
+		// Publish detailed dependent status
+		if len(depResult.Blocked) > 0 {
+			blockedMsg := fmt.Sprintf("Blocked dependents: %s", strings.Join(depResult.Blocked, ", "))
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 85, blockedMsg)
+			log.Printf("RESTART: %s", blockedMsg)
+		}
+		if len(depResult.Restarted) > 0 {
+			restartedMsg := fmt.Sprintf("Restarted dependents: %s", strings.Join(depResult.Restarted, ", "))
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 90, restartedMsg)
+			log.Printf("RESTART: %s", restartedMsg)
+		}
+		// Final summary
+		if len(depResult.Blocked) > 0 && len(depResult.Restarted) == 0 {
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 95, fmt.Sprintf("Warning: All %d dependent(s) blocked by pre-update checks", len(depResult.Blocked)))
+		} else if len(depResult.Blocked) > 0 {
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 95, fmt.Sprintf("Dependents: %d restarted, %d blocked", len(depResult.Restarted), len(depResult.Blocked)))
+		} else if len(depResult.Restarted) > 0 {
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 95, fmt.Sprintf("Dependents restarted: %s", strings.Join(depResult.Restarted, ", ")))
+		} else {
+			o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 95, "No dependents to restart")
+		}
+	} else {
+		o.publishProgress(operationID, container.Name, stackName, "restarting_dependents", 95, "No dependents to restart")
+	}
+
+	// Stage 7: Complete (100%)
+	completedNow := time.Now()
+	completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if completedFound {
+		completedOp.Status = "complete"
+		completedOp.CompletedAt = &completedNow
+		o.storage.SaveUpdateOperation(ctx, completedOp)
+	}
+
+	o.publishProgress(operationID, container.Name, stackName, "complete", 100, "Restart completed successfully")
+	log.Printf("RESTART: Successfully completed restart for container %s", container.Name)
+
+	// Publish container updated event for dashboard refresh
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"container_id":   container.ID,
+				"container_name": container.Name,
+				"operation_id":   operationID,
+				"status":         "restarted",
+			},
+		})
+	}
 }
 
 // runPreUpdateCheck runs a pre-update check script for a container

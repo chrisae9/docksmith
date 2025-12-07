@@ -1,105 +1,6 @@
-/* Script Selection Page - iOS Dark Mode Style */
+/* Script Selection Page - Page-specific styles only */
 /* Base styles are in ../styles/page-layout.css */
-
-.script-selection-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-}
-
-/* Header */
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-8);
-  background: var(--color-bg-secondary);
-  border-bottom: var(--border-separator);
-  min-height: 56px;
-}
-
-.page-header h1 {
-  font-size: var(--text-2xl);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  text-align: center;
-  flex: 1;
-}
-
-.back-button {
-  background: none;
-  border: none;
-  color: var(--color-accent);
-  font-size: var(--text-2xl);
-  padding: var(--space-4);
-  cursor: pointer;
-  min-width: 60px;
-  text-align: left;
-  transition: opacity var(--transition-fast);
-}
-
-.back-button:hover {
-  opacity: 0.8;
-}
-
-.header-spacer {
-  min-width: 60px;
-}
-
-/* Main Content */
-.page-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-8);
-  padding-bottom: 100px; /* Space for footer */
-}
-
-/* Info Section */
-.info-section {
-  margin-bottom: var(--space-10);
-}
-
-.info-card {
-  display: flex;
-  gap: var(--space-6);
-  padding: var(--space-7);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
-  border: 1px solid var(--color-accent);
-  box-shadow: var(--shadow-xs);
-}
-
-.info-card.warning {
-  background: rgba(255, 159, 10, 0.1);
-  border-color: var(--color-warning);
-}
-
-.info-card i {
-  color: var(--color-accent);
-  font-size: var(--text-4xl);
-  margin-top: var(--space-1);
-  flex-shrink: 0;
-}
-
-.info-card.warning i {
-  color: var(--color-warning);
-}
-
-.info-card strong {
-  display: block;
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  margin-bottom: var(--space-2);
-}
-
-.info-card p {
-  color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  margin: 0;
-}
+/* Shared styles (.config-section, .image-link, .spinner, etc.) are in page-layout.css */
 
 /* Selection Summary */
 .selection-summary {
@@ -163,81 +64,7 @@
   font-weight: var(--font-semibold);
 }
 
-/* Search Section */
-.search-section {
-  margin-bottom: var(--space-10);
-}
-
-.script-selection-page .search-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
-  padding: var(--space-6) var(--space-8);
-  gap: var(--space-6);
-  border: var(--border-subtle);
-  box-shadow: var(--shadow-xs);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-}
-
-.script-selection-page .search-bar:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-focus);
-}
-
-.script-selection-page .search-bar i.fa-search {
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xl);
-}
-
-.script-selection-page .search-input {
-  flex: 1;
-  background: none;
-  border: none;
-  outline: none;
-  color: var(--color-text-primary);
-  font-size: var(--text-xl);
-}
-
-.script-selection-page .search-input::placeholder {
-  color: var(--color-text-tertiary);
-}
-
-.script-selection-page .clear-search {
-  background: none;
-  border: none;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  padding: var(--space-2);
-  font-size: var(--text-xl);
-  transition: color var(--transition-fast);
-}
-
-.script-selection-page .clear-search:hover {
-  color: var(--color-text-primary);
-}
-
-/* Section Header */
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-6);
-}
-
-.section-header h2 {
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--color-text-secondary);
-}
-
-.section-hint {
-  font-size: var(--text-base);
-  color: var(--color-text-tertiary);
-}
+/* Search section styles are now in page-layout.css */
 
 /* Scripts List */
 .scripts-list {
@@ -252,7 +79,7 @@
   display: flex;
   align-items: center;
   padding: var(--space-7) var(--space-8);
-  border-bottom: var(--border-separator);
+  border-bottom: 1px solid var(--color-separator);
   cursor: pointer;
   transition: background-color var(--transition-medium);
   gap: var(--space-6);
@@ -336,55 +163,7 @@
   color: var(--color-danger);
 }
 
-
-/* Loading/Error/Empty States */
-.loading-state,
-.error-state,
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-20) var(--space-10);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
-  min-height: 200px;
-  text-align: center;
-  border: var(--border-subtle);
-}
-
-.spinner {
-  display: inline-block;
-  width: var(--size-button-sm);
-  height: var(--size-button-sm);
-  border: 3px solid var(--color-separator);
-  border-top-color: var(--color-accent);
-  border-radius: var(--radius-full);
-  animation: spin 0.8s linear infinite;
-}
-
-.loading-state p,
-.empty-state p {
-  margin-top: var(--space-8);
-  color: var(--color-text-secondary);
-}
-
-.error-state i {
-  font-size: var(--text-8xl);
-  color: var(--color-danger);
-  margin-bottom: var(--space-8);
-}
-
-.error-text {
-  color: var(--color-danger);
-  font-size: var(--text-md);
-}
-
-.empty-state i {
-  font-size: var(--text-8xl);
-  color: var(--color-text-tertiary);
-  margin-bottom: var(--space-8);
-}
+/* Loading/Error/Empty States - Use shared styles from page-layout.css */
 
 /* Info Box */
 .info-box {
@@ -415,90 +194,8 @@
   margin: 0;
 }
 
-/* Footer */
-.page-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  gap: var(--space-6);
-  padding: var(--space-8);
-  background: var(--color-bg-secondary);
-  border-top: var(--border-separator);
-  padding-bottom: calc(var(--space-8) + var(--safe-area-inset-bottom));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-
-.button {
-  flex: 1;
-  padding: var(--space-7) var(--space-10);
-  border: none;
-  border-radius: var(--radius-2xl);
-  font-size: var(--text-2xl);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
-  transition: all var(--transition-medium);
-}
-
-.button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.button:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.button-primary {
-  background: var(--color-accent);
-  color: var(--color-bg-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.button-primary:hover:not(:disabled) {
-  filter: brightness(1.05);
-  box-shadow: var(--shadow-md);
-}
-
-.button-secondary {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-
-.button-secondary:hover:not(:disabled) {
-  background: var(--color-bg-elevated);
-}
-
-/* Mobile Responsive */
+/* Mobile Responsive - Page-specific overrides */
 @media (max-width: 480px) {
-  .page-content {
-    padding: var(--space-6);
-    padding-bottom: 100px;
-  }
-
-  .info-section {
-    margin-bottom: var(--space-8);
-  }
-
-  .info-card {
-    padding: var(--space-5);
-    gap: var(--space-4);
-  }
-
-  .info-card i {
-    font-size: var(--text-2xl);
-  }
-
-  .info-card strong {
-    font-size: var(--text-base);
-  }
-
-  .info-card p {
-    font-size: var(--text-sm);
-  }
-
   .selection-summary {
     padding: var(--space-4);
     margin-bottom: var(--space-8);
@@ -511,19 +208,6 @@
 
   .script-name-display {
     font-size: var(--text-sm);
-  }
-
-  .search-section {
-    margin-bottom: var(--space-8);
-  }
-
-  .script-selection-page .search-bar {
-    padding: var(--space-4) var(--space-6);
-    gap: var(--space-4);
-  }
-
-  .script-selection-page .search-input {
-    font-size: var(--text-lg);
   }
 
   .script-item {
@@ -542,16 +226,5 @@
   .script-path {
     font-size: var(--text-sm);
     word-break: break-all;
-  }
-
-  .page-footer {
-    flex-direction: column;
-    padding: var(--space-6);
-    gap: var(--space-4);
-  }
-
-  .button {
-    padding: var(--space-5) var(--space-8);
-    font-size: var(--text-xl);
   }
 }

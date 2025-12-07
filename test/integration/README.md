@@ -97,7 +97,7 @@ cd /home/chis/www/docksmith/test/integration
 - `test-labels-latest` - docksmith.allow-latest=true
 - `test-labels-pre-pass` - docksmith.pre-update-check (passing script)
 - `test-labels-pre-fail` - docksmith.pre-update-check (failing script)
-- `test-labels-restart-deps` - docksmith.restart-depends-on
+- `test-labels-restart-deps` - docksmith.restart-after
 - `test-labels-dependent-1`, `test-labels-dependent-2` - dependents
 
 **Location:** `environments/labels/`
@@ -159,7 +159,7 @@ Tests all Docksmith labels:
 2. **docksmith.allow-latest** - :latest tag without warnings
 3. **docksmith.pre-update-check** - Pre-update script execution (pass)
 4. **docksmith.pre-update-check** - Update blocking (fail)
-5. **docksmith.restart-depends-on** - Dependent restart chain
+5. **docksmith.restart-after** - Dependent restart chain
 6. **Label atomicity** - Compose file updates + container restart
 
 ### test-constraints.sh
