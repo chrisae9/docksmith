@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -40,18 +41,25 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	}
 
 	hostComposeDir := filepath.Dir(hostComposeFilePath)
+	containerComposeDir := filepath.Dir(containerComposeFilePath)
 	log.Printf("COMPOSE: Recreating service %s using compose file (host: %s, container: %s)",
 		serviceName, hostComposeFilePath, containerComposeFilePath)
 
+	// Ensure host path is accessible inside the container via symlink
+	// This allows docker compose to find env_file and other project files at the host path
+	if err := ensureHostPathAccessible(hostComposeDir, containerComposeDir); err != nil {
+		log.Printf("COMPOSE: Warning: Could not create symlink for host path: %v", err)
+	}
+
 	// Build the docker compose up command
 	// Use -d for detached mode
-	// Use --project-directory with HOST path to resolve relative volume mounts correctly
-	// Use -f with CONTAINER path so docker compose can read the file
+	// Use --project-directory with HOST path so volume mounts resolve correctly for Docker daemon
+	// The symlink above ensures env_file and other project files are accessible at the host path
 	// Use --force-recreate to avoid Docker volume mount corruption issues
 	args := []string{
 		"compose",
-		"--project-directory", hostComposeDir,     // HOST path for resolving relative paths
-		"-f", containerComposeFilePath,            // CONTAINER path for reading the file
+		"--project-directory", hostComposeDir,  // HOST path for volume mount resolution
+		"-f", containerComposeFilePath,         // CONTAINER path for reading the file
 		"up",
 		"-d",
 		"--force-recreate", // Force clean recreation to avoid volume mount issues
@@ -91,16 +99,23 @@ func (r *Recreator) RecreateMultipleServices(ctx context.Context, hostComposeFil
 	}
 
 	hostComposeDir := filepath.Dir(hostComposeFilePath)
+	containerComposeDir := filepath.Dir(containerComposeFilePath)
 	log.Printf("COMPOSE: Recreating services %v using compose file (host: %s, container: %s)",
 		serviceNames, hostComposeFilePath, containerComposeFilePath)
 
+	// Ensure host path is accessible inside the container via symlink
+	// This allows docker compose to find env_file and other project files at the host path
+	if err := ensureHostPathAccessible(hostComposeDir, containerComposeDir); err != nil {
+		log.Printf("COMPOSE: Warning: Could not create symlink for host path: %v", err)
+	}
+
 	// Build the docker compose up command for multiple services
-	// Use --project-directory with HOST path to resolve relative volume mounts correctly
-	// Use -f with CONTAINER path so docker compose can read the file
+	// Use --project-directory with HOST path so volume mounts resolve correctly for Docker daemon
+	// The symlink above ensures env_file and other project files are accessible at the host path
 	// Use --force-recreate to avoid Docker volume mount corruption issues
 	args := []string{
 		"compose",
-		"--project-directory", hostComposeDir,  // HOST path for resolving relative paths
+		"--project-directory", hostComposeDir,  // HOST path for volume mount resolution
 		"-f", containerComposeFilePath,         // CONTAINER path for reading the file
 		"up",
 		"-d",
@@ -206,4 +221,43 @@ func (r *Recreator) WaitForHealthy(ctx context.Context, containerName string, ti
 			}
 		}
 	}
+}
+
+// ensureHostPathAccessible creates a symlink to make a host path accessible inside the container.
+// This solves the docker-in-docker problem where:
+// - Volume mounts need HOST paths (for Docker daemon to resolve on host)
+// - env_file needs to be readable inside the container
+// By creating a symlink from hostPath -> containerPath, both requirements are satisfied.
+func ensureHostPathAccessible(hostPath, containerPath string) error {
+	// If paths are the same, no symlink needed (not running in docker-in-docker or same mount)
+	if hostPath == containerPath {
+		return nil
+	}
+
+	// Check if host path already exists
+	if _, err := os.Lstat(hostPath); err == nil {
+		// Path exists - check if it's already correct
+		if target, err := os.Readlink(hostPath); err == nil && target == containerPath {
+			// Already a symlink to the right place
+			return nil
+		}
+		// Path exists but isn't a symlink to containerPath - might be the actual directory in some setups
+		// or a wrong symlink. For safety, don't modify existing paths.
+		log.Printf("COMPOSE: Host path %s exists, skipping symlink creation", hostPath)
+		return nil
+	}
+
+	// Create parent directories for the host path
+	hostParent := filepath.Dir(hostPath)
+	if err := os.MkdirAll(hostParent, 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory %s: %w", hostParent, err)
+	}
+
+	// Create symlink: hostPath -> containerPath
+	if err := os.Symlink(containerPath, hostPath); err != nil {
+		return fmt.Errorf("failed to create symlink %s -> %s: %w", hostPath, containerPath, err)
+	}
+
+	log.Printf("COMPOSE: Created symlink %s -> %s for docker-in-docker compatibility", hostPath, containerPath)
+	return nil
 }
