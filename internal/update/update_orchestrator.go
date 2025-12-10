@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -125,6 +126,19 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 		currentVersion = parts[len(parts)-1]
 	}
 
+	// Handle empty targetVersion - for :latest images, preserve the tag
+	// This prevents compose file corruption when digest-only updates are detected
+	if targetVersion == "" {
+		if currentVersion == "latest" {
+			// For :latest images, use "latest" to preserve the tag in compose file
+			targetVersion = "latest"
+			log.Printf("UPDATE: Empty target version for :latest image %s, using 'latest' as target", containerName)
+		} else {
+			o.releaseStackLock(stackName)
+			return "", fmt.Errorf("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
+		}
+	}
+
 	op := storage.UpdateOperation{
 		OperationID:   operationID,
 		ContainerID:   targetContainer.ID,
@@ -228,6 +242,17 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 			if targetVer, ok := targetVersions[container.Name]; ok {
 				targetVersion = targetVer
 			}
+		}
+
+		// Handle empty targetVersion - for :latest images, preserve the tag
+		if targetVersion == "" && currentVersion == "latest" {
+			targetVersion = "latest"
+			log.Printf("UPDATE: Empty target version for :latest image %s, using 'latest' as target", container.Name)
+			// Update the map so executeBatchUpdate also has the corrected version
+			if targetVersions == nil {
+				targetVersions = make(map[string]string)
+			}
+			targetVersions[container.Name] = targetVersion
 		}
 
 		// Get stack name from container labels
@@ -488,6 +513,12 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string) {
 	defer o.releaseStackLock(stackName)
 
+	// Check if Docker SDK is initialized (required for container operations)
+	if o.dockerSDK == nil {
+		o.failOperation(ctx, operationID, "validating", "Docker SDK not initialized")
+		return
+	}
+
 	// Filter containers that have target versions
 	updateContainers := make([]*docker.Container, 0)
 	for _, container := range containers {
@@ -542,8 +573,9 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		targetVersion := targetVersions[container.Name]
 		newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
 
-		progress := 30 + (i * 30 / len(updateContainers))
-		o.publishProgress(operationID, container.Name, stackName, "pulling_image", progress, fmt.Sprintf("Pulling %s", newImageRef))
+		baseProgress := 30 + (i * 30 / len(updateContainers))
+		progressPerContainer := 30 / len(updateContainers)
+		o.publishProgress(operationID, container.Name, stackName, "pulling_image", baseProgress, fmt.Sprintf("Pulling %s", newImageRef))
 
 		progressChan := make(chan PullProgress, 10)
 		pullDone := make(chan error, 1)
@@ -553,8 +585,11 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			close(progressChan)
 		}()
 
-		// Drain progress channel
-		for range progressChan {
+		// Process pull progress events and publish them
+		for progress := range progressChan {
+			// Scale the pull progress (0-100) within the container's progress slice
+			pullPercent := baseProgress + (progress.Percent * progressPerContainer / 100)
+			o.publishProgress(operationID, container.Name, stackName, "pulling_image", pullPercent, progress.Status)
 		}
 
 		if err := <-pullDone; err != nil {
@@ -689,8 +724,11 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 
 // checkPermissions validates Docker access and file permissions.
 func (o *UpdateOrchestrator) checkPermissions(ctx context.Context, container *docker.Container) error {
-	if _, err := o.dockerSDK.Ping(ctx); err != nil {
-		return fmt.Errorf("docker socket access denied: %w", err)
+	// Skip Docker ping if SDK not initialized (e.g., in tests with mocked clients)
+	if o.dockerSDK != nil {
+		if _, err := o.dockerSDK.Ping(ctx); err != nil {
+			return fmt.Errorf("docker socket access denied: %w", err)
+		}
 	}
 
 	composeFilePath := o.getComposeFilePath(container)
@@ -718,6 +756,8 @@ func (o *UpdateOrchestrator) resolveComposeFile(path string) (string, error) {
 	// Try the path as-is
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
+	} else if errors.Is(err, os.ErrPermission) {
+		return "", fmt.Errorf("permission denied accessing %s", path)
 	}
 
 	// Try alternate extension (.yaml <-> .yml)
@@ -731,39 +771,22 @@ func (o *UpdateOrchestrator) resolveComposeFile(path string) (string, error) {
 	if alternatePath != "" {
 		if _, err := os.Stat(alternatePath); err == nil {
 			return alternatePath, nil
+		} else if errors.Is(err, os.ErrPermission) {
+			return "", fmt.Errorf("permission denied accessing %s", alternatePath)
 		}
 	}
 
 	return "", fmt.Errorf("file not found (tried %s)", path)
 }
 
-// backupComposeFile validates the compose file exists.
-// No longer creates physical backup files - rollback uses database state instead.
-func (o *UpdateOrchestrator) backupComposeFile(ctx context.Context, operationID string, container *docker.Container) (string, error) {
-	composeFilePath := o.getComposeFilePath(container)
-	if composeFilePath == "" {
-		return "", nil
-	}
-
-	// Resolve the actual file path (handles extension variations)
-	resolvedPath, err := o.resolveComposeFile(composeFilePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve compose file: %w", err)
-	}
-
-	// Just validate the compose file is readable
-	if _, err := os.ReadFile(resolvedPath); err != nil {
-		return "", fmt.Errorf("failed to read compose file: %w", err)
-	}
-
-	log.Printf("UPDATE: Validated compose file for backup: %s", resolvedPath)
-	// Return empty string - no physical backup file created
-	return "", nil
-}
-
 // updateComposeFile updates the image tag in the compose file.
 // Handles include-based compose setups automatically.
 func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFilePath string, container *docker.Container, newTag string) error {
+	// Prevent compose file corruption from empty tags
+	if newTag == "" {
+		return fmt.Errorf("cannot update compose file: target version is empty")
+	}
+
 	serviceName := container.Labels["com.docker.compose.service"]
 	if serviceName == "" {
 		return fmt.Errorf("container has no service label")
@@ -824,6 +847,10 @@ func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFileP
 
 // pullImage pulls a Docker image with retry logic.
 func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, progressChan chan<- PullProgress) error {
+	if o.dockerSDK == nil {
+		return fmt.Errorf("docker SDK not initialized")
+	}
+
 	maxRetries := 3
 	backoff := time.Second
 
@@ -1088,12 +1115,29 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 		}
 
 		// Restart the dependent container
+		// Use compose-based recreation if available - this is required for containers with
+		// network_mode: service:X because docker restart fails when the parent container
+		// was recreated (the old network namespace no longer exists)
 		log.Printf("UPDATE: Restarting dependent container: %s", depName)
-		err := dockerService.GetClient().ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
-		if err != nil {
-			log.Printf("UPDATE: Failed to restart dependent %s: %v", depName, err)
+
+		var restartErr error
+		composeFilePath := o.getComposeFilePath(depContainer)
+		if composeFilePath != "" {
+			hostComposeFilePath := o.getComposeFilePathForHost(depContainer)
+			recreator := compose.NewRecreator(o.dockerClient)
+
+			log.Printf("UPDATE: Using compose-based recreation for dependent %s", depName)
+			restartErr = recreator.RecreateWithCompose(ctx, depContainer, hostComposeFilePath, composeFilePath)
+		} else {
+			// Fallback to docker restart for non-compose containers
+			log.Printf("UPDATE: Using docker restart for dependent %s (no compose file)", depName)
+			restartErr = dockerService.GetClient().ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
+		}
+
+		if restartErr != nil {
+			log.Printf("UPDATE: Failed to restart dependent %s: %v", depName, restartErr)
 			result.Blocked = append(result.Blocked, depName)
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: restart failed: %v", depName, err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: restart failed: %v", depName, restartErr))
 			continue
 		}
 
@@ -1235,101 +1279,6 @@ func (o *UpdateOrchestrator) shouldAutoRollback(ctx context.Context, containerNa
 	}
 
 	return false, nil
-}
-
-// rollbackUpdate performs rollback to the previous version using Docker SDK.
-func (o *UpdateOrchestrator) rollbackUpdate(ctx context.Context, operationID string, cont *docker.Container, backupPath string) error {
-	if backupPath == "" {
-		backup, found, _ := o.storage.GetComposeBackup(ctx, operationID)
-		if !found {
-			return fmt.Errorf("no backup found for operation")
-		}
-		backupPath = backup.BackupFilePath
-	}
-
-	// Restore backup compose file
-	composeFilePath := o.getComposeFilePath(cont)
-	if composeFilePath != "" {
-		data, err := os.ReadFile(backupPath)
-		if err != nil {
-			return fmt.Errorf("failed to read backup: %w", err)
-		}
-
-		resolvedPath, err := o.resolveComposeFile(composeFilePath)
-		if err != nil {
-			return fmt.Errorf("failed to resolve compose file: %w", err)
-		}
-
-		if err := os.WriteFile(resolvedPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to restore compose file: %w", err)
-		}
-
-		log.Printf("ROLLBACK: Restored compose file from backup for container %s", cont.Name)
-	}
-
-	// Extract old image tag from backup
-	var compose map[string]interface{}
-	data, _ := os.ReadFile(backupPath)
-	yaml.Unmarshal(data, &compose)
-
-	oldImageTag := ""
-	serviceName := cont.Labels["com.docker.compose.service"]
-	if services, ok := compose["services"].(map[string]interface{}); ok {
-		if service, ok := services[serviceName].(map[string]interface{}); ok {
-			if image, ok := service["image"].(string); ok {
-				oldImageTag = image
-			}
-		}
-	}
-
-	// Pull old image
-	if oldImageTag != "" {
-		log.Printf("ROLLBACK: Pulling old image %s for container %s", oldImageTag, cont.Name)
-		progressChan := make(chan PullProgress, 10)
-		go func() {
-			for range progressChan {
-			}
-		}()
-		if err := o.pullImage(ctx, oldImageTag, progressChan); err != nil {
-			log.Printf("ROLLBACK: Warning - failed to pull old image: %v", err)
-		}
-		close(progressChan)
-	}
-
-	// Restart container using SDK
-	log.Printf("ROLLBACK: Restarting container %s", cont.Name)
-	timeout := 10
-	if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
-		log.Printf("ROLLBACK: Warning - failed to stop container: %v", err)
-	}
-
-	if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start container during rollback: %w", err)
-	}
-
-	log.Printf("ROLLBACK: Successfully restarted container %s with old version", cont.Name)
-
-	// Verify health after rollback
-	if err := o.waitForHealthy(ctx, cont.Name, o.healthCheckCfg.Timeout); err != nil {
-		log.Printf("ROLLBACK: Warning - health check failed after rollback: %v", err)
-	}
-
-	// Update operation metadata
-	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
-	if found {
-		op.RollbackOccurred = true
-		o.storage.SaveUpdateOperation(ctx, op)
-	}
-
-	return nil
-}
-
-// attemptRollback attempts rollback if enabled.
-func (o *UpdateOrchestrator) attemptRollback(ctx context.Context, operationID string, container *docker.Container, backupPath string) {
-	shouldRollback, _ := o.shouldAutoRollback(ctx, container.Name)
-	if shouldRollback {
-		o.rollbackUpdate(ctx, operationID, container, backupPath)
-	}
 }
 
 // RollbackOperation performs a rollback of a previous update operation.

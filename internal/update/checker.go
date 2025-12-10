@@ -309,19 +309,6 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		return update
 	}
 
-	// Get current version from image labels
-	currentVersion := c.getCurrentVersion(ctx, container.Image)
-	// Validate that the version is actually a semantic version, not just "latest" or similar
-	if currentVersion != "" {
-		parsed := c.versionParser.ParseTag(currentVersion)
-		if parsed == nil {
-			// Label contains non-version text like "latest", ignore it
-			log.Printf("checkContainer %s: Ignoring non-semantic version label: '%s'", container.Name, currentVersion)
-			currentVersion = ""
-		}
-	}
-	update.CurrentVersion = currentVersion
-
 	// Extract registry info and parse tag for suffix
 	imgInfo := c.extractor.ExtractFromImage(container.Image)
 
@@ -334,12 +321,57 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		}
 	}
 
-	// If no version found in labels, try to extract from image tag
-	if currentVersion == "" && imgInfo.Tag != nil && imgInfo.Tag.IsVersioned && imgInfo.Tag.Version != nil {
-		// Use the version from the tag (e.g., nginx:1.29.3 -> 1.29.3)
-		currentVersion = imgInfo.Tag.Version.String()
-		update.CurrentVersion = currentVersion
+	// Get current version - prefer tag version over label version when they disagree
+	// This handles cases like caddy:2.11 where the tag is "2.11" but the label says "v2.11.0-beta.1"
+	currentVersion := ""
+
+	// First, get version from image labels
+	labelVersion := c.getCurrentVersion(ctx, container.Image)
+	var labelParsed *version.Version
+	if labelVersion != "" {
+		labelParsed = c.versionParser.ParseTag(labelVersion)
+		if labelParsed == nil {
+			// Label contains non-version text like "latest", ignore it
+			log.Printf("checkContainer %s: Ignoring non-semantic version label: '%s'", container.Name, labelVersion)
+			labelVersion = ""
+		}
 	}
+
+	// Get version from tag
+	var tagVersion string
+	var tagParsed *version.Version
+	if imgInfo.Tag != nil && imgInfo.Tag.IsVersioned && imgInfo.Tag.Version != nil {
+		tagParsed = imgInfo.Tag.Version
+		tagVersion = imgInfo.Tag.Version.String()
+	}
+
+	// Decide which version to use
+	// Prefer tag version when:
+	// 1. Label has a prerelease but tag doesn't (e.g., label=v2.11.0-beta.1, tag=2.11)
+	// 2. No label version available
+	if labelVersion != "" && tagVersion != "" {
+		// Both available - check if label is prerelease but tag is not
+		if labelParsed != nil && tagParsed != nil {
+			if labelParsed.Prerelease != "" && tagParsed.Prerelease == "" {
+				// Label has prerelease but tag doesn't - prefer tag
+				// This handles cases where the image label is outdated/incorrect (e.g., caddy:2.11)
+				log.Printf("checkContainer %s: Label has prerelease (%s) but tag doesn't (%s) - using tag version",
+					container.Name, labelVersion, tagVersion)
+				currentVersion = tagVersion
+			} else {
+				// Use label version (typically more accurate for full semver)
+				currentVersion = labelVersion
+			}
+		} else {
+			currentVersion = labelVersion
+		}
+	} else if labelVersion != "" {
+		currentVersion = labelVersion
+	} else if tagVersion != "" {
+		currentVersion = tagVersion
+	}
+
+	update.CurrentVersion = currentVersion
 
 	// Get current image digest for SHA-based fallback
 	currentDigest, digestErr := c.dockerClient.GetImageDigest(ctx, container.Image)
@@ -406,9 +438,9 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	// Track if we've determined status via digest comparison (to skip version comparison)
 	digestCheckComplete := false
 
-	// Special case: If tracking a non-semantic tag (like :latest) and we have a digest,
+	// Special case: If tracking a non-semantic tag (like :latest, :stable, :stable-tensorrt) and we have a digest,
 	// use digest comparison as the primary check, not fallback
-	if checkTag == "latest" || checkTag == "stable" || checkTag == "main" {
+	if isMetaTag(checkTag) {
 		if currentDigest != "" {
 			log.Printf("Container %s: Using :latest tag, checking digest first", container.Name)
 			// Query registry for the digest of the tag we're tracking
@@ -425,8 +457,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 					update.ChangeType = version.UnknownChange
 
 					// Try to resolve the semantic version tag for the latest digest
-					log.Printf("Resolving semver for %s latest digest: %s", container.Name, latestDigest)
-					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest)
+					log.Printf("Resolving semver for %s latest digest: %s (suffix: '%s')", container.Name, latestDigest, currentSuffix)
+					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest, currentSuffix)
 					if semverTag != "" {
 						log.Printf("Found semver tag for %s: %s", container.Name, semverTag)
 						// Found a semantic version tag for the latest digest
@@ -458,8 +490,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 					log.Printf("Container %s: Digests match, marking as UpToDate", container.Name)
 					// Find semantic version tag that points to the SAME digest
 					// This ensures we only recommend tag migration, not an actual update
-					log.Printf("Container %s: Finding semver tag for same digest", container.Name)
-					semverTag := c.resolveVersionFromDigest(ctx, imageRef, currentDigest)
+					log.Printf("Container %s: Finding semver tag for same digest (suffix: '%s')", container.Name, currentSuffix)
+					semverTag := c.resolveVersionFromDigest(ctx, imageRef, currentDigest, currentSuffix)
 					if semverTag != "" {
 						update.LatestVersion = semverTag
 						log.Printf("Container %s: Found semver tag %s for current digest", container.Name, semverTag)
@@ -575,8 +607,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 					update.ChangeType = version.UnknownChange
 
 					// Try to resolve the semantic version tag for the latest digest
-					log.Printf("Resolving semver for %s latest digest: %s", container.Name, latestDigest)
-					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest)
+					log.Printf("Resolving semver for %s latest digest: %s (suffix: '%s')", container.Name, latestDigest, currentSuffix)
+					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest, currentSuffix)
 					if semverTag != "" {
 						log.Printf("Found semver tag for %s: %s", container.Name, semverTag)
 						// Found a semantic version tag for the latest digest
@@ -862,9 +894,10 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 			continue
 		}
 
-		log.Printf("  Accepted tag %s: version=%s, suffix='%s'", tag, tagInfo.Version.String(), tagInfo.Suffix)
+		log.Printf("  Accepted tag %s: version=%s, suffix='%s', buildNum=%d", tag, tagInfo.Version.String(), tagInfo.Suffix, tagInfo.Version.BuildNumber)
 		versions = append(versions, tagInfo.Version)
-		versionToTag[tagInfo.Version.String()] = tag
+		// Use Original (the full tag) as key since String() doesn't include build number
+		versionToTag[tagInfo.Version.Original] = tag
 	}
 
 	if len(versions) == 0 {
@@ -878,13 +911,19 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 	})
 
 	latest := versions[0]
-	return versionToTag[latest.String()]
+	return versionToTag[latest.Original]
 }
 
 // resolveVersionFromDigest attempts to find which semantic version tag corresponds
 // to the given digest by querying the registry for tag-to-digest mappings.
 // Uses cache if storage is available to reduce registry API calls.
-func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, currentDigest string) string {
+// If requiredSuffix is provided, only tags with that suffix will be considered.
+func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, currentDigest string, requiredSuffix ...string) string {
+	// Extract optional suffix parameter
+	suffix := ""
+	if len(requiredSuffix) > 0 {
+		suffix = requiredSuffix[0]
+	}
 	// Normalize digest format
 	currentDigest = strings.TrimPrefix(currentDigest, "sha256:")
 
@@ -956,6 +995,11 @@ func (c *Checker) resolveVersionFromDigest(ctx context.Context, imageRef, curren
 				// Parse it to see if it's a semantic version
 				tagInfo := c.versionParser.ParseImageTag("dummy:" + tag)
 				if tagInfo != nil && tagInfo.IsVersioned && tagInfo.Version != nil {
+					// Filter by suffix if one is required
+					if suffix != "" && tagInfo.Suffix != suffix {
+						log.Printf("  Skipping tag %s: suffix '%s' != required '%s'", tag, tagInfo.Suffix, suffix)
+						break
+					}
 					matchingVersions = append(matchingVersions, tag)
 				}
 				break
@@ -1045,4 +1089,28 @@ func filterTagsByRegex(tags []string, pattern string) []string {
 	}
 
 	return filtered
+}
+
+// isMetaTag checks if a tag is a meta tag (like "latest", "stable", "main")
+// or a meta tag with a suffix (like "stable-tensorrt", "latest-alpine").
+// These tags don't contain semantic versions and should use digest comparison.
+func isMetaTag(tag string) bool {
+	metaTags := map[string]bool{
+		"latest": true, "stable": true, "main": true, "master": true,
+		"develop": true, "dev": true, "edge": true,
+		"nightly": true, "beta": true, "alpha": true, "rc": true,
+	}
+
+	// Check exact match
+	if metaTags[strings.ToLower(tag)] {
+		return true
+	}
+
+	// Check if tag starts with a meta tag followed by hyphen (e.g., "stable-tensorrt")
+	if idx := strings.Index(tag, "-"); idx > 0 {
+		prefix := strings.ToLower(tag[:idx])
+		return metaTags[prefix]
+	}
+
+	return false
 }
