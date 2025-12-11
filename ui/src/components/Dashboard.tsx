@@ -47,7 +47,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const mainRef = useRef<HTMLElement>(null);
 
   // Connect to SSE for real-time progress (always connected for check progress)
-  const { checkProgress, containerUpdated } = useEventStream(true);
+  const { checkProgress, containerUpdated, reconnecting, wasDisconnected, clearWasDisconnected } = useEventStream(true);
 
   // Fetch cached status (for initial load)
   // Does NOT show loading state to avoid screen flashing when switching tabs
@@ -236,6 +236,15 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       fetchCachedStatus();
     }
   }, [containerUpdated]);
+
+  // Auto-refresh when recovering from a disconnection (e.g., after traefik-ts restart)
+  useEffect(() => {
+    if (wasDisconnected) {
+      toast.success('Connection restored - refreshing...');
+      backgroundRefresh();
+      clearWasDisconnected();
+    }
+  }, [wasDisconnected, clearWasDisconnected, toast]);
 
   // Persist filter changes to localStorage
   useEffect(() => {
@@ -489,6 +498,12 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       <header>
         <div className="header-top">
           <h1>Docksmith</h1>
+          {reconnecting && (
+            <div className="connection-status reconnecting" title="Attempting to reconnect...">
+              <i className="fa-solid fa-wifi fa-fade"></i>
+              <span>Reconnecting...</span>
+            </div>
+          )}
           {result && result.containers.some(c => isUpdatable(c.status)) && (
             <button
               onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
@@ -570,7 +585,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         </div>
       </header>
 
-      <main ref={mainRef}>
+      <main ref={mainRef} className="main-content">
         {(() => {
           // Check if there are any containers after filtering
           const filteredContainerCount = result.containers.filter(filterContainer).length;
@@ -632,7 +647,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                         <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`} aria-hidden="true"></i>
                       </button>
                     </h2>
-                    {!collapsedStacks.has(stack.name) && (
+                    <div className={`stack-content ${collapsedStacks.has(stack.name) ? 'collapsed' : ''}`}>
                       <ul>
                         {filteredContainers.map((container) => (
                           <ContainerRow
@@ -645,7 +660,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                           />
                         ))}
                       </ul>
-                    )}
+                    </div>
                   </section>
                 );
               })}
@@ -662,7 +677,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     <span className="toggle" aria-hidden="true">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
                     Standalone
                   </h2>
-                  {!collapsedStacks.has('__standalone__') && (
+                  <div className={`stack-content ${collapsedStacks.has('__standalone__') ? 'collapsed' : ''}`}>
                     <ul>
                       {result.standalone_containers.filter(filterContainer).map((container) => (
                         <ContainerRow
@@ -675,7 +690,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                         />
                       ))}
                     </ul>
-                  )}
+                  </div>
                 </section>
               )}
             </>
@@ -798,13 +813,10 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
       const currentTag = container.using_latest_tag ? 'latest' : (container.current_tag || 'untagged');
       return `${currentTag} → ${container.recommended_tag}`;
     }
-    if (hasUpdate && container.current_version && container.latest_version) {
-      return `${container.current_version} → ${container.latest_version}`;
-    }
-    // Handle case where we have latest_version but no current_version (e.g., :latest tag updates)
-    if (hasUpdate && !container.current_version && container.latest_version) {
-      const currentTag = container.current_tag || (container.using_latest_tag ? 'latest' : 'current');
-      return `${currentTag} → ${container.latest_version}`;
+    if (hasUpdate && container.latest_version) {
+      // Use current_tag for consistency with latest_version (both are tag format)
+      const currentDisplay = container.current_tag || container.current_version || 'current';
+      return `${currentDisplay} → ${container.latest_version}`;
     }
     if (container.status === 'LOCAL_IMAGE') {
       return 'Local image';
@@ -815,7 +827,9 @@ function ContainerRow({ container, selected, onToggle, onContainerClick, allCont
     if (container.status === 'IGNORED') {
       return 'Ignored';
     }
-    return container.current_tag || container.current_version || '';
+    // Prefer current_version (full version from container labels) over current_tag
+    // to match Detail page and show complete version info (e.g., "4.0.16.2944-ls299" not just "4.0.16")
+    return container.current_version || container.current_tag || '';
   };
 
   const handleRowClick = (e: React.MouseEvent) => {
