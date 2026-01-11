@@ -40,6 +40,8 @@ type UpdateOrchestrator struct {
 	stackLocks     map[string]*sync.Mutex
 	locksMu        sync.Mutex
 	pathTranslator *docker.PathTranslator
+	ctx            context.Context    // orchestrator lifecycle context
+	cancelFn       context.CancelFunc // cancels ctx on shutdown
 }
 
 // HealthCheckConfig holds health check configuration.
@@ -64,6 +66,7 @@ func NewUpdateOrchestrator(
 	registryManager RegistryClient,
 	pathTranslator *docker.PathTranslator,
 ) *UpdateOrchestrator {
+	ctx, cancel := context.WithCancel(context.Background())
 	orch := &UpdateOrchestrator{
 		dockerClient:   dockerClient,
 		dockerSDK:      dockerSDK,
@@ -78,11 +81,21 @@ func NewUpdateOrchestrator(
 		},
 		stackLocks:     make(map[string]*sync.Mutex),
 		pathTranslator: pathTranslator,
+		ctx:            ctx,
+		cancelFn:       cancel,
 	}
 
-	go orch.processQueue(context.Background())
+	go orch.processQueue(orch.ctx)
 
 	return orch
+}
+
+// Shutdown stops the orchestrator's background goroutines.
+// In-progress operations will continue to completion.
+func (o *UpdateOrchestrator) Shutdown() {
+	if o.cancelFn != nil {
+		o.cancelFn()
+	}
 }
 
 // GetStorage returns the storage instance for accessing operation status
@@ -268,7 +281,7 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 	op.BatchDetails = batchDetails
 
 	// For single-container batches, also populate top-level fields for backwards compatibility
-	if len(orderedContainers) == 1 {
+	if len(orderedContainers) == 1 && len(batchDetails) > 0 {
 		container := orderedContainers[0]
 		op.ContainerID = container.ID
 		op.ContainerName = container.Name
@@ -673,6 +686,14 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		// Create with new image
 		newConfig := inspect.Config
 		newConfig.Image = newImageRef
+
+		// Clear hostname if using container network mode (hostname is inherited from the network source)
+		// Without this, Docker returns "conflicting options: hostname and the network mode"
+		if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
+			newConfig.Hostname = ""
+			newConfig.Domainname = ""
+		}
+
 		networkingConfig := &network.NetworkingConfig{
 			EndpointsConfig: inspect.NetworkSettings.Networks,
 		}
@@ -694,7 +715,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		successCount++
 	}
 
-	// Phase 4: Health check (90-100%)
+	// Phase 4: Health check (90-95%)
 	o.publishProgress(operationID, "", stackName, "health_check", 90, "Verifying container health")
 
 	// Wait for all containers to be healthy
@@ -702,6 +723,49 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		if err := o.waitForHealthy(ctx, cont.Name, o.healthCheckCfg.Timeout); err != nil {
 			log.Printf("BATCH UPDATE: Health check warning for %s: %v", cont.Name, err)
 		}
+	}
+
+	// Phase 5: Restart dependent containers (95-99%)
+	// For batch updates, we need to restart containers that depend on any of the updated containers
+	o.publishProgress(operationID, "", stackName, "restarting_dependents", 95, "Restarting dependent containers")
+
+	// Track which dependents we've already restarted to avoid duplicates
+	restartedDependents := make(map[string]bool)
+	var allRestarted []string
+	var allBlocked []string
+
+	for _, cont := range orderedContainers {
+		// Restart dependents for this container
+		depResult, depErr := o.restartDependentContainers(ctx, cont.Name, false)
+		if depErr != nil {
+			log.Printf("BATCH UPDATE: Warning - failed to restart dependents for %s: %v", cont.Name, depErr)
+			continue
+		}
+
+		if depResult != nil {
+			// Track restarted dependents (avoiding duplicates)
+			for _, dep := range depResult.Restarted {
+				if !restartedDependents[dep] {
+					restartedDependents[dep] = true
+					allRestarted = append(allRestarted, dep)
+				}
+			}
+			// Track blocked dependents
+			for _, dep := range depResult.Blocked {
+				if !restartedDependents[dep] {
+					allBlocked = append(allBlocked, dep)
+				}
+			}
+		}
+	}
+
+	if len(allRestarted) > 0 {
+		log.Printf("BATCH UPDATE: Restarted dependents: %v", allRestarted)
+		o.publishProgress(operationID, "", stackName, "restarting_dependents", 98, fmt.Sprintf("Restarted dependents: %s", strings.Join(allRestarted, ", ")))
+	}
+	if len(allBlocked) > 0 {
+		log.Printf("BATCH UPDATE: Blocked dependents: %v", allBlocked)
+		o.publishProgress(operationID, "", stackName, "restarting_dependents", 98, fmt.Sprintf("Blocked dependents: %s", strings.Join(allBlocked, ", ")))
 	}
 
 	status := "complete"

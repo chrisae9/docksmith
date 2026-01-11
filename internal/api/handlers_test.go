@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -509,23 +511,6 @@ func TestHandleHistory_NoStorage(t *testing.T) {
 }
 
 // ============================================================================
-// Handler Tests - handleBackups
-// ============================================================================
-
-func TestHandleBackups_NoStorage(t *testing.T) {
-	t.Run("returns error when storage unavailable", func(t *testing.T) {
-		s := &Server{storageService: nil}
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", "/api/backups", nil)
-
-		s.handleBackups(w, r)
-
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-		assert.Contains(t, w.Body.String(), "storage service not available")
-	})
-}
-
-// ============================================================================
 // Handler Tests - handlePolicies
 // ============================================================================
 
@@ -887,6 +872,353 @@ func TestHandleRestartContainerBody_Validation(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "container_name is required")
+	})
+}
+
+// ============================================================================
+// Handler Logic Tests - Operations
+// ============================================================================
+
+func TestHandleOperations_WithData(t *testing.T) {
+	now := time.Now()
+
+	t.Run("returns operations from storage", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-123",
+			ContainerName: "nginx",
+			Status:        "complete",
+			OldVersion:    "1.24.0",
+			NewVersion:    "1.25.0",
+			CreatedAt:     now,
+		})
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-456",
+			ContainerName: "redis",
+			Status:        "failed",
+			ErrorMessage:  "pull failed",
+			CreatedAt:     now.Add(-time.Hour),
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations", nil)
+
+		s.handleOperations(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+
+		data := response["data"].(map[string]any)
+		assert.Equal(t, float64(2), data["count"])
+
+		operations := data["operations"].([]any)
+		assert.Len(t, operations, 2)
+	})
+
+	t.Run("respects limit parameter", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		for i := 0; i < 10; i++ {
+			mockStorage.AddOperation(storage.UpdateOperation{
+				OperationID:   fmt.Sprintf("op-%d", i),
+				ContainerName: "nginx",
+				Status:        "complete",
+				CreatedAt:     time.Now(),
+			})
+		}
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations?limit=3", nil)
+
+		s.handleOperations(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		data := response["data"].(map[string]any)
+		operations := data["operations"].([]any)
+		assert.Len(t, operations, 3)
+	})
+
+	t.Run("filters by container", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-1",
+			ContainerName: "nginx",
+			Status:        "complete",
+		})
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-2",
+			ContainerName: "redis",
+			Status:        "complete",
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations?container=nginx", nil)
+
+		s.handleOperations(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		data := response["data"].(map[string]any)
+		operations := data["operations"].([]any)
+		assert.Len(t, operations, 1)
+	})
+
+	t.Run("filters by status", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-1",
+			ContainerName: "nginx",
+			Status:        "complete",
+		})
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-2",
+			ContainerName: "redis",
+			Status:        "failed",
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations?status=failed", nil)
+
+		s.handleOperations(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		data := response["data"].(map[string]any)
+		operations := data["operations"].([]any)
+		assert.Len(t, operations, 1)
+		assert.Equal(t, "failed", operations[0].(map[string]any)["status"])
+	})
+}
+
+func TestHandleOperationByID_WithData(t *testing.T) {
+	t.Run("returns operation when found", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddOperation(storage.UpdateOperation{
+			OperationID:   "op-123",
+			ContainerName: "nginx",
+			Status:        "complete",
+			OldVersion:    "1.24.0",
+			NewVersion:    "1.25.0",
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations/op-123", nil)
+		r.SetPathValue("id", "op-123")
+
+		s.handleOperationByID(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+
+		data := response["data"].(map[string]any)
+		assert.Equal(t, "op-123", data["operation_id"])
+		assert.Equal(t, "nginx", data["container_name"])
+		assert.Equal(t, "complete", data["status"])
+	})
+
+	t.Run("returns 404 when not found", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations/nonexistent", nil)
+		r.SetPathValue("id", "nonexistent")
+
+		s.handleOperationByID(w, r)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+func TestHandleHistory_WithData(t *testing.T) {
+	now := time.Now()
+
+	t.Run("returns merged check and update history", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddCheckHistory(storage.CheckHistoryEntry{
+			ContainerName:  "nginx",
+			Image:          "nginx:1.24",
+			CurrentVersion: "1.24.0",
+			LatestVersion:  "1.25.0",
+			Status:         "UPDATE_AVAILABLE",
+			CheckTime:      now,
+		})
+		mockStorage.AddUpdateLog(storage.UpdateLogEntry{
+			ContainerName: "nginx",
+			Operation:     "update",
+			FromVersion:   "1.24.0",
+			ToVersion:     "1.25.0",
+			Success:       true,
+			Timestamp:     now.Add(time.Minute),
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/history", nil)
+
+		s.handleHistory(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+
+		data := response["data"].(map[string]any)
+		history := data["history"].([]any)
+		assert.Len(t, history, 2)
+	})
+
+	t.Run("filters by type check", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddCheckHistory(storage.CheckHistoryEntry{
+			ContainerName: "nginx",
+			Status:        "UP_TO_DATE",
+			CheckTime:     now,
+		})
+		mockStorage.AddUpdateLog(storage.UpdateLogEntry{
+			ContainerName: "nginx",
+			Operation:     "update",
+			Success:       true,
+			Timestamp:     now,
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/history?type=check", nil)
+
+		s.handleHistory(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		data := response["data"].(map[string]any)
+		history := data["history"].([]any)
+		assert.Len(t, history, 1)
+		assert.Equal(t, "check", history[0].(map[string]any)["type"])
+	})
+
+	t.Run("filters by type update", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.AddCheckHistory(storage.CheckHistoryEntry{
+			ContainerName: "nginx",
+			Status:        "UP_TO_DATE",
+			CheckTime:     now,
+		})
+		mockStorage.AddUpdateLog(storage.UpdateLogEntry{
+			ContainerName: "nginx",
+			Operation:     "update",
+			Success:       true,
+			Timestamp:     now,
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/history?type=update", nil)
+
+		s.handleHistory(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		data := response["data"].(map[string]any)
+		history := data["history"].([]any)
+		assert.Len(t, history, 1)
+		assert.Equal(t, "update", history[0].(map[string]any)["type"])
+	})
+}
+
+func TestHandlePolicies_WithData(t *testing.T) {
+	t.Run("returns policies from storage", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		// Add a global policy
+		mockStorage.SetRollbackPolicy(context.Background(), storage.RollbackPolicy{
+			EntityType:          "global",
+			EntityID:            "",
+			AutoRollbackEnabled: true,
+			HealthCheckRequired: true,
+		})
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/policies", nil)
+
+		s.handlePolicies(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]any
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+	})
+}
+
+// ============================================================================
+// Handler Error Tests - Storage Errors
+// ============================================================================
+
+func TestHandleOperations_StorageError(t *testing.T) {
+	t.Run("returns error when storage fails", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.GetError = errors.New("database connection failed")
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/operations", nil)
+
+		s.handleOperations(w, r)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "database connection failed")
+	})
+}
+
+func TestHandleHistory_StorageError(t *testing.T) {
+	t.Run("returns error when storage fails", func(t *testing.T) {
+		mockStorage := NewMockStorage()
+		mockStorage.GetError = errors.New("database connection failed")
+
+		s := &Server{storageService: mockStorage}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/history", nil)
+
+		s.handleHistory(w, r)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "database connection failed")
 	})
 }
 

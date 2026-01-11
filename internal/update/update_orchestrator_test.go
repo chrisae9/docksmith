@@ -17,8 +17,8 @@ import (
 
 // TestMockStorage is a mock storage implementation for orchestrator testing.
 type TestMockStorage struct {
+	mu         sync.RWMutex
 	operations map[string]storage.UpdateOperation
-	backups    map[string]storage.ComposeBackup
 	policies   map[string]storage.RollbackPolicy
 	queue      []storage.UpdateQueue
 }
@@ -26,23 +26,28 @@ type TestMockStorage struct {
 func NewTestMockStorage() *TestMockStorage {
 	return &TestMockStorage{
 		operations: make(map[string]storage.UpdateOperation),
-		backups:    make(map[string]storage.ComposeBackup),
 		policies:   make(map[string]storage.RollbackPolicy),
 		queue:      make([]storage.UpdateQueue, 0),
 	}
 }
 
 func (m *TestMockStorage) SaveUpdateOperation(ctx context.Context, op storage.UpdateOperation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.operations[op.OperationID] = op
 	return nil
 }
 
 func (m *TestMockStorage) GetUpdateOperation(ctx context.Context, operationID string) (storage.UpdateOperation, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	op, found := m.operations[operationID]
 	return op, found, nil
 }
 
 func (m *TestMockStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]storage.UpdateOperation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	ops := make([]storage.UpdateOperation, 0)
 	for _, op := range m.operations {
 		if op.Status == status {
@@ -53,6 +58,8 @@ func (m *TestMockStorage) GetUpdateOperationsByStatus(ctx context.Context, statu
 }
 
 func (m *TestMockStorage) GetUpdateOperations(ctx context.Context, limit int) ([]storage.UpdateOperation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	ops := make([]storage.UpdateOperation, 0, len(m.operations))
 	for _, op := range m.operations {
 		ops = append(ops, op)
@@ -61,6 +68,8 @@ func (m *TestMockStorage) GetUpdateOperations(ctx context.Context, limit int) ([
 }
 
 func (m *TestMockStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]storage.UpdateOperation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	ops := make([]storage.UpdateOperation, 0)
 	for _, op := range m.operations {
 		if op.ContainerName == containerName {
@@ -75,6 +84,8 @@ func (m *TestMockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, st
 }
 
 func (m *TestMockStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if op, found := m.operations[operationID]; found {
 		op.Status = status
 		op.ErrorMessage = errorMsg
@@ -83,52 +94,32 @@ func (m *TestMockStorage) UpdateOperationStatus(ctx context.Context, operationID
 	return nil
 }
 
-func (m *TestMockStorage) SaveComposeBackup(ctx context.Context, backup storage.ComposeBackup) error {
-	m.backups[backup.OperationID] = backup
-	return nil
-}
-
-func (m *TestMockStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
-	backup, found := m.backups[operationID]
-	return backup, found, nil
-}
-
-func (m *TestMockStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
-	var backups []storage.ComposeBackup
-	for _, b := range m.backups {
-		if b.ContainerName == containerName {
-			backups = append(backups, b)
-		}
-	}
-	return backups, nil
-}
-
-func (m *TestMockStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
-	backups := make([]storage.ComposeBackup, 0, len(m.backups))
-	for _, b := range m.backups {
-		backups = append(backups, b)
-	}
-	return backups, nil
-}
-
 func (m *TestMockStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	key := entityType + ":" + entityID
 	policy, found := m.policies[key]
 	return policy, found, nil
 }
 
 func (m *TestMockStorage) SetRollbackPolicy(ctx context.Context, policy storage.RollbackPolicy) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	key := policy.EntityType + ":" + policy.EntityID
 	m.policies[key] = policy
 	return nil
 }
 
 func (m *TestMockStorage) QueueUpdate(ctx context.Context, queue storage.UpdateQueue) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.queue = append(m.queue, queue)
 	return nil
 }
 
 func (m *TestMockStorage) DequeueUpdate(ctx context.Context, stackName string) (storage.UpdateQueue, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i, q := range m.queue {
 		if q.StackName == stackName {
 			m.queue = append(m.queue[:i], m.queue[i+1:]...)
@@ -139,6 +130,8 @@ func (m *TestMockStorage) DequeueUpdate(ctx context.Context, stackName string) (
 }
 
 func (m *TestMockStorage) GetQueuedUpdates(ctx context.Context) ([]storage.UpdateQueue, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.queue, nil
 }
 
@@ -381,42 +374,6 @@ func TestCheckPermissions_FailsWithoutAccess(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission")
 
 	os.Chmod(tmpDir, 0755)
-}
-
-// Test: Compose file backup
-func TestBackupComposeFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
-	composeContent := `services:
-  web:
-    image: nginx:1.20
-`
-
-	os.WriteFile(composeFile, []byte(composeContent), 0644)
-
-	mockStorage := NewTestMockStorage()
-	orch := &UpdateOrchestrator{
-		storage:      mockStorage,
-		stackManager: docker.NewStackManager(),
-	}
-
-	container := &docker.Container{
-		Name: "web",
-		Labels: map[string]string{
-			"com.docker.compose.project.config_files": composeFile,
-		},
-	}
-
-	operationID := "test-op-123"
-	backupPath, err := orch.backupComposeFile(context.Background(), operationID, container)
-
-	assert.NoError(t, err)
-	assert.NotEmpty(t, backupPath)
-	assert.FileExists(t, backupPath)
-
-	backup, found, _ := mockStorage.GetComposeBackup(context.Background(), operationID)
-	assert.True(t, found)
-	assert.Equal(t, composeFile, backup.ComposeFilePath)
 }
 
 // Test: Compose file update

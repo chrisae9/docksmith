@@ -83,8 +83,9 @@ func TestHTTPClientRetryExhaustion(t *testing.T) {
 		t.Error("expected error after retry exhaustion")
 	}
 
-	if attempts < 1 {
-		t.Errorf("expected at least 1 attempt, got %d", attempts)
+	finalAttempts := atomic.LoadInt32(&attempts)
+	if finalAttempts < 1 {
+		t.Errorf("expected at least 1 attempt, got %d", finalAttempts)
 	}
 }
 

@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"log"
 	"sync"
 )
 
@@ -66,12 +67,13 @@ func (b *Bus) Publish(event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	// Also publish to wildcard subscribers
+	// Publish to event type subscribers
 	for _, ch := range b.subscribers[event.Type] {
 		select {
 		case ch <- event:
 		default:
-			// Channel full, skip (non-blocking)
+			// Channel full, log and skip (non-blocking)
+			log.Printf("EVENT BUS: dropped event %s (channel full)", event.Type)
 		}
 	}
 
@@ -80,6 +82,8 @@ func (b *Bus) Publish(event Event) {
 		select {
 		case ch <- event:
 		default:
+			// Channel full, log and skip (non-blocking)
+			log.Printf("EVENT BUS: dropped wildcard event %s (channel full)", event.Type)
 		}
 	}
 }
