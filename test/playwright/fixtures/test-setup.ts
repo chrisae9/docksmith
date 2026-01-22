@@ -3,25 +3,29 @@ import { test as base, expect, type Page, type APIRequestContext } from '@playwr
 // API base URL (same as what we're testing against)
 export const API_BASE = process.env.DOCKSMITH_URL || 'https://docksmith.ts.chis.dev';
 
-// Test container names used in environments
+// Test container names - these are real containers from the production environment
+// Use containers that exist and are safe for testing
 export const TEST_CONTAINERS = {
-  // basic-compose environment
-  NGINX_BASIC: 'test-nginx-basic',
-  REDIS_BASIC: 'test-redis-basic',
+  // Primary test containers
+  NGINX_BASIC: 'frigate',      // Used as primary container for navigation tests (UP_TO_DATE)
+  REDIS_BASIC: 'bazarr',       // Used as secondary container for dependency tests (UP_TO_DATE)
 
-  // labels environment
-  LABELS_IGNORED: 'test-labels-ignored',
-  LABELS_LATEST: 'test-labels-latest',
-  LABELS_PRE_PASS: 'test-labels-pre-pass',
-  LABELS_PRE_FAIL: 'test-labels-pre-fail',
-  LABELS_RESTART_DEPS: 'test-labels-restart-deps',
-  LABELS_DEPENDENT_1: 'test-labels-dependent-1',
-  LABELS_DEPENDENT_2: 'test-labels-dependent-2',
-  LABELS_NGINX: 'test-labels-nginx',
-  LABELS_ALPINE: 'test-labels-alpine',
-  LABELS_POSTGRES: 'test-labels-postgres',
-  LABELS_REDIS: 'test-labels-redis',
-  LABELS_NODE: 'test-labels-node',
+  // Container with UPDATE_AVAILABLE for update tests
+  UPDATE_AVAILABLE: 'recyclarr', // Has UPDATE_AVAILABLE status
+
+  // Containers with specific statuses for testing
+  LABELS_IGNORED: 'factorio',       // IGNORED status
+  LABELS_LATEST: 'mosquitto',       // UP_TO_DATE
+  LABELS_PRE_PASS: 'plex',          // Has pre-update script (pass)
+  LABELS_PRE_FAIL: 'prowlarr',
+  LABELS_RESTART_DEPS: 'gluetun',   // Has restart dependencies (torrent depends on it)
+  LABELS_DEPENDENT_1: 'sonarr',
+  LABELS_DEPENDENT_2: 'torrent',
+  LABELS_NGINX: 'plex',
+  LABELS_ALPINE: 'tautulli',
+  LABELS_POSTGRES: 'calibre',
+  LABELS_REDIS: 'kavita',
+  LABELS_NODE: 'whoami',
 };
 
 // Extend Playwright test with custom fixtures
@@ -219,6 +223,118 @@ export class APIHelper {
     return response.json();
   }
 
+  // ==================== Scripts ====================
+
+  /**
+   * Get list of available scripts
+   */
+  async getScripts(): Promise<{
+    success: boolean;
+    data?: { scripts: Script[]; count: number };
+    error?: string;
+  }> {
+    const response = await this.request.get(`${this.baseUrl}/api/scripts`);
+    return response.json();
+  }
+
+  /**
+   * Get script assignments
+   */
+  async getScriptsAssigned(): Promise<{
+    success: boolean;
+    data?: { assignments: ScriptAssignment[]; count: number };
+    error?: string;
+  }> {
+    const response = await this.request.get(`${this.baseUrl}/api/scripts/assigned`);
+    return response.json();
+  }
+
+  /**
+   * Assign a script to a container
+   */
+  async assignScript(containerName: string, scriptPath: string): Promise<{
+    success: boolean;
+    data?: { container: string; script: string; message: string };
+    error?: string;
+  }> {
+    const response = await this.request.post(`${this.baseUrl}/api/scripts/assign`, {
+      data: {
+        container_name: containerName,
+        script_path: scriptPath,
+      },
+    });
+    return response.json();
+  }
+
+  /**
+   * Unassign a script from a container
+   */
+  async unassignScript(containerName: string): Promise<{
+    success: boolean;
+    data?: { container: string; message: string };
+    error?: string;
+  }> {
+    const response = await this.request.delete(`${this.baseUrl}/api/scripts/assign/${containerName}`);
+    return response.json();
+  }
+
+  // ==================== Policies ====================
+
+  /**
+   * Get rollback policies
+   */
+  async getPolicies(): Promise<{
+    success: boolean;
+    data?: { global_policy: any };
+    error?: string;
+  }> {
+    const response = await this.request.get(`${this.baseUrl}/api/policies`);
+    return response.json();
+  }
+
+  // ==================== Registry ====================
+
+  /**
+   * Get available tags for an image from registry
+   */
+  async getRegistryTags(imageRef: string): Promise<{
+    success: boolean;
+    data?: { image_ref: string; tags: string[]; count: number };
+    error?: string;
+  }> {
+    const response = await this.request.get(`${this.baseUrl}/api/registry/tags/${encodeURIComponent(imageRef)}`);
+    return response.json();
+  }
+
+  // ==================== Additional Restart Operations ====================
+
+  /**
+   * Start a restart operation (SSE-based, returns operation ID)
+   */
+  async restartStart(containerName: string, force = false): Promise<{
+    success: boolean;
+    data?: { operation_id: string; container_name: string; status: string };
+    error?: string;
+  }> {
+    const url = force
+      ? `${this.baseUrl}/api/restart/start/${containerName}?force=true`
+      : `${this.baseUrl}/api/restart/start/${containerName}`;
+    const response = await this.request.post(url);
+    return response.json();
+  }
+
+  /**
+   * Restart all containers in a stack
+   */
+  async restartStack(stackName: string): Promise<{
+    success: boolean;
+    data?: RestartResponse;
+    error?: string;
+  }> {
+    const response = await this.request.post(`${this.baseUrl}/api/restart/stack/${stackName}`);
+    return response.json();
+  }
+
   // ==================== Operations & History ====================
 
   /**
@@ -258,17 +374,6 @@ export class APIHelper {
     };
   }> {
     const response = await this.request.get(`${this.baseUrl}/api/history?limit=${limit}`);
-    return response.json();
-  }
-
-  /**
-   * Get backups list
-   */
-  async getBackups(limit = 10): Promise<{
-    success: boolean;
-    data?: any;
-  }> {
-    const response = await this.request.get(`${this.baseUrl}/api/backups?limit=${limit}`);
     return response.json();
   }
 
@@ -410,4 +515,25 @@ export interface LabelSetOptions {
   restart_after?: string;
   force?: boolean;
   no_restart?: boolean;
+}
+
+export interface Script {
+  name: string;
+  path: string;
+  description?: string;
+}
+
+export interface ScriptAssignment {
+  container: string;
+  script: string;
+  source?: string;
+}
+
+export interface RestartResponse {
+  success: boolean;
+  message: string;
+  container_names: string[];
+  dependents_restarted?: string[];
+  dependents_blocked?: string[];
+  errors?: string[];
 }
