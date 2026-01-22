@@ -12,8 +12,8 @@
   margin-bottom: var(--space-10);
   background: var(--color-bg-secondary);
   border-radius: var(--radius-4xl);
-  box-shadow: var(--shadow-sm);
-  border: var(--border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -127,8 +127,7 @@
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   margin-bottom: var(--space-4);
   padding-left: var(--space-1);
 }
@@ -141,16 +140,16 @@
 
 .container-list {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-3xl);
   overflow: hidden;
-  box-shadow: var(--shadow-xs);
-  border: var(--border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .container-item {
   display: flex;
   flex-direction: column;
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-6) var(--space-8);
   transition: background var(--transition-fast);
 }
 
@@ -245,29 +244,28 @@
 
 /* Activity Log */
 .activity-section {
-  margin-bottom: var(--space-10);
+  margin-bottom: var(--space-12);
 }
 
 .activity-section h2 {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   margin-bottom: var(--space-6);
   padding-left: var(--space-2);
 }
 
 .activity-log {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-3xl);
   padding: var(--space-6);
   max-height: 200px;
   overflow-y: auto;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  box-shadow: var(--shadow-xs);
-  border: var(--border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .log-entry {
@@ -339,32 +337,31 @@
 
 /* Info Section */
 .info-section {
-  margin-bottom: var(--space-10);
+  margin-bottom: var(--space-12);
 }
 
 .info-section h2 {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   margin-bottom: var(--space-6);
   padding-left: var(--space-2);
 }
 
 .info-card {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-3xl);
   overflow: hidden;
-  box-shadow: var(--shadow-xs);
-  border: var(--border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .info-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-7) var(--space-10);
   border-bottom: 1px solid var(--color-separator);
   gap: var(--space-8);
 }
@@ -468,11 +465,11 @@
 
 .stat-card {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-2xl);
   padding: var(--space-6);
   text-align: center;
-  box-shadow: var(--shadow-xs);
-  border: var(--border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .stat-value {

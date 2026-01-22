@@ -18,12 +18,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipWithoutDocker skips the test if Docker daemon is not available
+func skipWithoutDocker(t *testing.T) {
+	t.Helper()
+	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Skip("Docker not available, skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := dockerSDK.Ping(ctx); err != nil {
+		dockerSDK.Close()
+		t.Skip("Docker daemon not responding, skipping integration test")
+	}
+	dockerSDK.Close()
+}
+
 // Integration Test 1: Full single container update workflow
-// Tests: permission check → backup → compose update → pull → restart → health check → success
+// Tests: permission check → compose update → pull → restart → health check → success
 func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -111,13 +128,6 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	assert.Equal(t, "web", op.ContainerName)
 	assert.Equal(t, "teststack", op.StackName)
 
-	// Verify backup was created
-	backup, found, err := store.GetComposeBackup(ctx, operationID)
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, composeFile, backup.ComposeFilePath)
-	assert.FileExists(t, backup.BackupFilePath)
-
 	// Verify compose file was updated
 	updatedContent, err := os.ReadFile(composeFile)
 	require.NoError(t, err)
@@ -145,6 +155,7 @@ func TestIntegration_RollbackFlowOnHealthCheckFailure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -231,6 +242,7 @@ func TestIntegration_DependentContainerRestartOrdering(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -317,6 +329,7 @@ func TestIntegration_QueueProcessingWithConcurrentStacks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -418,6 +431,7 @@ func TestIntegration_APIToOrchestratorToStorageFullStack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -470,110 +484,13 @@ func TestIntegration_APIToOrchestratorToStorageFullStack(t *testing.T) {
 	assert.Equal(t, "single", op.OperationType)
 }
 
-// Integration Test 6: Compose file backup and restore cycle
-// Tests: backup file creation → modification → validation → restore capability
-func TestIntegration_ComposeFileBackupAndRestoreCycle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-
-	// Create original compose file
-	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
-	originalContent := `services:
-  web:
-    image: nginx:1.20.0
-    ports:
-      - "80:80"
-`
-	require.NoError(t, os.WriteFile(composeFile, []byte(originalContent), 0644))
-
-	// Setup storage
-	dbPath := filepath.Join(tmpDir, "test.db")
-	store, err := storage.NewSQLiteStorage(dbPath)
-	require.NoError(t, err)
-	defer store.Close()
-
-	mockDocker := &MockDockerClient{
-		containers: []docker.Container{
-			{
-				Name: "web",
-				Labels: map[string]string{
-					"com.docker.compose.project":              "webstack",
-					"com.docker.compose.service":              "web",
-					"com.docker.compose.project.config_files": composeFile,
-				},
-			},
-		},
-	}
-
-	orch := &UpdateOrchestrator{
-		dockerClient: mockDocker,
-		storage:      store,
-		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
-		healthCheckCfg: HealthCheckConfig{
-			Timeout:      30 * time.Second,
-			FallbackWait: 5 * time.Second,
-		},
-	}
-
-	operationID := "test-backup-op"
-	container := &docker.Container{
-		Name: "web",
-		Labels: map[string]string{
-			"com.docker.compose.project":              "webstack",
-			"com.docker.compose.service":              "web",
-			"com.docker.compose.project.config_files": composeFile,
-		},
-	}
-
-	// Create backup
-	backupPath, err := orch.backupComposeFile(ctx, operationID, container)
-	require.NoError(t, err)
-	assert.NotEmpty(t, backupPath)
-	assert.FileExists(t, backupPath)
-
-	// Verify backup content matches original
-	backupContent, err := os.ReadFile(backupPath)
-	require.NoError(t, err)
-	assert.Equal(t, originalContent, string(backupContent))
-
-	// Update compose file
-	err = orch.updateComposeFile(ctx, composeFile, container, "1.21.0")
-	require.NoError(t, err)
-
-	// Verify file was updated
-	updatedContent, err := os.ReadFile(composeFile)
-	require.NoError(t, err)
-	assert.Contains(t, string(updatedContent), "nginx:1.21.0")
-	assert.NotContains(t, string(updatedContent), "nginx:1.20.0")
-
-	// Restore from backup
-	err = os.WriteFile(composeFile, backupContent, 0644)
-	require.NoError(t, err)
-
-	// Verify restoration
-	restoredContent, err := os.ReadFile(composeFile)
-	require.NoError(t, err)
-	assert.Equal(t, originalContent, string(restoredContent))
-
-	// Verify backup metadata in storage
-	backup, found, err := store.GetComposeBackup(ctx, operationID)
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, composeFile, backup.ComposeFilePath)
-	assert.Equal(t, backupPath, backup.BackupFilePath)
-}
-
-// Integration Test 7: Permission failure prevents partial operations
-// Tests: permission check fails → no backup created → no compose modified → operation fails fast
+// Integration Test 6: Permission failure prevents partial operations
+// Tests: permission check fails → no compose modified → operation fails fast
 func TestIntegration_PermissionFailurePreventsPartialOperations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -652,6 +569,7 @@ func TestIntegration_BatchUpdateWithMixedResults(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -737,6 +655,7 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -853,6 +772,7 @@ func TestIntegration_StackUpdateWithTopologicalOrdering(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
@@ -938,6 +858,7 @@ func TestIntegration_ComposeRecreationWorkflowWithDependents(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	tmpDir := t.TempDir()
 	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
@@ -1016,86 +937,13 @@ func TestIntegration_ComposeRecreationWorkflowWithDependents(t *testing.T) {
 	assert.Equal(t, composeFile, composePath)
 }
 
-// Integration Test 12: Compose failure and automatic recovery workflow
-// Tests: compose up fails → backup detected → old version parsed → file reverted → compose retried
-func TestIntegration_ComposeFailureAndAutomaticRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	tmpDir := t.TempDir()
-	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
-	backupFile := filepath.Join(tmpDir, "docker-compose.yml.backup.20240115-120000")
-
-	// Create backup with old working version
-	backupContent := `services:
-  web:
-    image: nginx:1.20.0
-    ports:
-      - "80:80"
-  api:
-    image: api:1.0.0
-    depends_on:
-      - db
-  db:
-    image: postgres:13.0
-`
-
-	require.NoError(t, os.WriteFile(backupFile, []byte(backupContent), 0644))
-
-	// Create current compose file with new (potentially broken) version
-	currentContent := `services:
-  web:
-    image: nginx:1.21.0
-    ports:
-      - "80:80"
-  api:
-    image: api:1.1.0
-    depends_on:
-      - db
-  db:
-    image: postgres:14.0
-`
-
-	require.NoError(t, os.WriteFile(composeFile, []byte(currentContent), 0644))
-
-	// Test backup parsing for all services
-	webVersion, err := parseVersionFromBackup(backupFile, "web")
-	assert.NoError(t, err)
-	assert.Equal(t, "1.20.0", webVersion)
-
-	apiVersion, err := parseVersionFromBackup(backupFile, "api")
-	assert.NoError(t, err)
-	assert.Equal(t, "1.0.0", apiVersion)
-
-	dbVersion, err := parseVersionFromBackup(backupFile, "db")
-	assert.NoError(t, err)
-	assert.Equal(t, "13.0", dbVersion)
-
-	// Simulate restoration workflow
-	backupData, err := os.ReadFile(backupFile)
-	require.NoError(t, err)
-
-	err = os.WriteFile(composeFile, backupData, 0644)
-	require.NoError(t, err)
-
-	// Verify compose file was restored
-	restoredData, err := os.ReadFile(composeFile)
-	require.NoError(t, err)
-	assert.Equal(t, backupContent, string(restoredData))
-
-	// Verify restored versions are accessible
-	restoredWebVersion, err := parseVersionFromBackup(composeFile, "web")
-	assert.NoError(t, err)
-	assert.Equal(t, "1.20.0", restoredWebVersion)
-}
-
 // Integration Test 13: Mixed stack with compose and standalone containers
 // Tests: compose containers use compose recreation → standalone use SDK → both succeed
 func TestIntegration_MixedStackComposeAndStandalone(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	tmpDir := t.TempDir()
 	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
@@ -1193,6 +1041,7 @@ func TestIntegration_ServiceNameExtractionEdgeCases(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	// Note: This test doesn't require Docker, only tests helper functions
 
 	containers := []docker.Container{
 		{
@@ -1261,6 +1110,7 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	tmpDir := t.TempDir()
 	composeFile := filepath.Join(tmpDir, "docker-compose.yml")
@@ -1376,6 +1226,7 @@ func TestIntegration_ComposeCommandFormattingForMultipleServices(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	skipWithoutDocker(t)
 
 	tmpDir := t.TempDir()
 	composeFile := filepath.Join(tmpDir, "subfolder", "docker-compose.yml")
@@ -1455,13 +1306,7 @@ func TestIntegration_StandaloneContainerSDKRecreation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-
-	// Skip if Docker not available
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-	if err != nil {
-		t.Skip("Docker not available, skipping integration test")
-	}
-	defer dockerSDK.Close()
+	skipWithoutDocker(t)
 
 	mockDocker := &MockDockerClient{
 		containers: []docker.Container{
@@ -1481,7 +1326,6 @@ func TestIntegration_StandaloneContainerSDKRecreation(t *testing.T) {
 
 	orch := &UpdateOrchestrator{
 		dockerClient: mockDocker,
-		dockerSDK:    dockerSDK,
 		storage:      mockStorage,
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
@@ -1496,57 +1340,4 @@ func TestIntegration_StandaloneContainerSDKRecreation(t *testing.T) {
 	// Verify buildImageRef works for version updates
 	newImage := orch.buildImageRef("redis:6.2", "7.0")
 	assert.Equal(t, "redis:7.0", newImage)
-}
-
-// Integration Test 18: Backup parsing with complex image formats
-// Tests: registry URLs → version tags with suffixes → multi-level paths → all parsed correctly
-func TestIntegration_BackupParsingComplexImageFormats(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	tmpDir := t.TempDir()
-	backupFile := filepath.Join(tmpDir, "docker-compose.yml.backup.20240115-120000")
-
-	backupContent := `services:
-  web:
-    image: docker.io/library/nginx:1.20.2-alpine
-    ports:
-      - "80:80"
-
-  api:
-    image: registry.example.com:5000/myorg/myapp/api:v2.3.4-rc1
-    environment:
-      - ENV=production
-
-  db:
-    image: postgres:13.8-alpine3.16
-    volumes:
-      - db_data:/var/lib/postgresql/data
-
-  cache:
-    image: localhost:5000/redis:6.2.7
-
-volumes:
-  db_data:
-`
-
-	require.NoError(t, os.WriteFile(backupFile, []byte(backupContent), 0644))
-
-	// Test version extraction for various image formats
-	webVersion, err := parseVersionFromBackup(backupFile, "web")
-	assert.NoError(t, err)
-	assert.Equal(t, "1.20.2-alpine", webVersion)
-
-	apiVersion, err := parseVersionFromBackup(backupFile, "api")
-	assert.NoError(t, err)
-	assert.Equal(t, "v2.3.4-rc1", apiVersion)
-
-	dbVersion, err := parseVersionFromBackup(backupFile, "db")
-	assert.NoError(t, err)
-	assert.Equal(t, "13.8-alpine3.16", dbVersion)
-
-	cacheVersion, err := parseVersionFromBackup(backupFile, "cache")
-	assert.NoError(t, err)
-	assert.Equal(t, "6.2.7", cacheVersion)
 }

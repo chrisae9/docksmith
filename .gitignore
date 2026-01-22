@@ -5,9 +5,9 @@
 /docksmith
 bin/
 
-# Docker files (not ready yet)
-Dockerfile
+# Local docker compose (use docker-compose.example.yml as template)
 docker-compose.yml
+docker-compose.yaml
 
 # Database files
 *.db
@@ -22,12 +22,20 @@ data/
 *.jpeg
 
 # IDE and editor files
-.claude
+.claude/
+CLAUDE.md
+.mcp.json
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# Test artifacts
+test/playwright/playwright-report/
+test/playwright/test-results/
+test/playwright/node_modules/
+.playwright-screenshots/
 
 # OS files
 .DS_Store

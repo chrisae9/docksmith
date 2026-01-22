@@ -125,72 +125,57 @@ func (pt *PathTranslator) extractMounts(mounts []container.MountPoint) error {
 	return nil
 }
 
-// TranslateToContainer translates a host path to the equivalent container path
-func (pt *PathTranslator) TranslateToContainer(hostPath string) string {
-	// If not running in Docker, return original path
+// translatePath finds the longest matching prefix and translates the path
+// toContainer=true: host path -> container path, toContainer=false: container path -> host path
+func (pt *PathTranslator) translatePath(path string, toContainer bool) string {
 	if !pt.inDocker {
-		return hostPath
+		return path
 	}
 
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 
-	// Try to find a matching mount
-	// Sort by length descending to match longest prefix first
 	var longestMatch string
-	var longestDest string
+	var replacement string
 
 	for source, dest := range pt.mappings {
-		if strings.HasPrefix(hostPath, source) {
-			if len(source) > len(longestMatch) {
-				longestMatch = source
-				longestDest = dest
-			}
+		var prefix, newPrefix string
+		if toContainer {
+			prefix, newPrefix = source, dest
+		} else {
+			prefix, newPrefix = dest, source
+		}
+
+		if strings.HasPrefix(path, prefix) && len(prefix) > len(longestMatch) {
+			longestMatch = prefix
+			replacement = newPrefix
 		}
 	}
 
 	if longestMatch != "" {
-		// Replace the host prefix with container prefix
-		result := strings.Replace(hostPath, longestMatch, longestDest, 1)
-		log.Printf("Path translation: %s -> %s", hostPath, result)
+		result := strings.Replace(path, longestMatch, replacement, 1)
+		direction := "host->container"
+		if !toContainer {
+			direction = "container->host"
+		}
+		log.Printf("Path translation (%s): %s -> %s", direction, path, result)
 		return result
 	}
 
-	// No mapping found - might already be a container path
-	log.Printf("No path translation for: %s (returning as-is)", hostPath)
-	return hostPath
+	if toContainer {
+		log.Printf("No path translation for: %s (returning as-is)", path)
+	}
+	return path
+}
+
+// TranslateToContainer translates a host path to the equivalent container path
+func (pt *PathTranslator) TranslateToContainer(hostPath string) string {
+	return pt.translatePath(hostPath, true)
 }
 
 // TranslateToHost translates a container path to the equivalent host path
 func (pt *PathTranslator) TranslateToHost(containerPath string) string {
-	// If not running in Docker, return original path
-	if !pt.inDocker {
-		return containerPath
-	}
-
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	// Reverse lookup
-	var longestMatch string
-	var longestSource string
-
-	for source, dest := range pt.mappings {
-		if strings.HasPrefix(containerPath, dest) {
-			if len(dest) > len(longestMatch) {
-				longestMatch = dest
-				longestSource = source
-			}
-		}
-	}
-
-	if longestMatch != "" {
-		result := strings.Replace(containerPath, longestMatch, longestSource, 1)
-		log.Printf("Path translation (reverse): %s -> %s", containerPath, result)
-		return result
-	}
-
-	return containerPath
+	return pt.translatePath(containerPath, false)
 }
 
 // GetMappings returns the current path mappings (for debugging)

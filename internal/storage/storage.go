@@ -171,31 +171,6 @@ type Storage interface {
 	//   - errorMsg: Error message (empty string if no error)
 	UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error
 
-	// SaveComposeBackup records metadata about a compose file backup.
-	// Links backup to an update operation for rollback capability.
-	// Parameters:
-	//   - backup: ComposeBackup containing backup metadata
-	SaveComposeBackup(ctx context.Context, backup ComposeBackup) error
-
-	// GetComposeBackup retrieves compose backup metadata by operation ID.
-	// Returns:
-	//   - backup: The compose backup record
-	//   - found: True if the backup exists
-	//   - err: Any error that occurred during lookup
-	GetComposeBackup(ctx context.Context, operationID string) (ComposeBackup, bool, error)
-
-	// GetComposeBackupsByContainer retrieves all backups for a specific container.
-	// Returns entries ordered by backup_timestamp DESC (most recent first).
-	// Parameters:
-	//   - containerName: Name of the container to query
-	GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]ComposeBackup, error)
-
-	// GetAllComposeBackups retrieves all compose backups.
-	// Returns entries ordered by backup_timestamp DESC (most recent first).
-	// Parameters:
-	//   - limit: Maximum number of entries to return (0 for no limit)
-	GetAllComposeBackups(ctx context.Context, limit int) ([]ComposeBackup, error)
-
 	// GetRollbackPolicy retrieves the rollback policy for an entity.
 	// Parameters:
 	//   - entityType: Type of entity (global, container, stack)
@@ -320,19 +295,6 @@ type UpdateOperation struct {
 	BatchDetails       []BatchContainerDetail  `json:"batch_details,omitempty"` // Details for batch operations
 	CreatedAt          time.Time               `json:"created_at"`
 	UpdatedAt          time.Time               `json:"updated_at"`
-}
-
-// ComposeBackup represents metadata for a compose file backup.
-// Links to an update operation for rollback capability.
-type ComposeBackup struct {
-	ID              int64     `json:"id"`
-	OperationID     string    `json:"operation_id"`
-	ContainerName   string    `json:"container_name"`
-	StackName       string    `json:"stack_name,omitempty"`
-	ComposeFilePath string    `json:"compose_file_path"`
-	BackupFilePath  string    `json:"backup_file_path"`
-	BackupTimestamp time.Time `json:"backup_timestamp"`
-	CreatedAt       time.Time `json:"created_at"`
 }
 
 // RollbackPolicy represents auto-rollback configuration at various levels.

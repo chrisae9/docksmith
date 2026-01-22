@@ -191,14 +191,15 @@ test_get_labels() {
 # Test 12: POST /api/labels/set
 test_set_labels() {
     print_info "Test: POST /api/labels/set"
-    local body='{"container":"'"$TEST_CONTAINER"'","ignore":true,"no_restart":true}'
+    # Note: We don't use no_restart here so the container picks up the new labels
+    local body='{"container":"'"$TEST_CONTAINER"'","ignore":true}'
     local response=$(curl_api POST "/labels/set" "$body")
     assert_api_success "$response" "Set labels endpoint returns success"
 
-    # Wait for operation to complete
-    sleep 5
+    # Wait for container restart and labels to be applied
+    sleep 8
 
-    # Verify label was set
+    # Verify label was set on the running container
     local labels_response=$(curl_api GET "/labels/$TEST_CONTAINER")
     local ignore_label=$(echo "$labels_response" | jq -r '.data.labels."docksmith.ignore"')
 
@@ -212,11 +213,11 @@ test_set_labels() {
 # Test 13: DELETE /api/labels/remove (actually POST in implementation)
 test_remove_labels() {
     print_info "Test: POST /api/labels/remove"
-    local body='{"container":"'"$TEST_CONTAINER"'","label_names":["docksmith.ignore"],"no_restart":true}'
+    local body='{"container":"'"$TEST_CONTAINER"'","label_names":["docksmith.ignore"]}'
     local response=$(curl_api POST "/labels/remove" "$body")
     assert_api_success "$response" "Remove labels endpoint returns success"
 
-    sleep 5
+    sleep 8
 }
 
 # Test 14: POST /api/restart/container/{name}
@@ -238,14 +239,7 @@ test_restart_container() {
     fi
 }
 
-# Test 15: GET /api/backups
-test_backups() {
-    print_info "Test: GET /api/backups"
-    local response=$(curl_api GET "/backups?limit=10")
-    assert_api_success "$response" "Backups endpoint returns success"
-}
-
-# Test 16: POST /api/update/batch
+# Test 15: POST /api/update/batch
 test_batch_update() {
     print_info "Test: POST /api/update/batch"
 
@@ -297,7 +291,6 @@ main() {
     test_set_labels
     test_remove_labels
     test_restart_container
-    test_backups
     test_batch_update
 
     # Print summary

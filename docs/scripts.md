@@ -60,10 +60,12 @@ services:
       - docksmith.pre-update-check=/scripts/check-plex.sh
 ```
 
-Or via CLI:
+Or via API:
 
 ```bash
-docksmith scripts assign plex check-plex.sh
+curl -X POST http://localhost:3000/api/scripts/assign \
+  -H "Content-Type: application/json" \
+  -d '{"container":"plex","script":"check-plex.sh"}'
 ```
 
 ## Script Examples
@@ -212,52 +214,18 @@ fi
 exit 0
 ```
 
-## Script Management
-
-### List Available Scripts
-
-```bash
-docksmith scripts list
-```
-
-Output:
-```
-Available scripts in /scripts:
-  check-plex.sh (executable)
-  backup-postgres.sh (executable)
-  maintenance-window.sh (not executable - run: chmod +x)
-```
-
-### Assign Script to Container
-
-```bash
-docksmith scripts assign plex check-plex.sh
-```
-
-### List Assignments
-
-```bash
-docksmith scripts list-assigned
-```
-
-### Remove Assignment
-
-```bash
-docksmith scripts unassign plex
-```
-
-## API Endpoints
+## API Reference
 
 ### List Scripts
 
 ```bash
-curl http://localhost:8080/api/scripts
+curl http://localhost:3000/api/scripts
 ```
 
 ### Assign Script
 
 ```bash
-curl -X POST http://localhost:8080/api/scripts/assign \
+curl -X POST http://localhost:3000/api/scripts/assign \
   -H "Content-Type: application/json" \
   -d '{"container":"plex","script":"check-plex.sh"}'
 ```
@@ -265,7 +233,7 @@ curl -X POST http://localhost:8080/api/scripts/assign \
 ### Remove Assignment
 
 ```bash
-curl -X DELETE http://localhost:8080/api/scripts/assign/plex
+curl -X DELETE http://localhost:3000/api/scripts/assign/plex
 ```
 
 ## Tips
@@ -304,5 +272,5 @@ echo $?  # Should be 0 to allow
 
 Check operation logs in the History page or via API:
 ```bash
-curl http://localhost:8080/api/operations
+curl http://localhost:3000/api/operations
 ```

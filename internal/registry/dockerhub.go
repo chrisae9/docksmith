@@ -25,6 +25,35 @@ func NewDockerHubClient() *DockerHubClient {
 	}
 }
 
+// doWithRetry executes an HTTP request with exponential backoff retry on transient errors.
+func (c *DockerHubClient) doWithRetry(req *http.Request) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := initialBackoff * time.Duration(1<<(attempt-1))
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
 // getMaxPages determines optimal page limit based on repository type
 // Official images (library/*) tend to have many tags, user images have fewer
 func (c *DockerHubClient) getMaxPages(repository string) int {
@@ -91,7 +120,7 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.doWithRetry(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tags: %w", err)
 		}
@@ -172,7 +201,7 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	tokenResp, err := c.httpClient.Do(tokenReq)
+	tokenResp, err := c.doWithRetry(tokenReq)
 	if err != nil {
 		return "", fmt.Errorf("failed to get auth token: %w", err)
 	}
@@ -203,7 +232,7 @@ func (c *DockerHubClient) GetTagDigest(ctx context.Context, repository, tag stri
 	manifestReq.Header.Set("Authorization", "Bearer "+tokenData.Token)
 	manifestReq.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 
-	manifestResp, err := c.httpClient.Do(manifestReq)
+	manifestResp, err := c.doWithRetry(manifestReq)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch manifest: %w", err)
 	}
@@ -242,7 +271,7 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.doWithRetry(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tags: %w", err)
 		}

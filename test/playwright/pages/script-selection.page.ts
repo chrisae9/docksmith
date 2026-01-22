@@ -44,7 +44,14 @@ export class ScriptSelectionPage {
 
   async waitForLoaded(timeout = 30000) {
     await expect(this.pageTitle).toHaveText('Select Script', { timeout });
-    await expect(this.loadingSpinner).toBeHidden({ timeout });
+    // Wait for loading states to complete - either scripts appear or info box (no scripts)
+    await this.page.waitForFunction(() => {
+      const scripts = document.querySelectorAll('.script-item');
+      const infoBox = document.querySelector('.info-box');
+      const loading = document.querySelectorAll('.loading-state');
+      // Either have scripts, info box, or no loading states
+      return scripts.length > 0 || infoBox !== null || loading.length === 0;
+    }, { timeout });
   }
 
   async search(query: string) {

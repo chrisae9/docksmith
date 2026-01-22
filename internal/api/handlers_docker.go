@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-
-	"github.com/chis/docksmith/internal/output"
 )
 
 // DockerConfig represents the structure of docker config.json
@@ -35,14 +33,14 @@ func (s *Server) handleDockerConfig(w http.ResponseWriter, r *http.Request) {
 	// Read the config file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		output.WriteJSONError(w, fmt.Errorf("failed to read Docker config: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to read Docker config: %w", err))
 		return
 	}
 
 	// Parse the config
 	var config DockerConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		output.WriteJSONError(w, fmt.Errorf("failed to parse Docker config: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to parse Docker config: %w", err))
 		return
 	}
 

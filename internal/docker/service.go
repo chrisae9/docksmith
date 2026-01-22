@@ -214,3 +214,20 @@ func CreateContainerMap(containers []Container) map[string]*Container {
 	}
 	return containerMap
 }
+
+// GetContainerByName finds a container by name.
+// Returns the container if found, or an error if not found.
+func (s *Service) GetContainerByName(ctx context.Context, containerName string) (*Container, error) {
+	containers, err := s.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	for i := range containers {
+		if containers[i].Name == containerName {
+			return &containers[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("container not found: %s", containerName)
+}

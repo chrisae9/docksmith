@@ -63,6 +63,27 @@ func (c *Comparator) Compare(v1, v2 *Version) int {
 		return strings.Compare(v1.Prerelease, v2.Prerelease)
 	}
 
+	// Compare build numbers (e.g., LinuxServer -ls285 vs -ls286)
+	// Higher build number = newer version
+	if v1.BuildNumber != v2.BuildNumber {
+		if v1.BuildNumber < v2.BuildNumber {
+			return -1
+		}
+		return 1
+	}
+
+	// Final tie-breaker: prefer more fully-specified version formats
+	// e.g., v3.41.0 should be preferred over v3.41 (they're semantically equal)
+	// This ensures deterministic behavior when tags like "v3.41" and "v3.41.0" exist
+	dots1 := strings.Count(v1.Original, ".")
+	dots2 := strings.Count(v2.Original, ".")
+	if dots1 != dots2 {
+		if dots1 < dots2 {
+			return -1 // v1 has fewer components, prefer v2
+		}
+		return 1 // v1 has more components, prefer v1
+	}
+
 	return 0
 }
 

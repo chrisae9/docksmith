@@ -26,11 +26,14 @@ export class HistoryPage {
   }
 
   async waitForLoaded(timeout = 30000) {
-    await expect(this.loadingSpinner).toBeHidden({ timeout });
-    // Either have operations or empty message
-    const hasOperations = await this.operationCards.count() > 0;
-    const hasEmpty = await this.emptyMessage.isVisible();
-    expect(hasOperations || hasEmpty).toBe(true);
+    // Wait for page title to show History
+    await expect(this.page.locator('h1')).toContainText('History', { timeout });
+    // Wait for loading to complete - either operations or empty message
+    await this.page.waitForFunction(() => {
+      const ops = document.querySelectorAll('.operation-card');
+      const empty = document.querySelector('.empty');
+      return ops.length > 0 || empty !== null;
+    }, { timeout });
   }
 
   async getOperationCount(): Promise<number> {

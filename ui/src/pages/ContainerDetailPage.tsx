@@ -30,6 +30,7 @@ export function ContainerDetailPage() {
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [ignoreFlag, setIgnoreFlag] = useState(false);
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
+  const [allowPrereleaseFlag, setAllowPrereleaseFlag] = useState(false);
   const [versionPin, setVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
   const [restartAfter, setRestartAfter] = useState<string>('');
   const [tagRegex, setTagRegex] = useState<string>('');
@@ -41,6 +42,7 @@ export function ContainerDetailPage() {
   const [originalScript, setOriginalScript] = useState<string>('');
   const [originalIgnore, setOriginalIgnore] = useState(false);
   const [originalAllowLatest, setOriginalAllowLatest] = useState(false);
+  const [originalAllowPrerelease, setOriginalAllowPrerelease] = useState(false);
   const [originalVersionPin, setOriginalVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
   const [originalRestartAfter, setOriginalRestartAfter] = useState<string>('');
   const [originalTagRegex, setOriginalTagRegex] = useState<string>('');
@@ -120,11 +122,12 @@ export function ContainerDetailPage() {
     const scriptChanged = selectedScript !== originalScript;
     const ignoreChanged = ignoreFlag !== originalIgnore;
     const allowLatestChanged = allowLatestFlag !== originalAllowLatest;
+    const allowPrereleaseChanged = allowPrereleaseFlag !== originalAllowPrerelease;
     const versionPinChanged = versionPin !== originalVersionPin;
     const restartAfterChanged = restartAfter !== originalRestartAfter;
     const tagRegexChanged = tagRegex !== originalTagRegex;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinChanged || restartAfterChanged || tagRegexChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPin, restartAfter, tagRegex, originalScript, originalIgnore, originalAllowLatest, originalVersionPin, originalRestartAfter, originalTagRegex]);
+    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || allowPrereleaseChanged || versionPinChanged || restartAfterChanged || tagRegexChanged);
+  }, [selectedScript, ignoreFlag, allowLatestFlag, allowPrereleaseFlag, versionPin, restartAfter, tagRegex, originalScript, originalIgnore, originalAllowLatest, originalAllowPrerelease, originalVersionPin, originalRestartAfter, originalTagRegex]);
 
   const fetchData = async () => {
     if (!container) return;
@@ -143,6 +146,7 @@ export function ContainerDetailPage() {
         const scriptPath = labels['docksmith.pre-update-check'] || '';
         const ignore = labels['docksmith.ignore'] === 'true';
         const allowLatest = labels['docksmith.allow-latest'] === 'true';
+        const allowPrerelease = labels['docksmith.allow-prerelease'] === 'true';
         const restartDeps = labels['docksmith.restart-after'] || '';
         const tagRegexValue = labels['docksmith.tag-regex'] || '';
 
@@ -166,6 +170,7 @@ export function ContainerDetailPage() {
         }
         setIgnoreFlag(ignore);
         setAllowLatestFlag(allowLatest);
+        setAllowPrereleaseFlag(allowPrerelease);
         setVersionPin(pin);
         if (!hasPendingRestartAfter) {
           setRestartAfter(restartDeps);
@@ -178,6 +183,7 @@ export function ContainerDetailPage() {
         setOriginalScript(scriptPath);
         setOriginalIgnore(ignore);
         setOriginalAllowLatest(allowLatest);
+        setOriginalAllowPrerelease(allowPrerelease);
         setOriginalVersionPin(pin);
         setOriginalRestartAfter(restartDeps);
         setOriginalTagRegex(tagRegexValue);
@@ -208,53 +214,6 @@ export function ContainerDetailPage() {
     }
   };
 
-  const getChangeSummary = () => {
-    const changes: string[] = [];
-
-    if (ignoreFlag !== originalIgnore) {
-      changes.push(`${ignoreFlag ? 'Enable' : 'Disable'} ignore`);
-    }
-    if (allowLatestFlag !== originalAllowLatest) {
-      changes.push(`${allowLatestFlag ? 'Allow' : 'Disallow'} :latest tag`);
-    }
-    if (versionPin !== originalVersionPin) {
-      if (versionPin === 'none') {
-        changes.push('Remove version pin');
-      } else {
-        changes.push(`Pin to ${versionPin} version`);
-      }
-    }
-    if (selectedScript !== originalScript) {
-      if (selectedScript && !originalScript) {
-        changes.push('Add pre-update script');
-      } else if (!selectedScript && originalScript) {
-        changes.push('Remove pre-update script');
-      } else {
-        changes.push('Change pre-update script');
-      }
-    }
-    if (restartAfter !== originalRestartAfter) {
-      if (restartAfter && !originalRestartAfter) {
-        changes.push('Add restart dependencies');
-      } else if (!restartAfter && originalRestartAfter) {
-        changes.push('Remove restart dependencies');
-      } else {
-        changes.push('Update restart dependencies');
-      }
-    }
-    if (tagRegex !== originalTagRegex) {
-      if (tagRegex && !originalTagRegex) {
-        changes.push('Add tag filter');
-      } else if (!tagRegex && originalTagRegex) {
-        changes.push('Remove tag filter');
-      } else {
-        changes.push('Update tag filter');
-      }
-    }
-
-    return changes;
-  };
-
   const handleSave = (force = false) => {
     if (!container) {
       console.error('Container is undefined in handleSave');
@@ -270,6 +229,9 @@ export function ContainerDetailPage() {
     }
     if (allowLatestFlag !== originalAllowLatest) {
       labelChanges.allow_latest = allowLatestFlag;
+    }
+    if (allowPrereleaseFlag !== originalAllowPrerelease) {
+      labelChanges.allow_prerelease = allowPrereleaseFlag;
     }
     if (versionPin !== originalVersionPin) {
       // Clear all pin labels first, then set the new one
@@ -308,6 +270,7 @@ export function ContainerDetailPage() {
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
+    setAllowPrereleaseFlag(originalAllowPrerelease);
     setVersionPin(originalVersionPin);
     setRestartAfter(originalRestartAfter);
     setTagRegex(originalTagRegex);
@@ -371,6 +334,8 @@ export function ContainerDetailPage() {
         return <span className="status-badge ignored">Ignored</span>;
       case 'METADATA_UNAVAILABLE':
         return <span className="status-badge metadata">Metadata Unavailable</span>;
+      case 'COMPOSE_MISMATCH':
+        return <span className="status-badge mismatch">Compose Mismatch</span>;
       default:
         return <span className="status-badge unknown">{container.status}</span>;
     }
@@ -405,7 +370,7 @@ export function ContainerDetailPage() {
       case ChangeType.MajorChange:
         return 'major'; // red (danger) - matches major badge
       default:
-        return 'accent';
+        return 'primary';
     }
   };
 
@@ -480,6 +445,7 @@ export function ContainerDetailPage() {
             {container.status === 'LOCAL_IMAGE' && <i className="fa-solid fa-hard-drive"></i>}
             {container.status === 'IGNORED' && <i className="fa-solid fa-eye-slash"></i>}
             {container.status === 'METADATA_UNAVAILABLE' && <i className="fa-solid fa-circle-question"></i>}
+            {container.status === 'COMPOSE_MISMATCH' && <i className="fa-solid fa-code-compare"></i>}
           </div>
           <div className="hero-status-content">
             <div className="hero-status-badges">
@@ -512,6 +478,16 @@ export function ContainerDetailPage() {
                 )}
               </div>
             )}
+            {container.status === 'COMPOSE_MISMATCH' && (
+              <div className="hero-version-info mismatch-info">
+                {container.error && (
+                  <span className="mismatch-error">{container.error}</span>
+                )}
+                {!container.error && (
+                  <span className="mismatch-error">Container image doesn't match compose file</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -532,19 +508,6 @@ export function ContainerDetailPage() {
               <i className="fa-solid fa-rotate-right"></i>
               Sync
             </button>
-          </div>
-        )}
-
-        {/* Unsaved Changes Warning */}
-        {hasChanges && (
-          <div className="changes-warning">
-            <div className="changes-warning-content">
-              <i className="fa-solid fa-exclamation-triangle"></i>
-              <div className="changes-warning-text">
-                <strong>Container will be restarted</strong>
-                <p>Changes: {getChangeSummary().join(', ')}</p>
-              </div>
-            </div>
           </div>
         )}
 
@@ -579,6 +542,16 @@ export function ContainerDetailPage() {
                       type="checkbox"
                       checked={allowLatestFlag}
                       onChange={(e) => setAllowLatestFlag(e.target.checked)}
+                    />
+                  </label>
+
+                  {/* Allow Prerelease Flag */}
+                  <label className="checkbox-row">
+                    <span className="row-label">Allow Prereleases</span>
+                    <input
+                      type="checkbox"
+                      checked={allowPrereleaseFlag}
+                      onChange={(e) => setAllowPrereleaseFlag(e.target.checked)}
                     />
                   </label>
 
@@ -764,6 +737,31 @@ export function ContainerDetailPage() {
                   <span className="detail-value mono">{container.recommended_tag}</span>
                 </div>
               )}
+              {/* Show SHA diff for :latest tag rebuilds */}
+              {container.using_latest_tag && container.current_digest && container.latest_digest &&
+               container.current_digest !== container.latest_digest && (
+                <div className="detail-item digest-diff">
+                  <span className="detail-label">Image SHA</span>
+                  <div className="detail-value mono digest-comparison">
+                    <span className="digest-current" title={container.current_digest}>
+                      {container.current_digest.replace('sha256:', '').substring(0, 12)}
+                    </span>
+                    <i className="fa-solid fa-arrow-right digest-arrow"></i>
+                    <span className="digest-latest" title={container.latest_digest}>
+                      {container.latest_digest.replace('sha256:', '').substring(0, 12)}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {/* Show image created timestamp from OCI labels */}
+              {container.labels?.['org.opencontainers.image.created'] && (
+                <div className="detail-item">
+                  <span className="detail-label">Image Built</span>
+                  <span className="detail-value">
+                    {new Date(container.labels['org.opencontainers.image.created']).toLocaleString()}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -810,6 +808,8 @@ export function ContainerDetailPage() {
                           return <i className="fa-solid fa-eye-slash label-icon-inline"></i>;
                         case 'docksmith.allow-latest':
                           return <i className="fa-solid fa-tag label-icon-inline"></i>;
+                        case 'docksmith.allow-prerelease':
+                          return <i className="fa-solid fa-flask label-icon-inline"></i>;
                         case 'docksmith.version-pin-major':
                         case 'docksmith.version-pin-minor':
                         case 'docksmith.version-pin-patch':

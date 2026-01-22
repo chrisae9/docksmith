@@ -122,9 +122,11 @@
   box-shadow: var(--shadow-xs);
 }
 
-.container-item {
+.restart-dependencies-page .container-item {
   display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: flex-start;
   padding: var(--space-7) var(--space-8);
   border-bottom: var(--border-separator);
   cursor: pointer;
@@ -132,57 +134,58 @@
   gap: var(--space-6);
 }
 
-.container-item:last-child {
+.restart-dependencies-page .container-item:last-child {
   border-bottom: none;
 }
 
-.container-item:hover {
+.restart-dependencies-page .container-item:hover {
   background: var(--color-bg-tertiary);
 }
 
-.container-item:active {
+.restart-dependencies-page .container-item:active {
   background: var(--color-bg-elevated);
 }
 
-.container-item.selected {
+.restart-dependencies-page .container-item.selected {
   background: rgba(100, 210, 255, 0.1);
 }
 
-.container-checkbox {
+.restart-dependencies-page .container-checkbox {
   display: none;
 }
 
-.checkbox-icon {
+.restart-dependencies-page .checkbox-icon {
   font-size: var(--text-5xl);
   color: var(--color-text-tertiary);
   flex-shrink: 0;
   transition: color var(--transition-fast);
 }
 
-.container-item.selected .checkbox-icon {
+.restart-dependencies-page .container-item.selected .checkbox-icon {
   color: var(--color-accent);
 }
 
-.container-info {
+.restart-dependencies-page .container-info {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  text-align: left;
 }
 
-.container-header {
+.restart-dependencies-page .container-header {
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-.container-name {
+.restart-dependencies-page .container-name {
   font-size: var(--text-xl);
   font-weight: var(--font-medium);
   color: var(--color-text-primary);
 }
 
-.container-stack {
+.restart-dependencies-page .container-stack {
   padding: var(--space-1) var(--space-4);
   border-radius: var(--radius-lg);
   font-size: var(--text-sm);
@@ -191,7 +194,7 @@
   color: var(--color-text-secondary);
 }
 
-.container-image {
+.restart-dependencies-page .container-image {
   font-family: var(--font-mono);
   font-size: var(--text-base);
   color: var(--color-text-secondary);

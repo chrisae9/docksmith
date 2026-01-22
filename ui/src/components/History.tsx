@@ -19,8 +19,9 @@ interface RollbackConfirmation {
 // Operation types that support rollback (not restart, rollback, or label_change)
 const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack'];
 
-// All operation types for filtering
-type OperationType = 'all' | 'single' | 'batch' | 'stack' | 'rollback' | 'restart' | 'label_change';
+// Filter options for operation types
+// Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
+type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change';
 
 export function History({ onBack: _onBack }: HistoryProps) {
   const navigate = useNavigate();
@@ -28,7 +29,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'failed'>('all');
-  const [typeFilter, setTypeFilter] = useState<OperationType>('single');
+  const [typeFilter, setTypeFilter] = useState<OperationType>('updates');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
@@ -128,7 +129,14 @@ export function History({ onBack: _onBack }: HistoryProps) {
     if (statusFilter === 'failed' && !(op.status === 'failed' || op.rollback_occurred)) return false;
 
     // Type filter
-    if (typeFilter !== 'all' && op.operation_type !== typeFilter) return false;
+    if (typeFilter !== 'all') {
+      if (typeFilter === 'updates') {
+        // 'updates' filter shows both single and batch update operations
+        if (op.operation_type !== 'single' && op.operation_type !== 'batch' && op.operation_type !== 'stack') return false;
+      } else if (op.operation_type !== typeFilter) {
+        return false;
+      }
+    }
 
     // Search filter
     if (searchQuery) {
@@ -233,11 +241,9 @@ export function History({ onBack: _onBack }: HistoryProps) {
             aria-label="Filter by operation type"
           >
             <option value="all">All Types</option>
-            <option value="single">Updates</option>
-            <option value="batch">Batch</option>
-            <option value="stack">Stack</option>
-            <option value="rollback">Rollback</option>
-            <option value="restart">Restart</option>
+            <option value="updates">Updates</option>
+            <option value="rollback">Rollbacks</option>
+            <option value="restart">Restarts</option>
             <option value="label_change">Labels</option>
           </select>
         </div>
@@ -325,7 +331,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
                 </div>
               </div>
 
-              {expandedOp === op.operation_id && (
+              <div className="operation-details-wrapper">
                 <div className="operation-expanded">
                   <div className="op-detail-grid">
                     <div className="op-detail">
@@ -395,7 +401,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
                     <span className="op-id">ID: {op.operation_id.slice(0, 12)}</span>
                   </div>
                 </div>
-              )}
+              </div>
             </div>
           ))
         )}

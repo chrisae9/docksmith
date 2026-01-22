@@ -1,253 +1,280 @@
-# Docksmith Labels Reference
+# Container Labels
 
-Docksmith uses Docker container labels to configure behavior for specific containers.
+Configure Docksmith behavior using Docker labels in your compose files.
 
-## Available Labels
+## Contents
 
-### `docksmith.ignore`
+- [Quick Reference](#quick-reference)
+- [Basic Labels](#basic-labels)
+- [Version Constraint Labels](#version-constraint-labels)
+- [Common Patterns](#common-patterns)
+- [Label Sync](#label-sync)
+- [Managing Labels](#managing-labels)
 
-**Purpose:** Completely ignore a container from update checking.
+## Quick Reference
 
-**Use Case:** Containers that are intentionally pinned to old versions, deprecated images, or containers where updates are known to break functionality.
+| Label | Values | Description |
+|-------|--------|-------------|
+| `docksmith.ignore` | `true` | Skip container from all checks and updates |
+| `docksmith.allow-latest` | `true` | Allow `:latest` tag without warnings |
+| `docksmith.pre-update-check` | `/scripts/check.sh` | Script to run before updates |
+| `docksmith.restart-after` | `container-name` | Restart when another container updates |
+| `docksmith.version-pin-major` | `true` | Stay within current major version |
+| `docksmith.version-pin-minor` | `true` | Stay within current minor version |
+| `docksmith.tag-regex` | `^v?[0-9.]+$` | Only consider matching tags |
+| `docksmith.version-min` | `2.0.0` | Minimum version to consider |
+| `docksmith.version-max` | `3.0.0` | Maximum version to consider |
 
-**Valid Values:** `true`, `1`, `yes` (case-insensitive)
+## Basic Labels
 
-**Example:**
+### docksmith.ignore
+
+Skip a container from all update checks.
+
 ```yaml
 services:
-  readarr:
-    image: ghcr.io/linuxserver/readarr:develop
+  docksmith:
+    image: ghcr.io/chrisae9/docksmith:latest
     labels:
       - docksmith.ignore=true
 ```
 
-**Behavior:**
-- Container is skipped during discovery
-- Does not appear in update reports
-- Status: `IGNORED`
+Use for:
+- Docksmith itself (prevent self-updates)
+- Containers you manage manually
+- Development containers
 
----
+### docksmith.allow-latest
 
-### `docksmith.allow-latest`
+Allow `:latest` tag without migration warnings. By default, Docksmith warns about containers using `:latest` since it can't determine if updates are available.
 
-**Purpose:** Allow `:latest` tag without migration warnings for containers that intentionally use rolling releases.
-
-**Use Case:** Containers where the maintainer abandoned semantic versioning and only releases via `:latest`, or containers that intentionally track edge/unstable releases.
-
-**Valid Values:** `true`, `1`, `yes` (case-insensitive)
-
-**Example:**
 ```yaml
 services:
-  vpn:
+  plex:
+    image: ghcr.io/linuxserver/plex:latest
+    labels:
+      - docksmith.allow-latest=true
+```
+
+Use for:
+- Rolling-release images you trust
+- LinuxServer images that use `:latest` well
+- Images with poor versioning
+
+### docksmith.pre-update-check
+
+Run a script before allowing updates. Exit 0 to allow, non-zero to block.
+
+```yaml
+services:
+  plex:
+    image: ghcr.io/linuxserver/plex:latest
+    labels:
+      - docksmith.pre-update-check=/scripts/check-plex.sh
+```
+
+See [scripts.md](scripts.md) for script examples.
+
+### docksmith.restart-after
+
+Restart this container after another container updates or restarts. Useful for VPN-dependent containers.
+
+```yaml
+services:
+  gluetun:
     image: qmcgaw/gluetun:latest
     labels:
       - docksmith.allow-latest=true
-```
 
-**Behavior Without Label:**
-```
-• gluetun [:latest] - UP TO DATE - MIGRATE TO SEMVER (latest)
-  → Migrate to: v3.40.0
-```
-
-**Behavior With Label:**
-```
-• gluetun [:latest] - UP TO DATE (latest)
-```
-
-**When to Use:**
-- Maintainer abandoned semantic versioning (e.g., gluetun)
-- Only `:latest` is actively maintained
-- Rolling release model without version tags
-- Intentionally tracking development/edge builds
-
-**Technical Details:**
-- Still checks if `:latest` digest has changed (update detection works)
-- Only suppresses the "MIGRATE TO SEMVER" warning
-- See [edge-cases/latest-tag-handling.md](./edge-cases/latest-tag-handling.md) for details
-
----
-
-### `docksmith.pre-update-check`
-
-**Purpose:** Execute a custom script before allowing updates. If the script exits non-zero, the update is blocked.
-
-**Use Case:** Containers where updates should be conditional on runtime state or external factors (e.g., Plex should not update while users are watching content, databases should check for active connections).
-
-**Valid Values:** Absolute path to an executable script
-
-**Example:**
-```yaml
-services:
-  plex:
-    image: ghcr.io/linuxserver/plex:latest
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    network_mode: service:gluetun
     labels:
-      - docksmith.pre-update-check=/home/user/scripts/check-plex.sh
+      - docksmith.restart-after=gluetun
 ```
 
-**Script Contract:**
-- **Exit 0:** Safe to update (check passed)
-- **Non-zero exit:** Block update (check failed)
-- **stdout/stderr:** Captured and displayed directly as block reason (be descriptive!)
-- **Best practice:** Always fail-safe (block if unable to verify conditions)
+When gluetun restarts (from update or manual restart), qbittorrent automatically restarts too.
 
-**Environment Variables Available:**
-- `CONTAINER_NAME`: Name of the container being checked
+**Multiple dependencies:** Use comma-separated values:
 
-**Example Check Script:**
-```bash
-#!/bin/bash
-
-# Pre-update check for Plex - blocks updates if users are actively watching
-# Exit 0 = safe to update (no active users)
-# Exit 1 = blocked (users are watching or check failed)
-
-cd /home/user/scripts || {
-    echo "Update blocked: Cannot access check script directory"
-    exit 1
-}
-
-# Check for active Plex sessions via Tautulli API
-# Script outputs descriptive message and exits 0 (allow) or 1 (block)
-./check-active-users.py
+```yaml
+labels:
+  - docksmith.restart-after=gluetun,vpn-helper
 ```
 
-**Behavior Without Check:**
-```
-• plex [:latest] - UPDATE AVAILABLE (1.42.0 → 1.42.2, patch)
-```
+## Version Constraint Labels
 
-**Behavior With Check (Passed):**
-```
-• plex [:latest] - UPDATE AVAILABLE (1.42.0 → 1.42.2, patch)
-```
+### docksmith.version-pin-major
 
-**Behavior With Check (Blocked):**
-```
-• plex [:latest] - UPDATE AVAILABLE - BLOCKED (1.42.0 → 1.42.2, patch)
-  ⚠ Blocked: Update blocked: 2 active Plex session(s) - alice, bob
-```
-
-**When to Use:**
-- Update depends on runtime state (active users, connections, jobs)
-- Need to check external service before updating (health checks, coordination)
-- Custom business logic for update gating
-- Integration with monitoring systems (Tautulli, Grafana, etc.)
-
-**Technical Details:**
-- Script is executed with `/bin/bash -c`
-- Both stdout and stderr are captured
-- Script timeout follows container operation timeout
-- Blocked updates still appear in reports but won't be applied
-- Check is only run when update is detected (not on every check)
-
----
-
-## Label Format
-
-All docksmith labels follow the format:
-
-```
-docksmith.LABEL_NAME=VALUE
-```
-
-### In docker-compose.yaml
+Stay within the current major version. Prevents breaking changes from major upgrades.
 
 ```yaml
 services:
-  myservice:
-    image: some/image:tag
+  postgres:
+    image: postgres:16
     labels:
-      - docksmith.ignore=true
-      - docksmith.allow-latest=true
+      - docksmith.version-pin-major=true
 ```
 
-### In Dockerfile
+On `postgres:16.1.0`:
+- ✅ Updates to `16.2.0`, `16.99.0`
+- ❌ Won't update to `17.0.0`
 
-```dockerfile
-LABEL docksmith.ignore="true"
-LABEL docksmith.allow-latest="true"
+### docksmith.version-pin-minor
+
+Stay within the current minor version. For conservative patch-only updates.
+
+```yaml
+services:
+  redis:
+    image: redis:7.2
+    labels:
+      - docksmith.version-pin-minor=true
 ```
 
-### Docker CLI
+On `redis:7.2.1`:
+- ✅ Updates to `7.2.2`, `7.2.99`
+- ❌ Won't update to `7.3.0`
 
-```bash
-docker run -l docksmith.ignore=true some/image:tag
+### docksmith.tag-regex
+
+Only consider tags matching a regex pattern.
+
+```yaml
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    labels:
+      - docksmith.tag-regex=^[0-9.]+-alpine$
 ```
 
-## Implementation Details
+Matches: `1.25.3-alpine`, `1.26.0-alpine`
+Ignores: `1.25.3`, `alpine`, `mainline-alpine`
 
-Labels are checked during container discovery:
+### docksmith.version-min
 
-```go
-// Check for ignore label
-if ignoreValue, found := container.Labels["docksmith.ignore"]; found {
-    ignoreValue = strings.ToLower(strings.TrimSpace(ignoreValue))
-    shouldIgnore := ignoreValue == "true" || ignoreValue == "1" || ignoreValue == "yes"
-    if shouldIgnore {
-        // Skip this container
-    }
-}
+Set a minimum version threshold.
 
-// Check for allow-latest label
-if allowValue, found := container.Labels["docksmith.allow-latest"]; found {
-    allowValue = strings.ToLower(strings.TrimSpace(allowValue))
-    allowLatest := allowValue == "true" || allowValue == "1" || allowValue == "yes"
-    if allowLatest {
-        // Don't suggest migration from :latest
-    }
-}
-
-// Check for pre-update check script
-if checkScript, found := container.Labels["docksmith.pre-update-check"]; found && checkScript != "" {
-    update.PreUpdateCheck = checkScript
-
-    // Run the check if update is available
-    success, reason := runPreUpdateCheck(ctx, checkScript, container.Name)
-    if !success {
-        update.Status = UpdateAvailableBlocked
-        update.PreUpdateCheckFail = reason
-    }
-}
+```yaml
+services:
+  node:
+    image: node:20
+    labels:
+      - docksmith.version-min=20.0.0
 ```
 
-## Combining Labels
+### docksmith.version-max
 
-Labels can be combined:
+Set a maximum version cap. Useful for deferring major upgrades.
+
+```yaml
+services:
+  node:
+    image: node:20
+    labels:
+      - docksmith.version-max=20.99.99
+```
+
+## Common Patterns
+
+### Database with Major Version Pin
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    labels:
+      - docksmith.version-pin-major=true
+      - docksmith.pre-update-check=/scripts/backup-db.sh
+```
+
+### Media Server with User Check
 
 ```yaml
 services:
   plex:
     image: ghcr.io/linuxserver/plex:latest
     labels:
-      # Allow :latest without migration warnings
       - docksmith.allow-latest=true
-      # Check for active users before allowing updates
-      - docksmith.pre-update-check=/home/user/scripts/check-plex.sh
+      - docksmith.pre-update-check=/scripts/check-plex.sh
 
-  myservice:
-    image: some/image:latest
+  jellyfin:
+    image: jellyfin/jellyfin:latest
     labels:
-      # This doesn't make sense - if ignored, allow-latest has no effect
-      - docksmith.ignore=true
-      - docksmith.allow-latest=true  # Redundant
-      - docksmith.pre-update-check=/scripts/check.sh  # Also redundant
+      - docksmith.allow-latest=true
+      - docksmith.pre-update-check=/scripts/check-jellyfin.sh
 ```
 
-**Note:** If `docksmith.ignore=true` is set, the container is skipped entirely and other labels have no effect.
+### VPN with Dependent Containers
 
-## Future Labels
+```yaml
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    labels:
+      - docksmith.allow-latest=true
 
-Potential future labels (not yet implemented):
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    network_mode: service:gluetun
+    labels:
+      - docksmith.allow-latest=true
+      - docksmith.restart-after=gluetun
 
-- `docksmith.update-strategy` - Control automatic update behavior
-- `docksmith.pin-version` - Pin to specific version pattern
-- `docksmith.check-interval` - Override default check frequency
-- `docksmith.notify` - Custom notification settings
-- `docksmith.allow-prerelease` - Allow upgrading to prerelease versions
+  prowlarr:
+    image: linuxserver/prowlarr:latest
+    network_mode: service:gluetun
+    labels:
+      - docksmith.allow-latest=true
+      - docksmith.restart-after=gluetun
+```
 
-## Related Documentation
+### Alpine-Only Images
 
-- [Edge Cases: Latest Tag Handling](./edge-cases/latest-tag-handling.md)
-- [USAGE.md](../USAGE.md)
+```yaml
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    labels:
+      - docksmith.tag-regex=^[0-9.]+-alpine$
+```
+
+### Stay on LTS
+
+```yaml
+services:
+  node:
+    image: node:20-lts
+    labels:
+      - docksmith.tag-regex=^20.*-lts$
+```
+
+## Label Sync
+
+Docksmith detects when labels in your compose file differ from the running container. This happens when:
+- You modify labels in the compose file but haven't recreated the container
+- Labels were changed via the UI/API
+
+The dashboard shows a "sync" indicator when labels are out of sync.
+
+## Managing Labels
+
+### Via Compose File
+
+Edit your `docker-compose.yml` and recreate:
+
+```bash
+docker compose up -d
+```
+
+### Via API
+
+```bash
+# Get labels
+curl http://localhost:3000/api/labels/mycontainer
+
+# Set label
+curl -X POST http://localhost:3000/api/labels/set \
+  -H "Content-Type: application/json" \
+  -d '{"container":"mycontainer","labels":{"docksmith.ignore":"true"}}'
+```

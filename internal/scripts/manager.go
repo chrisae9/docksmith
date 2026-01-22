@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/config"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/storage"
@@ -68,6 +67,13 @@ const (
 	//          "20.99" to stay on Node 20.x indefinitely
 	// Default: "" (no maximum)
 	VersionMaxLabel = "docksmith.version-max"
+
+	// AllowPrereleaseLabel is the Docker label key to allow prerelease versions
+	// When set to "true", prerelease versions (alpha, beta, rc, pre, etc.) will be considered for updates.
+	// By default, prereleases are skipped unless you're already running a prerelease version.
+	// Example: Set to "true" on a container where you want to track beta releases
+	// Default: false (skip prerelease versions)
+	AllowPrereleaseLabel = "docksmith.allow-prerelease"
 )
 
 // Manager handles script discovery, validation, and assignment operations.
@@ -285,29 +291,6 @@ func (m *Manager) SetAllowLatest(ctx context.Context, containerName string, allo
 	}
 
 	return nil
-}
-
-// findComposeFileForContainer finds the compose file that defines a container.
-// Scans all configured compose file paths and returns the first match.
-// Supports include-based compose setups by searching through included files.
-func (m *Manager) findComposeFileForContainer(containerName string) (string, error) {
-	for _, composePath := range m.config.ComposeFilePaths {
-		// Load compose file (handles include-based setups)
-		composeFile, err := compose.LoadComposeFileOrIncluded(composePath, containerName)
-		if err != nil {
-			// Skip files that can't be loaded
-			continue
-		}
-
-		// Try to find service in this file
-		_, err = composeFile.FindServiceByContainerName(containerName)
-		if err == nil {
-			// Found it! Return the actual file path (might be an included file)
-			return composeFile.Path, nil
-		}
-	}
-
-	return "", fmt.Errorf("no compose file found for container: %s", containerName)
 }
 
 // ListAssignments retrieves all script assignments from the database.

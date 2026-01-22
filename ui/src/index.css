@@ -1,5 +1,35 @@
-/* Import design tokens first */
+/* ============================================
+   DOCKSMITH GLOBAL STYLES
+   Import all CSS modules in correct order
+   ============================================ */
+
+/* Design tokens (spacing, typography, etc.) */
 @import './styles/tokens.css';
+
+/* Base styles (colors, resets, app container) */
+@import './styles/base.css';
+
+/* Shared page layout styles */
+@import './styles/page-layout.css';
+
+/* Shared component styles */
+@import './styles/components.css';
+
+/* Dashboard styles */
+@import './styles/dashboard.css';
+
+/* History page styles */
+@import './styles/history.css';
+
+/* Modal and dialog styles */
+@import './styles/modals.css';
+
+/* Settings page styles */
+@import './styles/settings.css';
+
+/* Progress/update styles */
+@import './styles/progress-update.css';
+@import './styles/progress-common.css';
 
 /* Base resets and defaults */
 :root {

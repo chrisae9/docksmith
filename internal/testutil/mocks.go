@@ -85,20 +85,6 @@ func NewUpdateOperation(operationID, containerName, status string) storage.Updat
 	}
 }
 
-// NewComposeBackup creates a ComposeBackup for testing
-func NewComposeBackup(operationID, containerName string) storage.ComposeBackup {
-	now := time.Now()
-	return storage.ComposeBackup{
-		OperationID:     operationID,
-		ContainerName:   containerName,
-		StackName:       "test-stack",
-		ComposeFilePath: "/opt/stacks/" + containerName + "/docker-compose.yml",
-		BackupFilePath:  "/data/backups/" + operationID + ".yml",
-		BackupTimestamp: now,
-		CreatedAt:       now,
-	}
-}
-
 // NewRollbackPolicy creates a RollbackPolicy for testing
 func NewRollbackPolicy(entityType string) storage.RollbackPolicy {
 	now := time.Now()

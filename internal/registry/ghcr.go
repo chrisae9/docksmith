@@ -48,6 +48,35 @@ func NewGHCRClient(githubPAT string) *GHCRClient {
 	}
 }
 
+// doWithRetry executes an HTTP request with exponential backoff retry on transient errors.
+func (c *GHCRClient) doWithRetry(req *http.Request) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := initialBackoff * time.Duration(1<<(attempt-1))
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
 // getMaxPages determines optimal page limit based on repository type
 // Well-known orgs tend to have many tags, user repos have fewer
 func (c *GHCRClient) getMaxPages(repository string, isV2API bool) int {
@@ -168,7 +197,7 @@ func (c *GHCRClient) ListTags(ctx context.Context, repository string) ([]string,
 			req.Header.Set("Accept", "application/vnd.github+json")
 			req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
-			resp, err := c.httpClient.Do(req)
+			resp, err := c.doWithRetry(req)
 			if err != nil {
 				break
 			}
@@ -268,7 +297,7 @@ func (c *GHCRClient) listTagsV2(ctx context.Context, repository string) ([]strin
 		}
 		req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.doWithRetry(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query GHCR: %w", err)
 		}
@@ -356,7 +385,7 @@ func (c *GHCRClient) getRegistryToken(ctx context.Context, repository string) (s
 			req.SetBasicAuth("token", c.githubPAT)
 		}
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.doWithRetry(req)
 		if err != nil {
 			lastErr = fmt.Errorf("%s request failed: %w", attempt.desc, err)
 			continue
@@ -478,7 +507,7 @@ func (c *GHCRClient) GetTagDigest(ctx context.Context, repository, tag string) (
 	// Accept both v2 manifest and v2 list (multi-arch) manifests
 	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithRetry(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to query GHCR: %w", err)
 	}
@@ -555,7 +584,7 @@ func (c *GHCRClient) ListTagsWithDigests(ctx context.Context, repository string)
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.doWithRetry(req)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to query GitHub Packages API: %w", err)
 			continue

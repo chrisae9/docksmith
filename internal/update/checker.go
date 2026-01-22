@@ -811,8 +811,17 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 	var versions []*version.Version
 	versionToTag := make(map[string]string)
 
-	// Check if current version is stable (no prerelease marker)
-	isCurrentStable := currentVersion != nil && currentVersion.Prerelease == ""
+	// Check if container explicitly allows prerelease versions
+	allowPrerelease := labels[scripts.AllowPrereleaseLabel] == "true" ||
+		labels[scripts.AllowPrereleaseLabel] == "1" ||
+		labels[scripts.AllowPrereleaseLabel] == "yes"
+
+	// Determine if we should skip prerelease versions
+	// Skip prereleases unless:
+	// 1. The allow-prerelease label is set, OR
+	// 2. The current version is itself a prerelease (user is already tracking prereleases)
+	// When current version is unknown (nil), default to stable behavior (skip prereleases)
+	skipPrereleases := !allowPrerelease && (currentVersion == nil || currentVersion.Prerelease == "")
 
 	// Parse min/max version constraints
 	var minVersion, maxVersion *version.Version
@@ -841,7 +850,7 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		log.Printf("findLatestVersion: Minor version pinning enabled (current: %d.%d.x)", currentVersion.Major, currentVersion.Minor)
 	}
 
-	log.Printf("findLatestVersion: Looking for tags with suffix='%s', currentVersion=%v, isStable=%v", requiredSuffix, currentVersion, isCurrentStable)
+	log.Printf("findLatestVersion: Looking for tags with suffix='%s', currentVersion=%v, skipPrereleases=%v, allowPrerelease=%v", requiredSuffix, currentVersion, skipPrereleases, allowPrerelease)
 
 	for _, tag := range tags {
 		if tag == "latest" || tag == "stable" || tag == "main" || tag == "develop" {
@@ -860,10 +869,10 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 			continue // Different variant, skip it
 		}
 
-		// Skip prerelease versions if current is stable
-		if isCurrentStable && tagInfo.Version.Prerelease != "" {
-			log.Printf("  Skipping tag %s: prerelease '%s' (current is stable)", tag, tagInfo.Version.Prerelease)
-			continue // Don't suggest upgrading from stable to prerelease
+		// Skip prerelease versions unless explicitly allowed or already on a prerelease
+		if skipPrereleases && tagInfo.Version.Prerelease != "" {
+			log.Printf("  Skipping tag %s: prerelease '%s' (prereleases not allowed)", tag, tagInfo.Version.Prerelease)
+			continue
 		}
 
 		// Apply major version pinning filter

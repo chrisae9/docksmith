@@ -146,37 +146,6 @@ func scanUpdateLogRows(rows *sql.Rows) ([]UpdateLogEntry, error) {
 	return logs, nil
 }
 
-// scanComposeBackupRows scans multiple ComposeBackup rows and handles nullable stack_name field
-// This helper consolidates the duplicate row scanning logic used across multiple query methods
-func scanComposeBackupRows(rows *sql.Rows) ([]ComposeBackup, error) {
-	backups := make([]ComposeBackup, 0)
-
-	for rows.Next() {
-		var backup ComposeBackup
-		var stackName sql.NullString
-
-		err := rows.Scan(
-			&backup.ID, &backup.OperationID, &backup.ContainerName, &stackName,
-			&backup.ComposeFilePath, &backup.BackupFilePath, &backup.BackupTimestamp, &backup.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan compose backup: %w", err)
-		}
-
-		if stackName.Valid {
-			backup.StackName = stackName.String
-		}
-
-		backups = append(backups, backup)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating compose backup rows: %w", err)
-	}
-
-	return backups, nil
-}
-
 // scanScriptAssignmentRows scans multiple ScriptAssignment rows and handles nullable assigned_by field
 // This helper consolidates row scanning logic for script assignment queries
 func scanScriptAssignmentRows(rows *sql.Rows) ([]ScriptAssignment, error) {

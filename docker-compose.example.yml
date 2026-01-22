@@ -25,6 +25,9 @@ services:
       # Add all directories where your docker-compose.yml files live
       # Example: mounting /home/user/stacks makes all stacks inside discoverable
       - /path/to/your/stacks:/stacks:rw
+      # Mirror mount: Required if your compose files use env_file with relative paths
+      # This makes files accessible at their original host paths during recreation
+      - /path/to/your/stacks:/path/to/your/stacks:rw
 
       # Optional: Pre-update check scripts
       # - ./scripts:/scripts:ro
@@ -35,9 +38,6 @@ services:
 
       # How long to cache registry responses
       - CACHE_TTL=1h
-
-      # GitHub token for private GHCR images (optional)
-      # - GITHUB_TOKEN=ghp_xxxxxxxxxxxx
 
     # Start the API server with web UI
     command: ["api", "--port", "8080"]

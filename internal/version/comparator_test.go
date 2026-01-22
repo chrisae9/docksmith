@@ -53,6 +53,24 @@ func TestCompare(t *testing.T) {
 			v2:       &Version{Major: 1, Minor: 0, Patch: 0, Prerelease: "alpha"},
 			expected: 1,
 		},
+		{
+			name:     "fully-specified tag preferred over shortened (v3.41.0 > v3.41)",
+			v1:       &Version{Major: 3, Minor: 41, Patch: 0, Original: "v3.41.0"},
+			v2:       &Version{Major: 3, Minor: 41, Patch: 0, Original: "v3.41"},
+			expected: 1,
+		},
+		{
+			name:     "shortened tag less than fully-specified (v3.41 < v3.41.0)",
+			v1:       &Version{Major: 3, Minor: 41, Patch: 0, Original: "v3.41"},
+			v2:       &Version{Major: 3, Minor: 41, Patch: 0, Original: "v3.41.0"},
+			expected: -1,
+		},
+		{
+			name:     "major only tag less than major.minor (v3 < v3.0)",
+			v1:       &Version{Major: 3, Minor: 0, Patch: 0, Original: "v3"},
+			v2:       &Version{Major: 3, Minor: 0, Patch: 0, Original: "v3.0"},
+			expected: -1,
+		},
 	}
 
 	for _, tt := range tests {

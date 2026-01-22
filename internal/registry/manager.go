@@ -45,6 +45,38 @@ func (m *Manager) ClearCache() {
 	m.cache.Clear()
 }
 
+// withCache is a generic cache wrapper that handles the check-fetch-store pattern.
+// It checks the cache first, calls the fetch function if not found, and stores the result.
+func withCache[T any](m *Manager, cacheKey string, ttl time.Duration, isEmpty func(T) bool, fetch func() (T, error)) (T, error) {
+	var zero T
+
+	// Check cache first
+	if m.cacheEnabled {
+		if cached, found := m.cache.Get(cacheKey); found {
+			if val, ok := cached.(T); ok {
+				return val, nil
+			}
+		}
+	}
+
+	// Fetch from source
+	result, err := fetch()
+	if err != nil {
+		return zero, err
+	}
+
+	// Store in cache if result is not empty
+	if m.cacheEnabled && !isEmpty(result) {
+		if ttl > 0 {
+			m.cache.SetWithTTL(cacheKey, result, ttl)
+		} else {
+			m.cache.Set(cacheKey, result)
+		}
+	}
+
+	return result, nil
+}
+
 // ListTags returns all available tags for an image with caching support.
 // The imageRef should be in the format: registry/repository
 // Examples:
@@ -52,120 +84,49 @@ func (m *Manager) ClearCache() {
 //   - "ghcr.io/linuxserver/plex"
 //   - "linuxserver/plex" (assumes docker.io)
 func (m *Manager) ListTags(ctx context.Context, imageRef string) ([]string, error) {
-	// Check cache first
-	if m.cacheEnabled {
-		cacheKey := fmt.Sprintf("tags:%s", imageRef)
-		if cached, found := m.cache.Get(cacheKey); found {
-			if tags, ok := cached.([]string); ok {
-				return tags, nil
-			}
-		}
-	}
-
 	registry, repository := m.parseImageRef(imageRef)
-
 	client := m.getClient(registry)
-	tags, err := client.ListTags(ctx, repository)
-	if err != nil {
-		return nil, err
-	}
 
-	// Store in cache
-	if m.cacheEnabled && len(tags) > 0 {
-		cacheKey := fmt.Sprintf("tags:%s", imageRef)
-		m.cache.Set(cacheKey, tags)
-	}
-
-	return tags, nil
+	return withCache(m, fmt.Sprintf("tags:%s", imageRef), 0,
+		func(tags []string) bool { return len(tags) == 0 },
+		func() ([]string, error) { return client.ListTags(ctx, repository) },
+	)
 }
 
 // GetLatestTag returns the latest tag for an image with caching support.
 func (m *Manager) GetLatestTag(ctx context.Context, imageRef string) (string, error) {
-	// Check cache first
-	if m.cacheEnabled {
-		cacheKey := fmt.Sprintf("latest:%s", imageRef)
-		if cached, found := m.cache.Get(cacheKey); found {
-			if tag, ok := cached.(string); ok {
-				return tag, nil
-			}
-		}
-	}
-
 	registry, repository := m.parseImageRef(imageRef)
-
 	client := m.getClient(registry)
-	tag, err := client.GetLatestTag(ctx, repository)
-	if err != nil {
-		return "", err
-	}
 
-	// Store in cache
-	if m.cacheEnabled && tag != "" {
-		cacheKey := fmt.Sprintf("latest:%s", imageRef)
-		m.cache.Set(cacheKey, tag)
-	}
-
-	return tag, nil
+	return withCache(m, fmt.Sprintf("latest:%s", imageRef), 0,
+		func(tag string) bool { return tag == "" },
+		func() (string, error) { return client.GetLatestTag(ctx, repository) },
+	)
 }
 
 // GetTagDigest returns the SHA256 digest for a specific image tag with caching support.
 // imageRef format: "registry.io/repository" or "repository" (defaults to docker.io)
 func (m *Manager) GetTagDigest(ctx context.Context, imageRef, tag string) (string, error) {
-	// Check cache first
-	if m.cacheEnabled {
-		cacheKey := fmt.Sprintf("digest:%s:%s", imageRef, tag)
-		if cached, found := m.cache.Get(cacheKey); found {
-			if digest, ok := cached.(string); ok {
-				return digest, nil
-			}
-		}
-	}
-
 	registry, repo := m.parseImageRef(imageRef)
 	client := m.getClient(registry)
-	digest, err := client.GetTagDigest(ctx, repo, tag)
-	if err != nil {
-		return "", err
-	}
 
-	// Store in cache with a shorter TTL for digests (5 minutes)
-	// since they can change more frequently for mutable tags like "latest"
-	if m.cacheEnabled && digest != "" {
-		cacheKey := fmt.Sprintf("digest:%s:%s", imageRef, tag)
-		m.cache.SetWithTTL(cacheKey, digest, 5*time.Minute)
-	}
-
-	return digest, nil
+	// Use shorter TTL for digests since they can change more frequently for mutable tags like "latest"
+	return withCache(m, fmt.Sprintf("digest:%s:%s", imageRef, tag), 5*time.Minute,
+		func(digest string) bool { return digest == "" },
+		func() (string, error) { return client.GetTagDigest(ctx, repo, tag) },
+	)
 }
 
 // ListTagsWithDigests returns a mapping of tags to their digests.
 // Uses efficient APIs (Docker Hub includes digests in tag list, GHCR uses Packages API).
 func (m *Manager) ListTagsWithDigests(ctx context.Context, imageRef string) (map[string][]string, error) {
-	// Check cache first
-	if m.cacheEnabled {
-		cacheKey := fmt.Sprintf("tags-digests:%s", imageRef)
-		if cached, found := m.cache.Get(cacheKey); found {
-			if tagDigests, ok := cached.(map[string][]string); ok {
-				return tagDigests, nil
-			}
-		}
-	}
-
 	registry, repository := m.parseImageRef(imageRef)
 	client := m.getClient(registry)
 
-	tagDigests, err := client.ListTagsWithDigests(ctx, repository)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store in cache
-	if m.cacheEnabled && len(tagDigests) > 0 {
-		cacheKey := fmt.Sprintf("tags-digests:%s", imageRef)
-		m.cache.Set(cacheKey, tagDigests)
-	}
-
-	return tagDigests, nil
+	return withCache(m, fmt.Sprintf("tags-digests:%s", imageRef), 0,
+		func(tagDigests map[string][]string) bool { return len(tagDigests) == 0 },
+		func() (map[string][]string, error) { return client.ListTagsWithDigests(ctx, repository) },
+	)
 }
 
 // parseImageRef splits an image reference into registry and repository.

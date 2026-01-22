@@ -141,19 +141,6 @@ func (m *mockStorage) UpdateOperationStatus(ctx context.Context, operationID, st
 	return nil
 }
 
-func (m *mockStorage) SaveComposeBackup(ctx context.Context, backup storage.ComposeBackup) error {
-	return nil
-}
-func (m *mockStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
-	return storage.ComposeBackup{}, false, nil
-}
-func (m *mockStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
-	return nil, nil
-}
-func (m *mockStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
-	return nil, nil
-}
-
 func (m *mockStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
 	return storage.RollbackPolicy{}, false, nil
 }

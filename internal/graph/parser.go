@@ -15,6 +15,9 @@ const (
 
 	// ServiceLabel identifies the service name within a compose project
 	ServiceLabel = "com.docker.compose.service"
+
+	// NetworkModeLabel identifies network_mode dependencies (e.g., "service:tailscale")
+	NetworkModeLabel = "com.docker.compose.network_mode"
 )
 
 // Builder constructs dependency graphs from container data.
@@ -45,11 +48,12 @@ func (b *Builder) containerToNode(container docker.Container) *Node {
 		ID:           container.Name,
 		Dependencies: b.parseDependencies(container.Labels),
 		Metadata: map[string]string{
-			"id":      container.ID,
-			"image":   container.Image,
-			"state":   container.State,
-			"project": container.Labels[ProjectLabel],
-			"service": container.Labels[ServiceLabel],
+			"id":           container.ID,
+			"image":        container.Image,
+			"state":        container.State,
+			"project":      container.Labels[ProjectLabel],
+			"service":      container.Labels[ServiceLabel],
+			"network_mode": container.Labels[NetworkModeLabel],
 		},
 	}
 
@@ -57,15 +61,45 @@ func (b *Builder) containerToNode(container docker.Container) *Node {
 }
 
 // parseDependencies extracts dependency names from Docker Compose labels.
+// Includes both depends_on and network_mode dependencies.
 // Format: "service1:condition:value,service2:condition:value"
 // Example: "vpn:service_started:false,torrent:service_started:false"
 func (b *Builder) parseDependencies(labels map[string]string) []string {
+	deps := []string{}
+
+	// Parse depends_on label
 	dependsOn, exists := labels[DependsOnLabel]
-	if !exists || dependsOn == "" {
-		return []string{}
+	if exists && dependsOn != "" {
+		deps = append(deps, ParseDependsOn(dependsOn)...)
 	}
 
-	return ParseDependsOn(dependsOn)
+	// Parse network_mode label (e.g., "service:tailscale" -> depends on tailscale)
+	networkModeDep := b.parseNetworkModeDependency(labels)
+	if networkModeDep != "" {
+		// Avoid duplicates
+		isDuplicate := false
+		for _, d := range deps {
+			if d == networkModeDep {
+				isDuplicate = true
+				break
+			}
+		}
+		if !isDuplicate {
+			deps = append(deps, networkModeDep)
+		}
+	}
+
+	return deps
+}
+
+// parseNetworkModeDependency extracts service dependency from network_mode label.
+// Returns the service name if network_mode is "service:X", empty string otherwise.
+func (b *Builder) parseNetworkModeDependency(labels map[string]string) string {
+	networkMode := labels[NetworkModeLabel]
+	if strings.HasPrefix(networkMode, "service:") {
+		return strings.TrimPrefix(networkMode, "service:")
+	}
+	return ""
 }
 
 // ParseDependsOn parses a depends_on label value into service names.

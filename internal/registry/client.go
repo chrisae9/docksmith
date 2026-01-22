@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	maxRetries    = 3
+	initialBackoff = 1 * time.Second
+)
+
 // HTTPClient implements the Client interface using the Docker Registry V2 API.
 type HTTPClient struct {
 	config     *RegistryConfig
@@ -44,6 +49,38 @@ func NewHTTPClientForRegistry(config *RegistryConfig, registry string) *HTTPClie
 	}
 }
 
+// doWithRetry executes an HTTP request with exponential backoff retry on transient errors.
+// It retries network errors (connection refused, timeout) but not HTTP error responses.
+func (c *HTTPClient) doWithRetry(req *http.Request) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s
+			backoff := initialBackoff * time.Duration(1<<(attempt-1))
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+
+		// Check if context was cancelled
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
 // tagsResponse represents the JSON response from the /v2/.../tags/list endpoint.
 type tagsResponse struct {
 	Name string   `json:"name"`
@@ -69,7 +106,7 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 		req.SetBasicAuth(c.config.Username, c.config.Password)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithRetry(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tags: %w", err)
 	}
@@ -89,7 +126,7 @@ func (c *HTTPClient) ListTags(ctx context.Context, repository string) ([]string,
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, err = c.httpClient.Do(req)
+		resp, err = c.doWithRetry(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tags: %w", err)
 		}
@@ -150,7 +187,7 @@ func (c *HTTPClient) getAuthToken(ctx context.Context, resp *http.Response, repo
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	tokenResp, err := c.httpClient.Do(req)
+	tokenResp, err := c.doWithRetry(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch token: %w", err)
 	}

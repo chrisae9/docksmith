@@ -3,21 +3,18 @@ package api
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/chis/docksmith/internal/output"
 )
 
 // handleScriptsList returns available scripts in /scripts folder
 // This is the EXACT same logic as: docksmith scripts list --json
 func (s *Server) handleScriptsList(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
 	scripts, err := s.scriptManager.DiscoverScripts()
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -31,8 +28,7 @@ func (s *Server) handleScriptsList(w http.ResponseWriter, r *http.Request) {
 // handleScriptsAssigned returns script assignments
 // This is the EXACT same logic as: docksmith scripts assigned --json
 func (s *Server) handleScriptsAssigned(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
@@ -40,7 +36,7 @@ func (s *Server) handleScriptsAssigned(w http.ResponseWriter, r *http.Request) {
 
 	assignments, err := s.scriptManager.ListAssignments(ctx, false)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -54,8 +50,7 @@ func (s *Server) handleScriptsAssigned(w http.ResponseWriter, r *http.Request) {
 // handleScriptsAssign assigns a script to a container
 // This is the EXACT same logic as: docksmith scripts assign <container> <script> --json
 func (s *Server) handleScriptsAssign(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
@@ -72,14 +67,13 @@ func (s *Server) handleScriptsAssign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ContainerName == "" || req.ScriptPath == "" {
-		output.WriteJSON(w, output.ErrorMessageResponse("container_name and script_path are required"))
-		w.WriteHeader(http.StatusBadRequest)
+		RespondBadRequest(w, fmt.Errorf("container_name and script_path are required"))
 		return
 	}
 
 	// Assign script
 	if err := s.scriptManager.AssignScript(ctx, req.ContainerName, req.ScriptPath, "ui"); err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -95,8 +89,7 @@ func (s *Server) handleScriptsAssign(w http.ResponseWriter, r *http.Request) {
 // handleScriptsUnassign removes a script assignment from a container
 // This is the EXACT same logic as: docksmith scripts unassign <container> --json
 func (s *Server) handleScriptsUnassign(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
@@ -104,15 +97,13 @@ func (s *Server) handleScriptsUnassign(w http.ResponseWriter, r *http.Request) {
 
 	// Get container name from path parameter
 	containerName := r.PathValue("container")
-	if containerName == "" {
-		output.WriteJSON(w, output.ErrorMessageResponse("container name is required"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !validateRequired(w, "container name", containerName) {
 		return
 	}
 
 	// Unassign script
 	if err := s.scriptManager.UnassignScript(ctx, containerName); err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -127,8 +118,7 @@ func (s *Server) handleScriptsUnassign(w http.ResponseWriter, r *http.Request) {
 // handleSettingsIgnore sets the ignore flag for a container
 // POST /api/settings/ignore with body: {"container_name": "...", "ignore": true/false}
 func (s *Server) handleSettingsIgnore(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
@@ -144,15 +134,13 @@ func (s *Server) handleSettingsIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ContainerName == "" {
-		output.WriteJSON(w, output.ErrorMessageResponse("container_name is required"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !validateRequired(w, "container_name", req.ContainerName) {
 		return
 	}
 
 	// Set ignore flag
 	if err := s.scriptManager.SetIgnore(ctx, req.ContainerName, req.Ignore, "ui"); err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -172,8 +160,7 @@ func (s *Server) handleSettingsIgnore(w http.ResponseWriter, r *http.Request) {
 // handleSettingsAllowLatest sets the allow-latest flag for a container
 // POST /api/settings/allow-latest with body: {"container_name": "...", "allow_latest": true/false}
 func (s *Server) handleSettingsAllowLatest(w http.ResponseWriter, r *http.Request) {
-	if s.scriptManager == nil {
-		output.WriteJSONError(w, errNoScriptManager)
+	if !s.requireScriptManager(w) {
 		return
 	}
 
@@ -189,15 +176,13 @@ func (s *Server) handleSettingsAllowLatest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.ContainerName == "" {
-		output.WriteJSON(w, output.ErrorMessageResponse("container_name is required"))
-		w.WriteHeader(http.StatusBadRequest)
+	if !validateRequired(w, "container_name", req.ContainerName) {
 		return
 	}
 
 	// Set allow-latest flag
 	if err := s.scriptManager.SetAllowLatest(ctx, req.ContainerName, req.AllowLatest, "ui"); err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -214,4 +199,3 @@ func (s *Server) handleSettingsAllowLatest(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-var errNoScriptManager = fmt.Errorf("script manager not initialized")

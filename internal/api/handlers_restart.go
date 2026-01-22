@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,12 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 )
 
-const (
-	// healthCheckPollInterval is how often to check container status
-	healthCheckPollInterval = 1 * time.Second
-	// healthCheckTimeout is the max time to wait for a container to be healthy/running
-	healthCheckTimeout = 30 * time.Second
-)
+// Timeout constants are defined in constants.go
 
 // RestartContainerRequest represents a request to restart a container
 type RestartContainerRequest struct {
@@ -45,10 +39,10 @@ type RestartResponse struct {
 // For containers with health checks, polls until status is "healthy" or times out.
 // For containers without health checks, polls until container is running.
 func (s *Server) waitForContainerHealthy(ctx context.Context, containerName string) error {
-	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	ctx, cancel := context.WithTimeout(ctx, HealthCheckTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(healthCheckPollInterval)
+	ticker := time.NewTicker(HealthCheckPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -85,27 +79,10 @@ func (s *Server) waitForContainerHealthy(ctx context.Context, containerName stri
 	}
 }
 
-// findDependentContainers finds all containers that depend on the given container
+// findDependentContainers finds all containers that depend on the given container.
+// This is a convenience wrapper around docker.Service.FindDependentContainers.
 func (s *Server) findDependentContainers(ctx context.Context, containerName string) ([]string, error) {
-	containers, err := s.dockerService.ListContainers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	var dependents []string
-	for _, c := range containers {
-		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
-			dependencies := strings.Split(restartAfter, ",")
-			for _, dep := range dependencies {
-				dep = strings.TrimSpace(dep)
-				if dep == containerName {
-					dependents = append(dependents, c.Name)
-					break
-				}
-			}
-		}
-	}
-	return dependents, nil
+	return s.dockerService.FindDependentContainers(ctx, containerName, scripts.RestartAfterLabel)
 }
 
 // runPreChecksForContainers runs pre-update checks for all specified containers
@@ -219,80 +196,12 @@ func (s *Server) handleStartRestart(w http.ResponseWriter, r *http.Request) {
 // handleRestartContainer restarts a single container
 func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
 	containerName := r.PathValue("name")
-	if containerName == "" {
-		RespondBadRequest(w, fmt.Errorf("container name is required"))
+	if !validateRequired(w, "container name", containerName) {
 		return
 	}
 
-	// Check for force parameter
-	force := r.URL.Query().Get("force") == "true"
-
-	log.Printf("Restarting container: %s (force=%v)", containerName, force)
-
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-
-	// Find all dependent containers
-	dependents, err := s.findDependentContainers(ctx, containerName)
-	if err != nil {
-		log.Printf("Failed to find dependents: %v", err)
-	}
-
-	// Build list of all containers to check
-	allContainers := []string{containerName}
-	allContainers = append(allContainers, dependents...)
-
-	// Run pre-checks on ALL containers FIRST (before any restart)
-	allPassed, failedContainers, checkErrors := s.runPreChecksForContainers(ctx, allContainers, force)
-	if !allPassed {
-		log.Printf("Pre-update checks failed for containers: %v", failedContainers)
-		errMsg := fmt.Sprintf("Pre-update check failed for: %s", strings.Join(failedContainers, ", "))
-		if len(checkErrors) > 0 {
-			errMsg = checkErrors[0] // Return the first error message
-		}
-		// Return error with data about affected containers so UI can show correct total
-		RespondErrorWithData(w, http.StatusInternalServerError, fmt.Errorf("%s (use force to skip)", errMsg), RestartResponse{
-			Success:         false,
-			ContainerNames:  []string{containerName},
-			DependentsNames: dependents,
-		})
-		return
-	}
-
-	// All checks passed - now restart the main container
-	if err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, container.StopOptions{}); err != nil {
-		log.Printf("Failed to restart container %s: %v", containerName, err)
-		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
-		return
-	}
-
-	// Wait for container to be healthy/running
-	if err := s.waitForContainerHealthy(ctx, containerName); err != nil {
-		log.Printf("Health check failed for %s: %v", containerName, err)
-		// Don't fail the operation - container was restarted, just health check timed out
-	}
-
-	log.Printf("Successfully restarted container: %s", containerName)
-
-	// Restart dependent containers (no pre-checks needed - already done)
-	restarted, depErrors := s.restartDependentContainers(ctx, containerName)
-
-	message := fmt.Sprintf("Container %s restarted successfully", containerName)
-	if len(restarted) > 0 {
-		message = fmt.Sprintf("Container %s and %d dependent(s) restarted successfully", containerName, len(restarted))
-	}
-
-	response := RestartResponse{
-		Success:         true,
-		Message:         message,
-		ContainerNames:  []string{containerName},
-		DependentsNames: restarted,
-		BlockedNames:    nil, // No blocked anymore - we check all first
-		Errors:          depErrors,
-	}
-
-	RespondSuccess(w, response)
+	force := parseBoolParam(r, "force")
+	s.executeContainerRestart(w, r.Context(), containerName, force, true)
 }
 
 // handleRestartStack restarts all containers in a stack
@@ -317,7 +226,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 	// Filter containers by stack
 	var stackContainers []string
 	for _, cont := range containers {
-		if stack, ok := cont.Labels[composeProjectLabel]; ok && stack == stackName {
+		if stack, ok := cont.Labels[ComposeProjectLabel]; ok && stack == stackName {
 			stackContainers = append(stackContainers, cont.Name)
 		}
 	}
@@ -407,71 +316,86 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 // handleRestartContainerBody handles restart via POST body (alternative to path param)
 func (s *Server) handleRestartContainerBody(w http.ResponseWriter, r *http.Request) {
 	var req RestartContainerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondBadRequest(w, fmt.Errorf("invalid request body: %w", err))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
-	if req.ContainerName == "" {
-		RespondBadRequest(w, fmt.Errorf("container_name is required"))
+	if !validateRequired(w, "container_name", req.ContainerName) {
 		return
 	}
 
-	log.Printf("Restarting container: %s", req.ContainerName)
+	// Body endpoint doesn't support force parameter and doesn't include detailed error data
+	s.executeContainerRestart(w, r.Context(), req.ContainerName, false, false)
+}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+// executeContainerRestart performs the actual container restart logic.
+// includeDetailedErrors controls whether to include dependency info in error responses.
+func (s *Server) executeContainerRestart(w http.ResponseWriter, parentCtx context.Context, containerName string, force, includeDetailedErrors bool) {
+	log.Printf("Restarting container: %s (force=%v)", containerName, force)
+
+	ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 	defer cancel()
 
 	// Find all dependent containers
-	dependents, err := s.findDependentContainers(ctx, req.ContainerName)
+	dependents, err := s.findDependentContainers(ctx, containerName)
 	if err != nil {
 		log.Printf("Failed to find dependents: %v", err)
 	}
 
 	// Build list of all containers to check
-	allContainers := []string{req.ContainerName}
+	allContainers := []string{containerName}
 	allContainers = append(allContainers, dependents...)
 
-	// Run pre-checks on ALL containers FIRST (never force in body endpoint)
-	allPassed, failedContainers, checkErrors := s.runPreChecksForContainers(ctx, allContainers, false)
+	// Run pre-checks on ALL containers FIRST (before any restart)
+	allPassed, failedContainers, checkErrors := s.runPreChecksForContainers(ctx, allContainers, force)
 	if !allPassed {
 		log.Printf("Pre-update checks failed for containers: %v", failedContainers)
 		errMsg := fmt.Sprintf("Pre-update check failed for: %s", strings.Join(failedContainers, ", "))
 		if len(checkErrors) > 0 {
 			errMsg = checkErrors[0]
 		}
-		RespondInternalError(w, fmt.Errorf("%s", errMsg))
+		if includeDetailedErrors {
+			// Return error with data about affected containers so UI can show correct total
+			RespondErrorWithData(w, http.StatusInternalServerError, fmt.Errorf("%s (use force to skip)", errMsg), RestartResponse{
+				Success:         false,
+				ContainerNames:  []string{containerName},
+				DependentsNames: dependents,
+			})
+		} else {
+			RespondInternalError(w, fmt.Errorf("%s", errMsg))
+		}
 		return
 	}
 
-	// All checks passed - restart the container
-	if err := s.dockerService.GetClient().ContainerRestart(ctx, req.ContainerName, container.StopOptions{}); err != nil {
-		log.Printf("Failed to restart container %s: %v", req.ContainerName, err)
+	// All checks passed - now restart the main container
+	if err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, container.StopOptions{}); err != nil {
+		log.Printf("Failed to restart container %s: %v", containerName, err)
 		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return
 	}
 
 	// Wait for container to be healthy/running
-	if err := s.waitForContainerHealthy(ctx, req.ContainerName); err != nil {
-		log.Printf("Health check failed for %s: %v", req.ContainerName, err)
+	if err := s.waitForContainerHealthy(ctx, containerName); err != nil {
+		log.Printf("Health check failed for %s: %v", containerName, err)
 		// Don't fail the operation - container was restarted, just health check timed out
 	}
 
-	log.Printf("Successfully restarted container: %s", req.ContainerName)
+	log.Printf("Successfully restarted container: %s", containerName)
 
-	// Restart dependent containers (pre-checks already done)
-	restarted, depErrors := s.restartDependentContainers(ctx, req.ContainerName)
+	// Restart dependent containers (no pre-checks needed - already done)
+	restarted, depErrors := s.restartDependentContainers(ctx, containerName)
 
-	message := fmt.Sprintf("Container %s restarted successfully", req.ContainerName)
+	message := fmt.Sprintf("Container %s restarted successfully", containerName)
 	if len(restarted) > 0 {
-		message = fmt.Sprintf("Container %s and %d dependent(s) restarted successfully", req.ContainerName, len(restarted))
+		message = fmt.Sprintf("Container %s and %d dependent(s) restarted successfully", containerName, len(restarted))
 	}
 
 	response := RestartResponse{
 		Success:         true,
 		Message:         message,
-		ContainerNames:  []string{req.ContainerName},
+		ContainerNames:  []string{containerName},
 		DependentsNames: restarted,
+		BlockedNames:    nil,
 		Errors:          depErrors,
 	}
 

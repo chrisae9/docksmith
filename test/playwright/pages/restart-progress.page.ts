@@ -24,14 +24,15 @@ export class RestartProgressPage {
     this.elapsedTime = page.locator('.restart-elapsed');
     this.resultsSection = page.locator('.restart-results');
     this.activityLog = page.locator('.activity-log');
-    // Use specific selector within restart progress page
-    this.doneButton = page.locator('.restart-progress-page footer button');
+    // Use specific selector within operation progress page
+    this.doneButton = page.locator('.operation-progress-page footer button, .progress-page footer button, .page-footer button');
   }
 
   async waitForPageLoaded(timeout = 10000) {
-    // Wait for URL to change to /restart
-    await this.page.waitForURL('**/restart', { timeout });
-    await expect(this.page.locator('.restart-progress-page')).toBeVisible({ timeout });
+    // Wait for URL to change to /operation (unified progress page)
+    await this.page.waitForURL('**/operation', { timeout });
+    // Unified operation progress page
+    await expect(this.page.locator('.operation-progress-page, .progress-page')).toBeVisible({ timeout });
   }
 
   async waitForCompletion(timeout = 60000) {

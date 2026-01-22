@@ -7,14 +7,15 @@ import (
 
 // Version represents a semantic version number.
 type Version struct {
-	Major      int
-	Minor      int
-	Patch      int
-	Prerelease string    // e.g., "alpha", "beta.1", "rc.2"
-	Build      string    // e.g., build metadata
-	Original   string    // Original string for reference
-	Type       string    // "semantic", "date", "hash"
-	Date       *time.Time // For date-based versions
+	Major       int
+	Minor       int
+	Patch       int
+	Prerelease  string     // e.g., "alpha", "beta.1", "rc.2"
+	Build       string     // e.g., build metadata
+	BuildNumber int        // Numeric build number for comparison (e.g., 285 from "-ls285")
+	Original    string     // Original string for reference
+	Type        string     // "semantic", "date", "hash"
+	Date        *time.Time // For date-based versions
 }
 
 // String returns the string representation of the version.

@@ -99,18 +99,6 @@ export interface UpdateOperation {
   updated_at: string;
 }
 
-// Compose Backup (matches storage.ComposeBackup)
-export interface ComposeBackup {
-  id: number;
-  operation_id: string;
-  container_name: string;
-  stack_name?: string;
-  compose_file_path: string;
-  backup_file_path: string;
-  backup_timestamp: string;
-  created_at: string;
-}
-
 // Script (matches scripts.Script)
 export interface Script {
   name: string;
@@ -261,7 +249,6 @@ export interface RegistryTagsResponse {
 export type CheckResponse = APIResponse<DiscoveryResult>;
 export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number }>;
 export type HistoryResponse = APIResponse<{ history: HistoryEntry[]; count: number }>;
-export type BackupsResponse = APIResponse<{ backups: ComposeBackup[]; count: number }>;
 export type HealthCheckResponse = APIResponse<HealthResponse>;
 export type DockerConfigResponse = APIResponse<DockerRegistryInfo>;
 export type SetLabelsResponse = APIResponse<LabelOperationResult>;

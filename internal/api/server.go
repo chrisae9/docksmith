@@ -15,7 +15,6 @@ import (
 	"github.com/chis/docksmith/internal/config"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
-	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/registry"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
@@ -176,9 +175,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 
 	// Check and update history
 	mux.HandleFunc("GET /api/history", s.handleHistory)
-
-	// Compose backups
-	mux.HandleFunc("GET /api/backups", s.handleBackups)
 
 	// Rollback policies
 	mux.HandleFunc("GET /api/policies", s.handlePolicies)
@@ -351,8 +347,7 @@ func spaHandler(staticDir string) http.Handler {
 // GET /api/registry/tags/{imageRef...}
 func (s *Server) handleRegistryTags(w http.ResponseWriter, r *http.Request) {
 	imageRef := r.PathValue("imageRef")
-	if imageRef == "" {
-		output.WriteJSONError(w, fmt.Errorf("missing image reference"))
+	if !validateRequired(w, "image reference", imageRef) {
 		return
 	}
 
@@ -361,7 +356,7 @@ func (s *Server) handleRegistryTags(w http.ResponseWriter, r *http.Request) {
 	// Fetch tags from registry (uses cached data if available)
 	tags, err := s.registryManager.ListTags(ctx, imageRef)
 	if err != nil {
-		output.WriteJSONError(w, fmt.Errorf("failed to fetch tags: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to fetch tags: %w", err))
 		return
 	}
 
@@ -376,8 +371,7 @@ func (s *Server) handleRegistryTags(w http.ResponseWriter, r *http.Request) {
 // Returns true if successful. If decoding fails, it writes the error response and returns false.
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("invalid request body"))
+		RespondBadRequest(w, fmt.Errorf("invalid request body"))
 		return false
 	}
 	return true

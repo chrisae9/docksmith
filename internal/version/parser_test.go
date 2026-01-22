@@ -118,6 +118,101 @@ func TestParseImageTag(t *testing.T) {
 	}
 }
 
+func TestBuildNumberTiebreaking(t *testing.T) {
+	parser := NewParser()
+	comp := NewComparator()
+
+	// Parse tags like Calibre uses
+	tag1 := parser.ParseImageTag("linuxserver/calibre:v8.16.2-ls374")
+	tag2 := parser.ParseImageTag("linuxserver/calibre:8.16.2")
+
+	if tag1.Version == nil || tag2.Version == nil {
+		t.Fatal("Expected versions to be parsed")
+	}
+
+	// Both have same semantic version
+	if tag1.Version.Major != 8 || tag1.Version.Minor != 16 || tag1.Version.Patch != 2 {
+		t.Errorf("tag1 version: got %d.%d.%d, want 8.16.2", tag1.Version.Major, tag1.Version.Minor, tag1.Version.Patch)
+	}
+	if tag2.Version.Major != 8 || tag2.Version.Minor != 16 || tag2.Version.Patch != 2 {
+		t.Errorf("tag2 version: got %d.%d.%d, want 8.16.2", tag2.Version.Major, tag2.Version.Minor, tag2.Version.Patch)
+	}
+
+	// tag1 should have BuildNumber=374, tag2 should have BuildNumber=0
+	if tag1.Version.BuildNumber != 374 {
+		t.Errorf("tag1 BuildNumber: got %d, want 374", tag1.Version.BuildNumber)
+	}
+	if tag2.Version.BuildNumber != 0 {
+		t.Errorf("tag2 BuildNumber: got %d, want 0", tag2.Version.BuildNumber)
+	}
+
+	// tag1 (with ls374) should be considered "newer" than tag2 (without ls suffix)
+	// because same semantic version, higher build number
+	cmp := comp.Compare(tag1.Version, tag2.Version)
+	if cmp != 1 {
+		t.Errorf("Compare(v8.16.2-ls374, 8.16.2): got %d, want 1 (tag1 newer)", cmp)
+	}
+
+	// IsNewer(v1, v2) returns true if v2 > v1
+	if !comp.IsNewer(tag2.Version, tag1.Version) {
+		t.Error("IsNewer(8.16.2, v8.16.2-ls374) should be true (ls374 is newer)")
+	}
+}
+
+func TestLinuxServerBuildNumber(t *testing.T) {
+	parser := NewParser()
+
+	tests := []struct {
+		name              string
+		imageTag          string
+		expectBuildNumber int
+		expectSuffix      string
+	}{
+		{
+			name:              "calibre style v-prefixed with ls suffix",
+			imageTag:          "linuxserver/calibre:v8.16.0-ls374",
+			expectBuildNumber: 374,
+			expectSuffix:      "",
+		},
+		{
+			name:              "calibre bare version (no ls suffix)",
+			imageTag:          "linuxserver/calibre:8.16.2",
+			expectBuildNumber: 0,
+			expectSuffix:      "",
+		},
+		{
+			name:              "plex with 5-digit build number and ls suffix",
+			imageTag:          "ghcr.io/linuxserver/plex:5.28.0.10274-ls285",
+			expectBuildNumber: 285,
+			expectSuffix:      "10274",
+		},
+		{
+			name:              "sonarr with 4-digit build number and ls suffix",
+			imageTag:          "ghcr.io/linuxserver/sonarr:4.0.16.2946-ls297",
+			expectBuildNumber: 297,
+			expectSuffix:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := parser.ParseImageTag(tt.imageTag)
+
+			if info.Version == nil {
+				t.Fatal("Expected version but got nil")
+			}
+
+			if info.Version.BuildNumber != tt.expectBuildNumber {
+				t.Errorf("BuildNumber: got %d, want %d", info.Version.BuildNumber, tt.expectBuildNumber)
+			}
+
+			if info.Suffix != tt.expectSuffix {
+				t.Errorf("Suffix: got %q, want %q", info.Suffix, tt.expectSuffix)
+			}
+		})
+	}
+}
+
 func TestParseTag(t *testing.T) {
 	parser := NewParser()
 

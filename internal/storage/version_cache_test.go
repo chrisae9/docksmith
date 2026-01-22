@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -333,7 +334,7 @@ func TestCleanExpiredCache(t *testing.T) {
 	}
 }
 
-// TestGetVersionCacheWithCustomTTL tests cache retrieval respects custom TTL
+// TestGetVersionCacheWithCustomTTL tests cache retrieval respects custom TTL via CACHE_TTL env var
 func TestGetVersionCacheWithCustomTTL(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
@@ -359,7 +360,18 @@ func TestGetVersionCacheWithCustomTTL(t *testing.T) {
 		t.Fatalf("Failed to insert entry: %v", err)
 	}
 
-	// With 7-day TTL, should be found
+	// Set custom TTL via environment variable (7 days)
+	oldTTL := os.Getenv("CACHE_TTL")
+	os.Setenv("CACHE_TTL", "168h") // 7 days
+	defer func() {
+		if oldTTL == "" {
+			os.Unsetenv("CACHE_TTL")
+		} else {
+			os.Setenv("CACHE_TTL", oldTTL)
+		}
+	}()
+
+	// With 7-day TTL, entry that's 5 days old should be found
 	_, found, err := storage.GetVersionCache(ctx, sha256, imageRef, arch)
 	if err != nil {
 		t.Fatalf("GetVersionCache failed: %v", err)

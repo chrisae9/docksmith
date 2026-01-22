@@ -77,7 +77,7 @@ func NewUpdateOrchestrator(
 		checker:        NewChecker(dockerClient, registryManager, store),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      60 * time.Second,
-			FallbackWait: 10 * time.Second,
+			FallbackWait: 3 * time.Second, // Containers without health checks just need to be "running"
 		},
 		stackLocks:     make(map[string]*sync.Mutex),
 		pathTranslator: pathTranslator,
@@ -647,10 +647,37 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 	}
 
+	// Build a map of batch container names for network_mode dependency checking
+	batchNames := make(map[string]bool)
+	for _, c := range orderedContainers {
+		batchNames[c.Name] = true
+		// Also add service name for matching network_mode: service:xxx
+		if svc := c.Labels["com.docker.compose.service"]; svc != "" {
+			batchNames[svc] = true
+		}
+	}
+
+	// Identify containers with network_mode dependencies on other batch containers
+	// These MUST use compose-based recreation to handle the network namespace correctly
+	networkModeContainers := make(map[string]bool)
+	for _, cont := range orderedContainers {
+		hasNetworkDep, depName := o.hasNetworkModeDependency(cont, batchNames)
+		if hasNetworkDep {
+			networkModeContainers[cont.Name] = true
+			log.Printf("BATCH UPDATE: Container %s has network_mode dependency on %s - will use compose recreation", cont.Name, depName)
+		}
+	}
+
 	// Stop containers in reverse order (dependents first)
+	// Only stop containers that will use SDK recreation - compose handles its own stop
 	o.publishProgress(operationID, "", stackName, "recreating", 65, "Stopping containers")
 	for i := len(orderedContainers) - 1; i >= 0; i-- {
 		cont := orderedContainers[i]
+		if networkModeContainers[cont.Name] {
+			// Skip stopping - compose will handle this
+			log.Printf("BATCH UPDATE: Skipping stop for %s (will use compose)", cont.Name)
+			continue
+		}
 		log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
 		timeout := 10
 		if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
@@ -669,12 +696,29 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		progress := 70 + (i * 20 / len(orderedContainers))
 		o.publishProgress(operationID, cont.Name, stackName, "recreating", progress, fmt.Sprintf("Recreating %s", cont.Name))
 
+		// Check if this container needs compose-based recreation (network_mode dependency)
+		if networkModeContainers[cont.Name] {
+			log.Printf("BATCH UPDATE: Using compose recreation for %s (network_mode dependency)", cont.Name)
+			if err := o.recreateContainerWithCompose(ctx, cont); err != nil {
+				log.Printf("BATCH UPDATE: Compose recreation failed for %s: %v", cont.Name, err)
+				failCount++
+				continue
+			}
+			log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
+			successCount++
+			continue
+		}
+
+		// SDK-based recreation for containers without network_mode dependencies
 		inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
 		if err != nil {
 			log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
 			failCount++
 			continue
 		}
+
+		// Save old image for recovery if creation fails
+		oldImage := inspect.Config.Image
 
 		// Remove container
 		if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
@@ -698,8 +742,41 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			EndpointsConfig: inspect.NetworkSettings.Networks,
 		}
 
-		if _, err := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name); err != nil {
-			log.Printf("BATCH UPDATE: Failed to create %s: %v", cont.Name, err)
+		_, createErr := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
+		if createErr != nil {
+			log.Printf("BATCH UPDATE: SDK creation failed for %s: %v, attempting fallback", cont.Name, createErr)
+
+			// Fallback 1: Try compose-based recreation
+			composeErr := o.recreateContainerWithCompose(ctx, cont)
+			if composeErr == nil {
+				log.Printf("BATCH UPDATE: Compose fallback succeeded for %s", cont.Name)
+				successCount++
+				continue
+			}
+			log.Printf("BATCH UPDATE: Compose fallback failed for %s: %v", cont.Name, composeErr)
+
+			// Fallback 2: Try to restore with old image to prevent orphaning
+			log.Printf("BATCH UPDATE: Attempting to restore %s with old image %s", cont.Name, oldImage)
+			restoreConfig := inspect.Config
+			restoreConfig.Image = oldImage
+			if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
+				restoreConfig.Hostname = ""
+				restoreConfig.Domainname = ""
+			}
+
+			_, restoreErr := o.dockerSDK.ContainerCreate(ctx, restoreConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
+			if restoreErr != nil {
+				log.Printf("BATCH UPDATE: CRITICAL - Failed to restore %s with old image: %v (container orphaned!)", cont.Name, restoreErr)
+				failCount++
+				continue
+			}
+
+			// Start the restored container
+			if startErr := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); startErr != nil {
+				log.Printf("BATCH UPDATE: Failed to start restored container %s: %v", cont.Name, startErr)
+			} else {
+				log.Printf("BATCH UPDATE: Restored %s with old image (update failed but container recovered)", cont.Name)
+			}
 			failCount++
 			continue
 		}
@@ -1022,6 +1099,34 @@ func (o *UpdateOrchestrator) restartContainerWithSDK(ctx context.Context, operat
 	return nil, fmt.Errorf("SDK-based recreation not supported - container must be managed by docker compose")
 }
 
+// hasNetworkModeDependency checks if a container has network_mode: service:* pointing to
+// another container in the batch. If so, it returns true and the name of the dependency.
+// Containers with network_mode dependencies must use compose-based recreation.
+func (o *UpdateOrchestrator) hasNetworkModeDependency(cont *docker.Container, batchNames map[string]bool) (bool, string) {
+	networkMode := cont.Labels[graph.NetworkModeLabel]
+	if strings.HasPrefix(networkMode, "service:") {
+		depName := strings.TrimPrefix(networkMode, "service:")
+		if batchNames[depName] {
+			return true, depName
+		}
+	}
+	return false, ""
+}
+
+// recreateContainerWithCompose recreates a single container using docker compose.
+// This is used for containers with network_mode dependencies during batch updates.
+func (o *UpdateOrchestrator) recreateContainerWithCompose(ctx context.Context, cont *docker.Container) error {
+	hostComposePath := o.getComposeFilePathForHost(cont)
+	containerComposePath := o.getComposeFilePath(cont)
+
+	if hostComposePath == "" || containerComposePath == "" {
+		return fmt.Errorf("no compose file path available for container %s", cont.Name)
+	}
+
+	recreator := compose.NewRecreator(o.dockerClient)
+	return recreator.RecreateWithCompose(ctx, cont, hostComposePath, containerComposePath)
+}
+
 // DependentRestartResult contains the results of restarting dependent containers
 type DependentRestartResult struct {
 	Restarted []string // Containers successfully restarted
@@ -1233,7 +1338,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 
 // waitForHealthy waits for a container to become healthy or confirms it's running.
 // For containers with health checks, polls until status is "healthy" or times out.
-// For containers without health checks, waits briefly then verifies the container is running.
+// For containers without health checks, verifies the container is running (fast path).
 func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1246,7 +1351,16 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 	hasHealthCheck := inspect.State != nil && inspect.State.Health != nil
 
 	if hasHealthCheck {
-		ticker := time.NewTicker(2 * time.Second)
+		// Check immediately first - container might already be healthy
+		if inspect.State.Health.Status == "healthy" {
+			return nil
+		}
+		if inspect.State.Health.Status == "unhealthy" {
+			return fmt.Errorf("container is unhealthy")
+		}
+
+		// Poll until healthy or timeout
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -1269,8 +1383,14 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 			}
 		}
 	} else {
-		// Poll every second until container is running or timeout
-		ticker := time.NewTicker(1 * time.Second)
+		// Fast path: container without health check - just verify it's running
+		// Check immediately - container is usually already running after compose up
+		if inspect.State.Running {
+			return nil
+		}
+
+		// Brief poll if not running yet (e.g., during restart)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
 		// Use FallbackWait as the timeout for containers without health checks
@@ -1747,6 +1867,16 @@ func (o *UpdateOrchestrator) queueOperation(ctx context.Context, operationID, st
 
 // processQueue processes queued operations in the background.
 func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
+	// Recover from panics to prevent queue processor from dying silently
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("QUEUE: PANIC recovered in queue processor: %v", r)
+			// Restart the queue processor after a brief delay
+			time.Sleep(5 * time.Second)
+			go o.processQueue(ctx)
+		}
+	}()
+
 	// Skip queue processing if storage is unavailable
 	if o.storage == nil {
 		log.Printf("QUEUE: Storage unavailable, queue processing disabled")
@@ -1759,6 +1889,7 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("QUEUE: Queue processor stopping")
 			return
 		case <-ticker.C:
 			queued, err := o.storage.GetQueuedUpdates(ctx)
@@ -1783,10 +1914,12 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 							}
 						}
 
+						// Use context.Background() for operations so they complete even if orchestrator shuts down
+						// This is consistent with non-queued operations (see UpdateSingleContainer, etc.)
 						if len(targetContainers) == 1 {
-							go o.executeSingleUpdate(ctx, q.OperationID, targetContainers[0], "latest", q.StackName)
+							go o.executeSingleUpdate(context.Background(), q.OperationID, targetContainers[0], "latest", q.StackName)
 						} else {
-							go o.executeBatchUpdate(ctx, q.OperationID, targetContainers, nil, q.StackName)
+							go o.executeBatchUpdate(context.Background(), q.OperationID, targetContainers, nil, q.StackName)
 						}
 					}
 				}

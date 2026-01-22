@@ -1,0 +1,304 @@
+/* ============================================
+   BASE STYLES
+   Root variables (colors), resets, and app container
+   ============================================ */
+
+:root {
+  /* Safe area insets */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+
+  /* === iOS DARK MODE COLOR PALETTE === */
+
+  /* Accent Colors */
+  --color-accent: #64D2FF;              /* iOS Teal - primary accent */
+  --color-accent-dim: rgba(100, 210, 255, 0.2);
+  --color-primary: #64D2FF;             /* Alias for accent */
+  --color-primary-rgb: 100, 210, 255;   /* RGB for rgba() usage */
+  --color-success: #30D158;             /* iOS Green */
+  --color-success-dim: rgba(48, 209, 88, 0.2);
+  --color-warning: #FFD60A;             /* iOS Yellow */
+  --color-warning-dim: rgba(255, 214, 10, 0.2);
+  --color-danger: #FF453A;              /* iOS Red */
+  --color-danger-dim: rgba(255, 69, 58, 0.2);
+  --color-error: #FF453A;               /* Alias for danger */
+  --color-orange: #FF9F0A;              /* iOS Orange */
+  --color-orange-dim: rgba(255, 159, 10, 0.2);
+  --color-purple: #AF52DE;              /* iOS Purple */
+  --color-purple-dim: rgba(175, 82, 222, 0.15);
+  --color-cyan: #5AC8FA;                /* iOS Cyan */
+  --color-cyan-dim: rgba(90, 200, 250, 0.2);
+
+  /* Background Colors */
+  --color-bg-primary: #000000;          /* True black (OLED) */
+  --color-bg-secondary: #1C1C1E;        /* iOS secondary system background */
+  --color-bg-tertiary: #2C2C2E;         /* iOS tertiary system background */
+  --color-bg-elevated: #3A3A3C;         /* Elevated surfaces */
+
+  /* Text Colors */
+  --color-text-primary: #FFFFFF;        /* Primary labels */
+  --color-text-secondary: #AEAEB2;      /* Secondary labels */
+  --color-text-tertiary: #636366;       /* Tertiary labels */
+  --color-text-quaternary: #48484A;     /* Quaternary labels */
+
+  /* Separators */
+  --color-separator: #2C2C2E;           /* Subtle separator */
+  --color-separator-opaque: #48484A;    /* Opaque separator */
+
+  /* Status Indicators */
+  --color-status-major: #FF453A;        /* Major version update */
+  --color-status-minor: #FF9F0A;        /* Minor version update */
+  --color-status-patch: #64D2FF;        /* Patch version update (blue - distinct from up-to-date) */
+  --color-status-current: #30D158;      /* Up to date */
+  --color-status-pinnable: #FFD60A;     /* Needs version pinning */
+  --color-status-local: #636366;        /* Local image */
+  --color-status-blocked: #FF9F0A;      /* Update blocked */
+  --color-status-ignored: #48484A;      /* Ignored container */
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.app {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--safe-area-inset-top);
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* Loading */
+.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  min-width: 300px;
+  max-width: 90%;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-separator);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-small {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-separator);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-inline {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Check progress */
+.check-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.check-progress-bar {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  background: var(--color-separator);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.check-progress-bar-fill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 10px;
+  transition: width 0.3s ease;
+}
+
+.check-progress-bar-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.check-progress-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Error */
+.error {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  height: 100dvh;
+  padding: 20px;
+}
+
+.error p {
+  color: var(--color-danger);
+  font-size: 17px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.error button {
+  background: var(--color-bg-secondary);
+  border: none;
+  color: var(--color-accent);
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.error button:active {
+  background: var(--color-bg-tertiary);
+}
+
+/* Empty state */
+.empty {
+  color: var(--color-text-secondary);
+  text-align: center;
+  padding: 40px;
+  font-size: 17px;
+}
+
+/* Empty state full */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-secondary);
+  padding: 80px 20px;
+  flex: 1;
+}
+
+.empty-state i {
+  font-size: 64px;
+  color: var(--color-success);
+  margin-bottom: 24px;
+  opacity: 0.8;
+}
+
+.empty-state h2 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* Loading inline */
+.loading-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  color: var(--color-text-secondary);
+}
+
+/* Content fade-in when loading completes */
+.main-content {
+  animation: content-fade-in var(--duration-normal) var(--ease-out);
+}
+
+@keyframes content-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Loading state - matches main layout to prevent shifts */
+.main-loading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}

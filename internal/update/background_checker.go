@@ -13,15 +13,18 @@ import (
 
 // BackgroundChecker runs container checks on a configurable interval
 type BackgroundChecker struct {
-	orchestrator  *Orchestrator
-	dockerClient  docker.Client
-	eventBus      *events.Bus
-	storage       storage.Storage
-	interval      time.Duration
-	cache         *CheckResultCache
-	stopChan      chan struct{}
-	runningMu     sync.Mutex
-	running       bool
+	orchestrator    *Orchestrator
+	dockerClient    docker.Client
+	eventBus        *events.Bus
+	storage         storage.Storage
+	interval        time.Duration
+	cache           *CheckResultCache
+	stopChan        chan struct{}
+	runningMu       sync.Mutex
+	running         bool
+	unsubscribe     func()           // Unsubscribe from event bus
+	refreshTimer    *time.Timer      // Debounce timer for container update refreshes
+	refreshTimerMu  sync.Mutex       // Protects refreshTimer
 }
 
 // CheckResultCache stores the latest check results
@@ -78,7 +81,8 @@ func (bc *BackgroundChecker) Start() {
 
 	// Subscribe to container update events to refresh cache after updates/rollbacks
 	if bc.eventBus != nil {
-		eventChan, _ := bc.eventBus.Subscribe(events.EventContainerUpdated)
+		eventChan, unsubscribe := bc.eventBus.Subscribe(events.EventContainerUpdated)
+		bc.unsubscribe = unsubscribe
 		go bc.handleContainerUpdates(eventChan)
 	}
 
@@ -91,18 +95,34 @@ func (bc *BackgroundChecker) Start() {
 
 // handleContainerUpdates listens for container update events and triggers cache refresh
 func (bc *BackgroundChecker) handleContainerUpdates(eventChan events.Subscriber) {
-	for e := range eventChan {
-		// Only trigger refresh for actual container updates (not our own background check events)
-		if source, ok := e.Payload["source"].(string); ok && source == "background_checker" {
-			continue // Ignore our own events to prevent infinite loops
-		}
-		// Check if this is from an update/rollback operation
-		if _, hasOpID := e.Payload["operation_id"]; hasOpID {
-			log.Printf("BACKGROUND_CHECKER: Container updated, scheduling refresh in 2s")
-			// Wait a moment for the container to stabilize after restart
-			time.AfterFunc(2*time.Second, func() {
-				bc.TriggerCheck()
-			})
+	for {
+		select {
+		case <-bc.stopChan:
+			log.Printf("BACKGROUND_CHECKER: handleContainerUpdates stopping")
+			return
+		case e, ok := <-eventChan:
+			if !ok {
+				// Channel closed (unsubscribed)
+				log.Printf("BACKGROUND_CHECKER: event channel closed")
+				return
+			}
+			// Only trigger refresh for actual container updates (not our own background check events)
+			if source, ok := e.Payload["source"].(string); ok && source == "background_checker" {
+				continue // Ignore our own events to prevent infinite loops
+			}
+			// Check if this is from an update/rollback operation
+			if _, hasOpID := e.Payload["operation_id"]; hasOpID {
+				log.Printf("BACKGROUND_CHECKER: Container updated, scheduling refresh in 2s")
+				// Debounce: cancel existing timer and create a new one
+				bc.refreshTimerMu.Lock()
+				if bc.refreshTimer != nil {
+					bc.refreshTimer.Stop()
+				}
+				bc.refreshTimer = time.AfterFunc(2*time.Second, func() {
+					bc.TriggerCheck()
+				})
+				bc.refreshTimerMu.Unlock()
+			}
 		}
 	}
 }
@@ -117,6 +137,21 @@ func (bc *BackgroundChecker) Stop() {
 	}
 
 	log.Printf("BACKGROUND_CHECKER: Stopping")
+
+	// Cancel any pending refresh timer
+	bc.refreshTimerMu.Lock()
+	if bc.refreshTimer != nil {
+		bc.refreshTimer.Stop()
+		bc.refreshTimer = nil
+	}
+	bc.refreshTimerMu.Unlock()
+
+	// Unsubscribe from event bus (closes the event channel)
+	if bc.unsubscribe != nil {
+		bc.unsubscribe()
+		bc.unsubscribe = nil
+	}
+
 	close(bc.stopChan)
 	bc.running = false
 }
@@ -133,6 +168,29 @@ func (bc *BackgroundChecker) checkLoop() {
 		case <-ticker.C:
 			bc.runCheck()
 		}
+	}
+}
+
+// updateLastCacheRefreshIfNeeded updates lastCacheRefresh when cache was cleared or empty
+// Must be called while holding bc.cache.mu lock
+func (bc *BackgroundChecker) updateLastCacheRefreshIfNeeded(now time.Time, cacheWasEmpty bool) {
+	if !bc.cache.cacheCleared && !cacheWasEmpty {
+		return
+	}
+
+	log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
+	bc.cache.lastCacheRefresh = now
+	bc.cache.cacheCleared = false
+
+	// Persist to database with timeout context to prevent goroutine leaks
+	if bc.storage != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := bc.storage.SetConfig(ctx, "last_cache_refresh", now.Format(time.RFC3339)); err != nil {
+				log.Printf("BACKGROUND_CHECKER: Failed to persist last_cache_refresh: %v", err)
+			}
+		}()
 	}
 }
 
@@ -179,20 +237,7 @@ func (bc *BackgroundChecker) runCheck() {
 		now := time.Now()
 		bc.cache.mu.Lock()
 		bc.cache.result = &DiscoveryResult{Containers: []ContainerInfo{}}
-		// Update lastCacheRefresh if cache was cleared OR cache was empty (fresh data fetched)
-		if bc.cache.cacheCleared || cacheWasEmpty {
-			log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
-			bc.cache.lastCacheRefresh = now
-			bc.cache.cacheCleared = false
-			// Persist to database
-			if bc.storage != nil {
-				go func() {
-					if err := bc.storage.SetConfig(context.Background(), "last_cache_refresh", now.Format(time.RFC3339)); err != nil {
-						log.Printf("BACKGROUND_CHECKER: Failed to persist last_cache_refresh: %v", err)
-					}
-				}()
-			}
-		}
+		bc.updateLastCacheRefreshIfNeeded(now, cacheWasEmpty)
 		bc.cache.lastBackgroundRun = now
 		bc.cache.mu.Unlock()
 		return
@@ -202,21 +247,7 @@ func (bc *BackgroundChecker) runCheck() {
 	now := time.Now()
 	bc.cache.mu.Lock()
 	bc.cache.result = result
-	// Update lastCacheRefresh if cache was cleared OR cache was empty (fresh data fetched)
-	if bc.cache.cacheCleared || cacheWasEmpty {
-		log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
-		bc.cache.lastCacheRefresh = now
-		bc.cache.cacheCleared = false
-		// Persist to database
-		if bc.storage != nil {
-			go func() {
-				if err := bc.storage.SetConfig(context.Background(), "last_cache_refresh", now.Format(time.RFC3339)); err != nil {
-					log.Printf("BACKGROUND_CHECKER: Failed to persist last_cache_refresh: %v", err)
-				}
-			}()
-		}
-	}
-	// Always update lastBackgroundRun (for both background check and cache refresh)
+	bc.updateLastCacheRefreshIfNeeded(now, cacheWasEmpty)
 	bc.cache.lastBackgroundRun = now
 	bc.cache.mu.Unlock()
 

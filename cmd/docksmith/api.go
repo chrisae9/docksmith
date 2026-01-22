@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -52,15 +53,87 @@ func (c *APICommand) ParseFlags(args []string) error {
 	return nil
 }
 
+// validateStartup performs pre-flight checks and prints helpful error messages
+func (c *APICommand) validateStartup(ctx context.Context) error {
+	log.Println("Running startup validation...")
+
+	// Check database directory is writable
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "/data/docksmith.db"
+	}
+	dbDir := filepath.Dir(dbPath)
+
+	// Check if directory exists
+	if info, err := os.Stat(dbDir); err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("WARNING: Database directory does not exist: %s", dbDir)
+			log.Println("  - Create it with: mkdir -p " + dbDir)
+			log.Println("  - Or mount a volume: -v ./data:/data")
+		} else {
+			log.Printf("WARNING: Cannot access database directory %s: %v", dbDir, err)
+		}
+	} else if !info.IsDir() {
+		log.Printf("WARNING: Database path parent is not a directory: %s", dbDir)
+	} else {
+		// Try to create a test file to verify write access
+		testFile := filepath.Join(dbDir, ".docksmith-write-test")
+		if f, err := os.Create(testFile); err != nil {
+			log.Printf("WARNING: Database directory is not writable: %s", dbDir)
+			log.Println("  - Check volume mount permissions")
+			log.Println("  - Docksmith runs as UID 1000, ensure the directory is writable")
+		} else {
+			f.Close()
+			os.Remove(testFile)
+		}
+	}
+
+	log.Println("Startup validation complete")
+	return nil
+}
+
 // Run starts the API server
 func (c *APICommand) Run(ctx context.Context) error {
+	// Run startup validation first
+	if err := c.validateStartup(ctx); err != nil {
+		return err
+	}
+
 	// Initialize Docker service
 	log.Println("Initializing Docker service...")
 	dockerClient, err := docker.NewService()
 	if err != nil {
-		return fmt.Errorf("failed to create Docker service: %w", err)
+		// Provide helpful error message for common Docker connection issues
+		log.Println("")
+		log.Println("ERROR: Cannot connect to Docker daemon")
+		log.Println("")
+		log.Println("Common causes:")
+		log.Println("  1. Docker socket not mounted:")
+		log.Println("     Add to your docker-compose.yml:")
+		log.Println("       volumes:")
+		log.Println("         - /var/run/docker.sock:/var/run/docker.sock")
+		log.Println("")
+		log.Println("  2. Docker daemon not running:")
+		log.Println("     sudo systemctl start docker")
+		log.Println("")
+		log.Println("  3. Permission denied:")
+		log.Println("     Docksmith runs as UID 1000 with docker group (GID 972)")
+		log.Println("     Check your docker group GID: getent group docker")
+		log.Println("")
+		return fmt.Errorf("failed to connect to Docker: %w", err)
 	}
 	defer dockerClient.Close()
+
+	// Verify Docker connection by listing containers
+	if _, err := dockerClient.ListContainers(ctx); err != nil {
+		log.Println("")
+		log.Println("ERROR: Connected to Docker but cannot list containers")
+		log.Println("")
+		log.Println("This usually means permission issues with the Docker socket.")
+		log.Println("Check that the container has access to /var/run/docker.sock")
+		log.Println("")
+		return fmt.Errorf("Docker connection test failed: %w", err)
+	}
 	log.Println("Docker service connected")
 
 	// Initialize storage (optional - graceful degradation)
@@ -108,7 +181,6 @@ func (c *APICommand) Run(ctx context.Context) error {
 	log.Println("  GET  /api/check      - Discover and check containers")
 	log.Println("  GET  /api/operations - List update operations")
 	log.Println("  GET  /api/history    - Check and update history")
-	log.Println("  GET  /api/backups    - List compose backups")
 	log.Println("  POST /api/update     - Trigger container update")
 	log.Println("  POST /api/rollback   - Get rollback information")
 	log.Println("")

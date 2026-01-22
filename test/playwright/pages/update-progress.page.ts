@@ -28,7 +28,8 @@ export class UpdateProgressPage {
   }
 
   async waitForPageLoaded(timeout = 10000) {
-    await expect(this.page.locator('.update-progress-page')).toBeVisible({ timeout });
+    // Operation progress page (unified for updates, rollback, restart)
+    await expect(this.page.locator('.operation-progress-page, .progress-page')).toBeVisible({ timeout });
     await expect(this.containerList).toBeVisible({ timeout });
   }
 
@@ -65,12 +66,16 @@ export class UpdateProgressPage {
 
   async getSuccessCount(): Promise<number> {
     const card = this.statsCards.locator('.stat-card.success');
+    const count = await card.count();
+    if (count === 0) return 0;
     const value = await card.locator('.stat-value').textContent();
     return parseInt(value || '0', 10);
   }
 
   async getFailedCount(): Promise<number> {
     const card = this.statsCards.locator('.stat-card.error');
+    const count = await card.count();
+    if (count === 0) return 0;
     const value = await card.locator('.stat-value').textContent();
     return parseInt(value || '0', 10);
   }

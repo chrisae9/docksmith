@@ -28,5 +28,12 @@ The dockerized app runs on a Tailscale network:
 ## Project Status
 This app is not released yet - no need to worry about backward compatibility or deprecation. Just fix things directly.
 
+## Bug References
+When user provides a UUID like `1e0b30ef-...`, it's a docksmith update/operation ID from the history page. Check the API (`/api/history`) or UI to see the error details.
+
+## Git Practices
+- Do NOT commit CLAUDE.md or .claude/ directory to git (they're in .gitignore)
+- Only commit actual code changes
+
 ## Context Preservation
 When compacting, preserve this CLAUDE.md content in the summary - it is not automatically re-read after compaction.

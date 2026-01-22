@@ -5,29 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
-	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/google/uuid"
 )
 
-// Docker Compose label names
-const (
-	composeConfigFilesLabel = "com.docker.compose.project.config_files"
-	composeServiceLabel     = "com.docker.compose.service"
-	composeProjectLabel     = "com.docker.compose.project"
-)
+// Docker Compose label constants are defined in constants.go
 
 // SetLabelsRequest represents a request to set labels
 type SetLabelsRequest struct {
 	Container        string  `json:"container"`
 	Ignore           *bool   `json:"ignore,omitempty"`
 	AllowLatest      *bool   `json:"allow_latest,omitempty"`
+	AllowPrerelease  *bool   `json:"allow_prerelease,omitempty"`
 	VersionPinMajor  *bool   `json:"version_pin_major,omitempty"`
 	VersionPinMinor  *bool   `json:"version_pin_minor,omitempty"`
 	TagRegex         *string `json:"tag_regex,omitempty"`
@@ -66,6 +60,7 @@ type LabelOperationResult struct {
 var docksmithLabels = []string{
 	scripts.IgnoreLabel,
 	scripts.AllowLatestLabel,
+	scripts.AllowPrereleaseLabel,
 	scripts.VersionPinMajorLabel,
 	scripts.VersionPinMinorLabel,
 	scripts.TagRegexLabel,
@@ -91,9 +86,7 @@ func getDocksmithLabels(containerLabels map[string]string) map[string]string {
 // Returns all container labels from Docker, useful for identifying the container.
 func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	containerName := r.PathValue("container")
-
-	if containerName == "" {
-		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+	if !validateRequired(w, "container name", containerName) {
 		return
 	}
 
@@ -102,7 +95,7 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	// Find the container
 	container, err := s.findContainerByName(ctx, containerName)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondNotFound(w, err)
 		return
 	}
 
@@ -119,29 +112,27 @@ func (s *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 // POST /api/labels/set
 func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 	var req SetLabelsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		output.WriteJSONError(w, fmt.Errorf("invalid request: %w", err))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
-	if req.Container == "" {
-		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+	if !validateRequired(w, "container", req.Container) {
 		return
 	}
 
 	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
 		req.Script == nil && req.RestartAfter == nil {
-		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
+		RespondBadRequest(w, fmt.Errorf("no labels specified"))
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), LabelOperationTimeout)
 	defer cancel()
 
 	result, err := s.setLabels(ctx, &req)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -157,27 +148,25 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 // POST /api/labels/remove
 func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 	var req RemoveLabelsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		output.WriteJSONError(w, fmt.Errorf("invalid request: %w", err))
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
-	if req.Container == "" {
-		output.WriteJSONError(w, fmt.Errorf("missing container name"))
+	if !validateRequired(w, "container", req.Container) {
 		return
 	}
 
 	if len(req.LabelNames) == 0 {
-		output.WriteJSONError(w, fmt.Errorf("no labels specified"))
+		RespondBadRequest(w, fmt.Errorf("no labels specified"))
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), LabelOperationTimeout)
 	defer cancel()
 
 	result, err := s.removeLabels(ctx, &req)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -189,13 +178,24 @@ func (s *Server) handleLabelsRemove(w http.ResponseWriter, r *http.Request) {
 	RespondSuccess(w, result)
 }
 
-// setLabels implements the label setting logic (atomic: compose update + restart)
-func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
+// labelOperationConfig holds common parameters for label operations
+type labelOperationConfig struct {
+	containerName string
+	operationType string // "set" or "remove"
+	noRestart     bool
+	force         bool
+}
+
+// labelModifier is a function that applies label changes to a service and returns the modified/removed labels
+type labelModifier func(service *compose.Service) (modified map[string]string, removed []string, err error)
+
+// executeLabelOperation is the common workflow for both set and remove operations
+func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationConfig, modify labelModifier) (*LabelOperationResult, error) {
 	operationID := uuid.New().String()
 	result := &LabelOperationResult{
 		Success:        false,
-		Container:      req.Container,
-		Operation:      "set",
+		Container:      cfg.containerName,
+		Operation:      cfg.operationType,
 		OperationID:    operationID,
 		LabelsModified: make(map[string]string),
 		Restarted:      false,
@@ -203,17 +203,20 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	}
 
 	// Find container
-	container, err := s.findContainerByName(ctx, req.Container)
+	container, err := s.findContainerByName(ctx, cfg.containerName)
 	if err != nil {
 		return nil, err
 	}
 
 	// Capture old labels before making any changes
 	oldLabels := getDocksmithLabels(container.Labels)
-	oldLabelsJSON, _ := json.Marshal(oldLabels)
+	oldLabelsJSON, err := json.Marshal(oldLabels)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal old labels: %w", err)
+	}
 
 	// Get compose file path
-	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
+	composeFilePath, ok := container.Labels[ComposeConfigFilesLabel]
 	if !ok || composeFilePath == "" {
 		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
 	}
@@ -222,8 +225,8 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
 
 	result.ComposeFile = composeFilePath
-	serviceName := container.Labels[composeServiceLabel]
-	stackName := container.Labels[composeProjectLabel]
+	serviceName := container.Labels[ComposeServiceLabel]
+	stackName := container.Labels[ComposeProjectLabel]
 
 	// Create operation record
 	now := time.Now()
@@ -244,7 +247,7 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 	}
 
 	// Run pre-update check if configured and not forced/no-restart
-	skipCheck := req.NoRestart || req.Force
+	skipCheck := cfg.noRestart || cfg.force
 	ran, passed, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
 	result.PreCheckRan = ran
 	result.PreCheckPassed = passed
@@ -253,18 +256,8 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
 	}
 
-	// Create backup
-	if err != nil {
-		s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to create backup: %v", err))
-		return nil, fmt.Errorf("failed to create backup: %w", err)
-	}
-	defer func() {
-		if result.Success {
-		}
-	}()
-
 	// Load compose file (handles include-based setups)
-	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, req.Container)
+	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, cfg.containerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load compose file: %w", err)
 	}
@@ -275,172 +268,13 @@ func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOp
 		return nil, fmt.Errorf("failed to find service: %w", err)
 	}
 
-	// Apply boolean label updates
-	boolLabels := []struct {
-		value    *bool
-		labelKey string
-	}{
-		{req.Ignore, scripts.IgnoreLabel},
-		{req.AllowLatest, scripts.AllowLatestLabel},
-		{req.VersionPinMajor, scripts.VersionPinMajorLabel},
-		{req.VersionPinMinor, scripts.VersionPinMinorLabel},
-	}
-
-	for _, bl := range boolLabels {
-		if bl.value != nil {
-			val, err := applyBoolLabel(service, bl.labelKey, bl.value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
-			}
-			result.LabelsModified[bl.labelKey] = val
-		}
-	}
-
-	// Validate tag regex before applying
-	if req.TagRegex != nil && *req.TagRegex != "" {
-		if err := validateRegexPattern(*req.TagRegex); err != nil {
-			return nil, fmt.Errorf("invalid tag regex: %w", err)
-		}
-	}
-
-	// Apply string label updates
-	stringLabels := []struct {
-		value    *string
-		labelKey string
-	}{
-		{req.TagRegex, scripts.TagRegexLabel},
-		{req.VersionMin, scripts.VersionMinLabel},
-		{req.VersionMax, scripts.VersionMaxLabel},
-		{req.Script, scripts.PreUpdateCheckLabel},
-		{req.RestartAfter, scripts.RestartAfterLabel},
-	}
-
-	for _, sl := range stringLabels {
-		if sl.value != nil {
-			val, err := applyStringLabel(service, sl.labelKey, sl.value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
-			}
-			result.LabelsModified[sl.labelKey] = val
-		}
-	}
-
-	// Save compose file
-	if err := composeFile.Save(); err != nil {
-		return nil, fmt.Errorf("failed to save compose file: %w", err)
-	}
-
-	// Restart container to apply labels (unless --no-restart)
-	if !req.NoRestart {
-		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
-			s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to restart container: %v", err))
-			return nil, fmt.Errorf("failed to restart container: %w", err)
-		}
-		result.Restarted = true
-	}
-
-	result.Success = true
-	result.Message = fmt.Sprintf("%d label(s) set successfully", len(result.LabelsModified))
-
-	// Complete the operation with new labels
-	newLabelsJSON, _ := json.Marshal(result.LabelsModified)
-	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
-
-	return result, nil
-}
-
-// removeLabels implements the label removal logic (atomic: compose update + restart)
-func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*LabelOperationResult, error) {
-	operationID := uuid.New().String()
-	result := &LabelOperationResult{
-		Success:       false,
-		Container:     req.Container,
-		Operation:     "remove",
-		OperationID:   operationID,
-		LabelsRemoved: req.LabelNames,
-		Restarted:     false,
-		PreCheckRan:   false,
-	}
-
-	// Find container
-	container, err := s.findContainerByName(ctx, req.Container)
+	// Apply the label modifications
+	modified, removed, err := modify(service)
 	if err != nil {
 		return nil, err
 	}
-
-	// Capture old labels before making any changes
-	oldLabels := getDocksmithLabels(container.Labels)
-	oldLabelsJSON, _ := json.Marshal(oldLabels)
-
-	// Get compose file path
-	composeFilePath, ok := container.Labels[composeConfigFilesLabel]
-	if !ok || composeFilePath == "" {
-		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
-	}
-
-	// Translate host path to container path
-	composeFilePath = s.pathTranslator.TranslateToContainer(composeFilePath)
-
-	result.ComposeFile = composeFilePath
-	serviceName := container.Labels[composeServiceLabel]
-	stackName := container.Labels[composeProjectLabel]
-
-	// Create operation record
-	now := time.Now()
-	op := storage.UpdateOperation{
-		OperationID:   operationID,
-		ContainerID:   container.ID,
-		ContainerName: container.Name,
-		StackName:     stackName,
-		OperationType: "label_change",
-		Status:        "in_progress",
-		OldVersion:    string(oldLabelsJSON),
-		StartedAt:     &now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if s.storageService != nil {
-		s.storageService.SaveUpdateOperation(ctx, op)
-	}
-
-	// Run pre-update check if configured and not forced/no-restart
-	skipCheck := req.NoRestart || req.Force
-	ran, passed, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
-	result.PreCheckRan = ran
-	result.PreCheckPassed = passed
-	if err != nil {
-		s.failLabelOperation(ctx, operationID, fmt.Sprintf("pre-update check failed: %v", err))
-		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
-	}
-
-	// Create backup
-	if err != nil {
-		s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to create backup: %v", err))
-		return nil, fmt.Errorf("failed to create backup: %w", err)
-	}
-	defer func() {
-		if result.Success {
-		}
-	}()
-
-	// Load compose file (handles include-based setups)
-	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, req.Container)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load compose file: %w", err)
-	}
-
-	// Find service
-	service, err := composeFile.FindServiceByContainerName(serviceName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find service: %w", err)
-	}
-
-	// Remove all specified labels
-	for _, labelName := range req.LabelNames {
-		if err := service.RemoveLabel(labelName); err != nil {
-			return nil, fmt.Errorf("failed to remove label %s: %w", labelName, err)
-		}
-	}
+	result.LabelsModified = modified
+	result.LabelsRemoved = removed
 
 	// Save compose file
 	if err := composeFile.Save(); err != nil {
@@ -448,7 +282,7 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	}
 
 	// Restart container to apply changes (unless --no-restart)
-	if !req.NoRestart {
+	if !cfg.noRestart {
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
 			s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to restart container: %v", err))
 			return nil, fmt.Errorf("failed to restart container: %w", err)
@@ -457,17 +291,113 @@ func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*L
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("%d label(s) removed successfully", len(req.LabelNames))
 
-	// Complete the operation - for remove, new labels is empty map for removed labels
-	newLabels := make(map[string]string)
-	for _, labelName := range req.LabelNames {
-		newLabels[labelName] = "" // Empty value indicates removed
+	// Complete the operation
+	var newLabelsJSON []byte
+	if len(modified) > 0 {
+		newLabelsJSON, err = json.Marshal(modified)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal modified labels: %w", err)
+		}
+		result.Message = fmt.Sprintf("%d label(s) set successfully", len(modified))
+	} else if len(removed) > 0 {
+		// For remove, create map with empty values to indicate removed
+		removedMap := make(map[string]string)
+		for _, labelName := range removed {
+			removedMap[labelName] = ""
+		}
+		newLabelsJSON, err = json.Marshal(removedMap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal removed labels: %w", err)
+		}
+		result.Message = fmt.Sprintf("%d label(s) removed successfully", len(removed))
 	}
-	newLabelsJSON, _ := json.Marshal(newLabels)
 	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
 
 	return result, nil
+}
+
+// setLabels implements the label setting logic (atomic: compose update + restart)
+func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
+	return s.executeLabelOperation(ctx, labelOperationConfig{
+		containerName: req.Container,
+		operationType: "set",
+		noRestart:     req.NoRestart,
+		force:         req.Force,
+	}, func(service *compose.Service) (map[string]string, []string, error) {
+		modified := make(map[string]string)
+
+		// Apply boolean label updates
+		boolLabels := []struct {
+			value    *bool
+			labelKey string
+		}{
+			{req.Ignore, scripts.IgnoreLabel},
+			{req.AllowLatest, scripts.AllowLatestLabel},
+			{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
+			{req.VersionPinMajor, scripts.VersionPinMajorLabel},
+			{req.VersionPinMinor, scripts.VersionPinMinorLabel},
+		}
+
+		for _, bl := range boolLabels {
+			if bl.value != nil {
+				val, err := applyBoolLabel(service, bl.labelKey, bl.value)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
+				}
+				modified[bl.labelKey] = val
+			}
+		}
+
+		// Validate tag regex before applying
+		if req.TagRegex != nil && *req.TagRegex != "" {
+			if err := validateRegexPattern(*req.TagRegex); err != nil {
+				return nil, nil, fmt.Errorf("invalid tag regex: %w", err)
+			}
+		}
+
+		// Apply string label updates
+		stringLabels := []struct {
+			value    *string
+			labelKey string
+		}{
+			{req.TagRegex, scripts.TagRegexLabel},
+			{req.VersionMin, scripts.VersionMinLabel},
+			{req.VersionMax, scripts.VersionMaxLabel},
+			{req.Script, scripts.PreUpdateCheckLabel},
+			{req.RestartAfter, scripts.RestartAfterLabel},
+		}
+
+		for _, sl := range stringLabels {
+			if sl.value != nil {
+				val, err := applyStringLabel(service, sl.labelKey, sl.value)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
+				}
+				modified[sl.labelKey] = val
+			}
+		}
+
+		return modified, nil, nil
+	})
+}
+
+// removeLabels implements the label removal logic (atomic: compose update + restart)
+func (s *Server) removeLabels(ctx context.Context, req *RemoveLabelsRequest) (*LabelOperationResult, error) {
+	return s.executeLabelOperation(ctx, labelOperationConfig{
+		containerName: req.Container,
+		operationType: "remove",
+		noRestart:     req.NoRestart,
+		force:         req.Force,
+	}, func(service *compose.Service) (map[string]string, []string, error) {
+		// Remove all specified labels
+		for _, labelName := range req.LabelNames {
+			if err := service.RemoveLabel(labelName); err != nil {
+				return nil, nil, fmt.Errorf("failed to remove label %s: %w", labelName, err)
+			}
+		}
+		return nil, req.LabelNames, nil
+	})
 }
 
 // failLabelOperation marks a label change operation as failed
@@ -531,9 +461,9 @@ func (s *Server) restartContainerByService(ctx context.Context, composeFilePath,
 
 	var targetContainer *docker.Container
 	for _, c := range containers {
-		if svc, ok := c.Labels[composeServiceLabel]; ok && svc == serviceName {
+		if svc, ok := c.Labels[ComposeServiceLabel]; ok && svc == serviceName {
 			// Also verify it's from the same compose file
-			if cf, ok := c.Labels[composeConfigFilesLabel]; ok {
+			if cf, ok := c.Labels[ComposeConfigFilesLabel]; ok {
 				// Translate and compare
 				translatedCF := s.pathTranslator.TranslateToContainer(cf)
 				if translatedCF == composeFilePath {
@@ -556,42 +486,6 @@ func (s *Server) restartContainerByService(ctx context.Context, composeFilePath,
 	recreator := compose.NewRecreator(s.dockerService)
 	if err := recreator.RecreateWithCompose(ctx, targetContainer, hostComposePath, composeFilePath); err != nil {
 		return fmt.Errorf("failed to recreate container with compose: %w", err)
-	}
-
-	return nil
-}
-
-// findContainerByName searches for a container by name in the list of running containers
-func (s *Server) findContainerByName(ctx context.Context, containerName string) (*docker.Container, error) {
-	containers, err := s.dockerService.ListContainers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	for _, c := range containers {
-		if c.Name == containerName {
-			return &c, nil
-		}
-	}
-
-	return nil, fmt.Errorf("container not found: %s", containerName)
-}
-
-// validateRegexPattern validates a regular expression pattern for tag filtering
-func validateRegexPattern(pattern string) error {
-	if pattern == "" {
-		return nil // Empty is valid (no filtering)
-	}
-
-	// Security: limit pattern length to prevent resource exhaustion
-	if len(pattern) > 500 {
-		return fmt.Errorf("pattern too long (max 500 characters)")
-	}
-
-	// Try to compile the regex
-	_, err := regexp.Compile(pattern)
-	if err != nil {
-		return fmt.Errorf("invalid regex: %w", err)
 	}
 
 	return nil

@@ -2,7 +2,6 @@ import type {
   CheckResponse,
   OperationsResponse,
   HistoryResponse,
-  BackupsResponse,
   HealthCheckResponse,
   DockerConfigResponse,
   APIResponse,
@@ -24,6 +23,21 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<API
     },
     ...options,
   });
+
+  // Check if response is OK before attempting to parse JSON
+  if (!response.ok) {
+    // Try to parse error response as JSON, fall back to status text
+    try {
+      const errorData = await response.json();
+      return errorData as APIResponse<T>;
+    } catch {
+      // Response is not JSON (e.g., 502 Bad Gateway, network error)
+      return {
+        success: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+      } as APIResponse<T>;
+    }
+  }
 
   const data = await response.json();
   return data as APIResponse<T>;
@@ -82,19 +96,6 @@ export async function getHistory(params?: {
 
   const query = searchParams.toString();
   return fetchAPI(`/history${query ? `?${query}` : ''}`);
-}
-
-// Compose backups
-export async function getBackups(params?: {
-  limit?: number;
-  container?: string;
-}): Promise<BackupsResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.limit) searchParams.set('limit', params.limit.toString());
-  if (params?.container) searchParams.set('container', params.container);
-
-  const query = searchParams.toString();
-  return fetchAPI(`/backups${query ? `?${query}` : ''}`);
 }
 
 // Trigger container update

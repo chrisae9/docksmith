@@ -24,6 +24,7 @@
 .hero-status-card:has(.status-badge.local) .hero-status-icon { color: var(--color-text-tertiary); }
 .hero-status-card:has(.status-badge.ignored) .hero-status-icon { color: var(--color-text-quaternary); }
 .hero-status-card:has(.status-badge.metadata) .hero-status-icon { color: var(--color-text-tertiary); }
+.hero-status-card:has(.status-badge.mismatch) .hero-status-icon { color: var(--color-warning); }
 
 .hero-status-content {
   flex: 1;
@@ -70,6 +71,19 @@
   font-family: inherit;
 }
 
+/* Mismatch Info */
+.hero-version-info.mismatch-info {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.hero-version-info .mismatch-error {
+  font-size: 12px;
+  color: var(--color-warning);
+  font-family: inherit;
+}
+
 /* Status/Change Badges - Compact pills */
 .status-badge {
   display: inline-block;
@@ -86,6 +100,7 @@
 .status-badge.local { background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
 .status-badge.ignored { background: var(--color-bg-tertiary); color: var(--color-text-tertiary); }
 .status-badge.metadata { background: var(--color-bg-tertiary); color: var(--color-text-tertiary); }
+.status-badge.mismatch { background: var(--color-warning-dim); color: var(--color-warning); }
 .status-badge.unknown { background: var(--color-bg-tertiary); color: var(--color-text-tertiary); }
 
 .change-badge {
@@ -202,8 +217,7 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   margin-bottom: 8px;
   padding: 0 4px;
   display: flex;
@@ -279,13 +293,15 @@
   position: absolute;
   top: 50%;
   left: 2px;
-  transform: translateY(-50%);
+  transform: translateY(-50%) translateX(0);
   width: 27px;
   height: 27px;
   background: white;
   border-radius: 50%;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-  transition: transform 0.3s ease, left 0.3s ease;
+  /* Use transform instead of left for GPU-accelerated animation */
+  transition: transform 0.3s ease;
+  will-change: transform;
 }
 
 .checkbox-row input[type="checkbox"]:checked {
@@ -293,7 +309,8 @@
 }
 
 .checkbox-row input[type="checkbox"]:checked::before {
-  left: 22px;
+  /* Move 20px to the right (22px - 2px initial position) */
+  transform: translateY(-50%) translateX(20px);
 }
 
 .checkbox-row input[type="checkbox"]:focus-visible {
@@ -536,6 +553,27 @@
 .image-link:hover {
   text-decoration: underline;
   opacity: 0.8;
+}
+
+/* Digest Comparison - for :latest tag rebuilds */
+.digest-comparison {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.digest-current {
+  color: var(--color-text-tertiary);
+}
+
+.digest-arrow {
+  font-size: 10px;
+  color: var(--color-text-quaternary);
+}
+
+.digest-latest {
+  color: var(--color-accent);
+  font-weight: 500;
 }
 
 /* Dependencies List */

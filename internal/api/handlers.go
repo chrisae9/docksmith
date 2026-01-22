@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/chis/docksmith/internal/events"
-	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/storage"
 )
 
@@ -45,7 +43,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	// Fallback to direct discovery if no background checker
 	result, err := s.discoveryOrchestrator.DiscoverAndCheck(ctx)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -58,7 +56,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 // using existing cached registry data (respects CACHE_TTL)
 func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
 	if s.backgroundChecker == nil {
-		output.WriteJSONError(w, fmt.Errorf("background checker not available"))
+		RespondInternalError(w, fmt.Errorf("background checker not available"))
 		return
 	}
 
@@ -78,8 +76,7 @@ func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
 // handleOperations returns update operations history
 // This is the EXACT same logic as: docksmith operations --json
 func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
-	if s.storageService == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireStorage(w) {
 		return
 	}
 
@@ -103,7 +100,7 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -116,8 +113,7 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 
 // handleOperationByID returns a single operation by ID
 func (s *Server) handleOperationByID(w http.ResponseWriter, r *http.Request) {
-	if s.storageService == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireStorage(w) {
 		return
 	}
 
@@ -126,13 +122,12 @@ func (s *Server) handleOperationByID(w http.ResponseWriter, r *http.Request) {
 
 	operation, found, err := s.storageService.GetUpdateOperation(ctx, operationID)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
 	if !found {
-		w.WriteHeader(http.StatusNotFound)
-		output.WriteJSON(w, output.ErrorMessageResponse("operation not found"))
+		RespondNotFound(w, fmt.Errorf("operation not found"))
 		return
 	}
 
@@ -142,8 +137,7 @@ func (s *Server) handleOperationByID(w http.ResponseWriter, r *http.Request) {
 // handleHistory returns unified check and update history
 // This is the EXACT same logic as: docksmith history --json
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if s.storageService == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireStorage(w) {
 		return
 	}
 
@@ -160,7 +154,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if historyType == "" || historyType == "check" {
 		checkHistory, err = s.storageService.GetAllCheckHistory(ctx, limit)
 		if err != nil {
-			output.WriteJSONError(w, err)
+			RespondInternalError(w, err)
 			return
 		}
 	}
@@ -168,7 +162,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if historyType == "" || historyType == "update" {
 		updateLog, err = s.storageService.GetAllUpdateLog(ctx, limit)
 		if err != nil {
-			output.WriteJSONError(w, err)
+			RespondInternalError(w, err)
 			return
 		}
 	}
@@ -182,44 +176,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleBackups returns compose file backups
-// This is the EXACT same logic as: docksmith backups --json
-func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
-	if s.storageService == nil {
-		output.WriteJSONError(w, errNoStorage)
-		return
-	}
-
-	ctx := r.Context()
-
-	limit := parseIntParam(r, "limit", 50)
-	container := r.URL.Query().Get("container")
-
-	var backups []storage.ComposeBackup
-	var err error
-
-	// Same logic as CLI
-	if container != "" {
-		backups, err = s.storageService.GetComposeBackupsByContainer(ctx, container)
-	} else {
-		backups, err = s.storageService.GetAllComposeBackups(ctx, limit)
-	}
-
-	if err != nil {
-		output.WriteJSONError(w, err)
-		return
-	}
-
-	RespondSuccess(w, map[string]any{
-		"backups": backups,
-		"count":   len(backups),
-	})
-}
-
 // handlePolicies returns rollback policies
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
-	if s.storageService == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireStorage(w) {
 		return
 	}
 
@@ -228,7 +187,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	// Get global policy
 	globalPolicy, _, err := s.storageService.GetRollbackPolicy(ctx, "global", "")
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -240,8 +199,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 // handleUpdate triggers a container update
 // This reuses the same UpdateOrchestrator as CLI
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	if s.updateOrchestrator == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireUpdateOrchestrator(w) {
 		return
 	}
 
@@ -257,16 +215,14 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ContainerName == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("container_name is required"))
+	if !validateRequired(w, "container_name", req.ContainerName) {
 		return
 	}
 
 	// Start update - same function as CLI
 	operationID, err := s.updateOrchestrator.UpdateSingleContainer(ctx, req.ContainerName, req.TargetVersion)
 	if err != nil {
-		output.WriteJSONError(w, err)
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -282,8 +238,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 // Containers in the same stack are updated together to respect dependencies
 // Different stacks run in parallel
 func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
-	if s.updateOrchestrator == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireUpdateOrchestrator(w) {
 		return
 	}
 
@@ -303,8 +258,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(req.Containers) == 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("containers array is required"))
+		RespondBadRequest(w, fmt.Errorf("containers array is required"))
 		return
 	}
 
@@ -376,8 +330,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleRollback triggers a rollback operation
 func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
-	if s.updateOrchestrator == nil {
-		output.WriteJSONError(w, errNoStorage)
+	if !s.requireUpdateOrchestrator(w) {
 		return
 	}
 
@@ -393,9 +346,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.OperationID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		output.WriteJSON(w, output.ErrorMessageResponse("operation_id is required"))
+	if !validateRequired(w, "operation_id", req.OperationID) {
 		return
 	}
 
@@ -403,8 +354,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	rollbackOpID, err := s.updateOrchestrator.RollbackOperation(ctx, req.OperationID, req.Force)
 	if err != nil {
 		log.Printf("Rollback failed: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		output.WriteJSON(w, output.ErrorMessageResponse(err.Error()))
+		RespondInternalError(w, err)
 		return
 	}
 
@@ -471,19 +421,6 @@ func mergeHistory(checks []storage.CheckHistoryEntry, updates []storage.UpdateLo
 	return entries
 }
 
-// parseIntParam parses an integer query parameter with a default value
-func parseIntParam(r *http.Request, name string, defaultVal int) int {
-	val := r.URL.Query().Get(name)
-	if val == "" {
-		return defaultVal
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil {
-		return defaultVal
-	}
-	return n
-}
-
 // handleEvents provides Server-Sent Events for real-time update progress
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Set SSE headers
@@ -535,11 +472,3 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Errors
-var errNoStorage = &noStorageError{}
-
-type noStorageError struct{}
-
-func (e *noStorageError) Error() string {
-	return "storage service not available"
-}

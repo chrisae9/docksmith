@@ -14,7 +14,8 @@ show_help() {
     echo "Run Docksmith integration tests"
     echo ""
     echo "Arguments:"
-    echo "  api          Run API tests only"
+    echo "  api          Run basic API tests only"
+    echo "  advanced     Run advanced API tests (scripts, policies, SSE, etc.)"
     echo "  labels       Run label tests only"
     echo "  constraints  Run constraint tests only"
     echo "  all          Run all tests (default)"
@@ -22,19 +23,22 @@ show_help() {
     echo "Examples:"
     echo "  $0                    # Run all tests"
     echo "  $0 all                # Run all tests"
-    echo "  $0 api                # Run only API tests"
+    echo "  $0 api                # Run only basic API tests"
+    echo "  $0 api advanced       # Run all API tests"
     echo "  $0 labels constraints # Run label and constraint tests"
     exit 0
 }
 
 # Parse arguments
 RUN_API=false
+RUN_ADVANCED=false
 RUN_LABELS=false
 RUN_CONSTRAINTS=false
 
 if [ $# -eq 0 ]; then
     # No args = run all
     RUN_API=true
+    RUN_ADVANCED=true
     RUN_LABELS=true
     RUN_CONSTRAINTS=true
 else
@@ -42,6 +46,9 @@ else
         case $arg in
             api)
                 RUN_API=true
+                ;;
+            advanced)
+                RUN_ADVANCED=true
                 ;;
             labels)
                 RUN_LABELS=true
@@ -51,6 +58,7 @@ else
                 ;;
             all)
                 RUN_API=true
+                RUN_ADVANCED=true
                 RUN_LABELS=true
                 RUN_CONSTRAINTS=true
                 ;;
@@ -86,6 +94,17 @@ main() {
         total_suites=$((total_suites + 1))
         echo ""
         if "$SCRIPT_DIR/test-api.sh"; then
+            passed_suites=$((passed_suites + 1))
+        else
+            failed_suites=$((failed_suites + 1))
+        fi
+    fi
+
+    # Run advanced API tests
+    if [ "$RUN_ADVANCED" = true ]; then
+        total_suites=$((total_suites + 1))
+        echo ""
+        if "$SCRIPT_DIR/test-api-advanced.sh"; then
             passed_suites=$((passed_suites + 1))
         else
             failed_suites=$((failed_suites + 1))

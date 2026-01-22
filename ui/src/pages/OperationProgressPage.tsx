@@ -110,6 +110,10 @@ export function OperationProgressPage() {
   const processedEventsRef = useRef<Set<string>>(new Set());
   const containerToOpIdRef = useRef<Map<string, string>>(new Map());
   const timeoutsRef = useRef<number[]>([]);
+  // Track max seen percent per container to prevent progress bar jumping backwards
+  const maxPercentRef = useRef<Map<string, number>>(new Map());
+  // Track last logged stage per container to reduce log spam
+  const lastLoggedStageRef = useRef<Map<string, string>>(new Map());
 
   // SSE for progress
   const { lastEvent, clearEvents } = useEventStream(status === 'in_progress' || operationId !== null);
@@ -174,7 +178,8 @@ export function OperationProgressPage() {
 
     const event = lastEvent as UpdateProgressEvent;
     // Backend sends 'progress', not 'percent' - use the correct field for deduplication
-    const eventKey = `${event.operation_id}-${event.stage}-${event.progress || event.percent}`;
+    // Include container_name to handle batch updates where multiple containers have same progress
+    const eventKey = `${event.operation_id}-${event.container_name || ''}-${event.stage}-${event.progress || event.percent}`;
 
     // Skip duplicate events
     if (processedEventsRef.current.has(eventKey)) return;
@@ -215,9 +220,26 @@ export function OperationProgressPage() {
 
     if (!isOurOperation) return;
 
-    // Update current stage display
+    const eventPercent = event.percent || event.progress || 0;
+    const containerKey = targetContainer || '__global__';
+
+    // Get the max percent seen so far for this container
+    const currentMaxPercent = maxPercentRef.current.get(containerKey) || 0;
+
+    // Only update progress if it's higher (prevents jumping backwards during layer-by-layer pulls)
+    // Exception: reset is allowed when stage changes to a new phase (e.g., pulling -> recreating)
+    const lastStage = lastLoggedStageRef.current.get(containerKey);
+    const isNewStage = lastStage !== event.stage;
+    const effectivePercent = isNewStage ? eventPercent : Math.max(currentMaxPercent, eventPercent);
+
+    // Update max percent tracker
+    if (effectivePercent > currentMaxPercent || isNewStage) {
+      maxPercentRef.current.set(containerKey, effectivePercent);
+    }
+
+    // Update current stage display (only increase percent, never decrease)
     setCurrentStage(event.stage);
-    setCurrentPercent(event.percent || event.progress || 0);
+    setCurrentPercent(prev => Math.max(prev, effectivePercent));
 
     // Update container progress
     if (targetContainer) {
@@ -232,10 +254,11 @@ export function OperationProgressPage() {
       } else {
         message = stageInfo?.description || event.message;
       }
+      // Only update percent if it's higher than current
       updateContainer(targetContainer, {
         status: event.stage === 'complete' ? 'success' : event.stage === 'failed' ? 'failed' : 'in_progress',
         stage: event.stage,
-        percent: event.percent || event.progress || 0,
+        percent: effectivePercent,
         message,
       });
     }
@@ -282,11 +305,13 @@ export function OperationProgressPage() {
       }
     }
 
-    // Add stage transition log
+    // Add stage transition log - only log when stage changes to reduce spam
     const stageInfo = STAGE_INFO[event.stage] || RESTART_STAGES[event.stage];
-    if (stageInfo && event.stage !== 'complete' && event.stage !== 'failed') {
+    if (stageInfo && event.stage !== 'complete' && event.stage !== 'failed' && isNewStage) {
       const prefix = targetContainer && operationType === 'update' ? `${targetContainer}: ` : '';
-      addLog(`${prefix}${stageInfo.label} (${event.percent || 0}%)`, 'stage', stageInfo.icon);
+      addLog(`${prefix}${stageInfo.label}`, 'stage', stageInfo.icon);
+      // Track that we've logged this stage
+      lastLoggedStageRef.current.set(containerKey, event.stage);
     }
 
     // Handle completion
@@ -342,6 +367,8 @@ export function OperationProgressPage() {
     setStartTime(Date.now());
     clearEvents();
     processedEventsRef.current.clear();
+    maxPercentRef.current.clear();
+    lastLoggedStageRef.current.clear();
 
     switch (operationInfo.type) {
       case 'restart':
@@ -575,7 +602,7 @@ export function OperationProgressPage() {
         const maxPolls = 120;
 
         while (!completed && pollCount < maxPolls) {
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
           pollCount++;
 
           try {
@@ -680,7 +707,7 @@ export function OperationProgressPage() {
           const maxPolls = 60;
 
           while (!completed && pollCount < maxPolls) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
             pollCount++;
 
             if (status !== 'in_progress') {
@@ -757,6 +784,8 @@ export function OperationProgressPage() {
     setHasStarted(false);
     processedEventsRef.current.clear();
     containerToOpIdRef.current.clear();
+    maxPercentRef.current.clear();
+    lastLoggedStageRef.current.clear();
 
     // Navigate with force=true
     navigate('/operation', {
@@ -772,6 +801,18 @@ export function OperationProgressPage() {
     // Force reload to reset component state
     window.location.reload();
   };
+
+  // Detect completion from SSE events for batch updates
+  // This avoids waiting for the polling interval when all containers are done
+  useEffect(() => {
+    if (operationType !== 'update' || status !== 'in_progress' || containers.length === 0) return;
+
+    // Check if all containers have completed (success or failed)
+    const allDone = containers.every(c => c.status === 'success' || c.status === 'failed');
+    if (allDone) {
+      setStatus('success'); // This will trigger the summary log
+    }
+  }, [operationType, status, containers]);
 
   // Log final summary when update completes
   useEffect(() => {

@@ -6,9 +6,7 @@ import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
 import { isUpdatable } from '../utils/status';
-import { STORAGE_KEY_FILTER, STORAGE_KEY_INITIAL_SWITCH } from '../utils/constants';
 import { useToast } from './Toast';
-import { SkeletonDashboard } from './Skeleton';
 
 type FilterType = 'all' | 'updates' | 'local';
 type SortType = 'stack' | 'name' | 'status';
@@ -25,16 +23,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<FilterType>(() => {
-    // Try to restore filter from localStorage, or default to 'updates'
-    const saved = localStorage.getItem(STORAGE_KEY_FILTER);
-    return (saved as FilterType) || 'updates';
-  });
+  const [filter, setFilter] = useState<FilterType>('updates');
   const [sort, setSort] = useState<SortType>('stack');
-  const [initialAutoSwitchDone, setInitialAutoSwitchDone] = useState(() => {
-    // Check if we've already done the initial auto-switch in this session
-    return sessionStorage.getItem(STORAGE_KEY_INITIAL_SWITCH) === 'done';
-  });
   const [showLocalImages, setShowLocalImages] = useState(false);
   const [showIgnored, setShowIgnored] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -246,24 +236,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
   }, [wasDisconnected, clearWasDisconnected, toast]);
 
-  // Persist filter changes to localStorage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_FILTER, filter);
-  }, [filter]);
-
-  // Auto-switch to 'all' tab if on 'updates' but no updates available (only once per session)
-  useEffect(() => {
-    if (result && !initialAutoSwitchDone && filter === 'updates') {
-      const hasUpdates = result.containers.some(c => isUpdatable(c.status));
-      if (!hasUpdates) {
-        setFilter('all');
-      }
-      // Mark that we've done the initial auto-switch for this session
-      sessionStorage.setItem(STORAGE_KEY_INITIAL_SWITCH, 'done');
-      setInitialAutoSwitchDone(true);
-    }
-  }, [result, initialAutoSwitchDone, filter]);
-
   const toggleContainer = (name: string) => {
     setSelectedContainers(prev => {
       const next = new Set(prev);
@@ -349,19 +321,19 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           </div>
           <div className="filter-toolbar">
             <div className="segmented-control">
-              <button className="active" disabled>All</button>
-              <button disabled>Updates</button>
+              <button disabled>All</button>
+              <button className="active" disabled>Updates</button>
             </div>
             <div className="toolbar-options">
-              <button className="icon-btn" disabled><i className="fa-solid fa-layer-group"></i></button>
-              <button className="icon-btn" disabled><i className="fa-solid fa-font"></i></button>
+              <button className="icon-btn" disabled><i className="fa-solid fa-chevron-down"></i></button>
+              <button className="icon-btn" disabled><i className="fa-solid fa-eye-slash"></i></button>
               <button className="icon-btn" disabled>○</button>
-              <button className="icon-btn" disabled>▤</button>
+              <button className="icon-btn active" disabled>▤</button>
             </div>
           </div>
         </header>
         <main className="main-loading">
-          {checkProgress ? (
+          {checkProgress && (
             <div className="check-progress-overlay">
               <div className="check-progress">
                 <div className="check-progress-bar">
@@ -378,8 +350,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 </div>
               </div>
             </div>
-          ) : (
-            <SkeletonDashboard />
           )}
         </main>
       </div>

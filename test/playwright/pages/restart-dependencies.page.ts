@@ -31,8 +31,10 @@ export class RestartDependenciesPage {
     this.selectedTags = page.locator('.selected-tag');
     this.searchInput = page.locator('.search-input');
     this.clearSearchButton = page.locator('.clear-search');
-    this.containerItems = page.locator('.container-item');
-    this.loadingSpinner = page.locator('.spinner');
+    // Container items are direct children of .containers-list, they have cursor:pointer
+    this.containerItems = page.locator('.containers-list > div');
+    // Loading state includes spinner and text
+    this.loadingSpinner = page.locator('.loading-state');
     this.errorState = page.locator('.error-state');
     this.emptyState = page.locator('.empty-state');
     this.cancelButton = page.locator('.page-footer .button-secondary');
@@ -46,7 +48,11 @@ export class RestartDependenciesPage {
 
   async waitForLoaded(timeout = 30000) {
     await expect(this.pageTitle).toHaveText('Restart Dependencies', { timeout });
-    await expect(this.loadingSpinner).toBeHidden({ timeout });
+    // Wait for BOTH loading states to disappear (container data + containers list)
+    // Using text-based wait to be more specific
+    await expect(this.page.getByText('Loading containers...')).toBeHidden({ timeout });
+    // Wait for containers list to appear (more specific selector)
+    await expect(this.page.locator('.containers-list')).toBeVisible({ timeout });
   }
 
   async search(query: string) {
@@ -67,7 +73,10 @@ export class RestartDependenciesPage {
   }
 
   async selectContainer(containerName: string) {
-    await this.page.locator(`.container-item:has(.container-name:has-text("${containerName}"))`).click();
+    // Container items are generic elements with the container name text inside
+    // Use text-based matching since there are no specific class names in accessibility tree
+    const containerItem = this.page.locator('.containers-list > div').filter({ hasText: containerName }).first();
+    await containerItem.click();
   }
 
   async deselectContainer(containerName: string) {
@@ -82,9 +91,9 @@ export class RestartDependenciesPage {
   }
 
   async isContainerSelected(containerName: string): Promise<boolean> {
-    const item = this.page.locator(`.container-item:has(.container-name:has-text("${containerName}"))`);
-    const classes = await item.getAttribute('class');
-    return classes?.includes('selected') || false;
+    // Check if container appears in selected tags
+    const selectedTag = this.page.locator('.selected-tag').filter({ hasText: containerName });
+    return selectedTag.count().then(count => count > 0);
   }
 
   async getSelectedCount(): Promise<number> {

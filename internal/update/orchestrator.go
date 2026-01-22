@@ -42,14 +42,13 @@ type DiscoveryResult struct {
 // ContainerInfo extends ContainerUpdate with additional metadata
 type ContainerInfo struct {
 	ContainerUpdate
-	ID             string            `json:"id"`
-	Stack          string            `json:"stack,omitempty"`
-	Service        string            `json:"service,omitempty"`
-	Dependencies   []string          `json:"dependencies,omitempty"`
-	PreUpdateCheck string            `json:"pre_update_check,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
-	ComposeLabels  map[string]string `json:"compose_labels,omitempty"`  // Docksmith labels from compose file
-	LabelsOutOfSync bool             `json:"labels_out_of_sync,omitempty"` // True if compose labels differ from running container
+	ID              string            `json:"id"`
+	Stack           string            `json:"stack,omitempty"`
+	Service         string            `json:"service,omitempty"`
+	Dependencies    []string          `json:"dependencies,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	ComposeLabels   map[string]string `json:"compose_labels,omitempty"`   // Docksmith labels from compose file
+	LabelsOutOfSync bool              `json:"labels_out_of_sync,omitempty"` // True if compose labels differ from running container
 }
 
 // Stack represents a group of related containers
@@ -517,15 +516,15 @@ func (s *SafetyChecker) CheckContainer(ctx context.Context, container ContainerI
 		return true, nil // No check configured, allow update
 	}
 
-	// Validate script path
-	if !docker.ValidatePreUpdateScript(container.PreUpdateCheck) {
-		return false, fmt.Errorf("invalid pre-update script path: %s", container.PreUpdateCheck)
-	}
-
 	// Construct full path if not already absolute
 	scriptPath := container.PreUpdateCheck
 	if !filepath.IsAbs(scriptPath) {
 		scriptPath = filepath.Join("/scripts", scriptPath)
+	}
+
+	// Validate the full script path
+	if !docker.ValidatePreUpdateScript(scriptPath) {
+		return false, fmt.Errorf("invalid pre-update script path: %s", container.PreUpdateCheck)
 	}
 
 	// Execute the check script with timeout

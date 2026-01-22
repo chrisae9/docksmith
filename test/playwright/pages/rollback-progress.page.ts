@@ -28,7 +28,8 @@ export class RollbackProgressPage {
   }
 
   async waitForPageLoaded(timeout = 10000) {
-    await expect(this.page.locator('.rollback-progress-page')).toBeVisible({ timeout });
+    // Unified operation progress page
+    await expect(this.page.locator('.operation-progress-page, .progress-page')).toBeVisible({ timeout });
   }
 
   async waitForCompletion(timeout = 120000) {

@@ -2,6 +2,24 @@
 
 Docksmith exposes a REST API at `/api/`.
 
+## Contents
+
+- [Endpoints](#endpoints)
+- [Common Endpoints](#common-endpoints)
+  - [GET /api/health](#get-apihealth)
+  - [GET /api/status](#get-apistatus)
+  - [GET /api/check](#get-apicheck)
+  - [POST /api/update](#post-apiupdate)
+  - [POST /api/update/batch](#post-apiupdatebatch)
+  - [POST /api/rollback](#post-apirollback)
+  - [GET /api/operations](#get-apioperations)
+  - [POST /api/labels/set](#post-apilabelsset)
+  - [POST /api/labels/remove](#post-apilabelsremove)
+  - [GET /api/events](#get-apievents)
+  - [GET /api/registry/tags/{image}](#get-apiregistrytagsimage)
+- [Error Responses](#error-responses)
+- [Authentication](#authentication)
+
 ## Endpoints
 
 ### Health & Status
@@ -27,15 +45,13 @@ Docksmith exposes a REST API at `/api/`.
 | POST | `/api/update/batch` | Batch update multiple containers |
 | POST | `/api/rollback` | Rollback to previous version |
 
-### History
+### History & Operations
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/operations` | List operations with filtering |
 | GET | `/api/operations/{id}` | Get operation by ID |
 | GET | `/api/history` | Check and update history |
-| GET | `/api/backups` | List available backups |
-| GET | `/api/policies` | Rollback policies |
 
 ### Restart
 
@@ -83,7 +99,7 @@ Docksmith exposes a REST API at `/api/`.
 Returns server health status.
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:3000/api/health
 ```
 
 Response:
@@ -99,7 +115,7 @@ Response:
 Returns system status including last check time. Used by Homepage widget.
 
 ```bash
-curl http://localhost:8080/api/status
+curl http://localhost:3000/api/status
 ```
 
 Response:
@@ -119,7 +135,7 @@ Response:
 Discovers containers and checks for updates. Clears registry cache.
 
 ```bash
-curl http://localhost:8080/api/check
+curl http://localhost:3000/api/check
 ```
 
 Response:
@@ -150,21 +166,21 @@ Response:
 Update a single container.
 
 ```bash
-curl -X POST http://localhost:8080/api/update \
+curl -X POST http://localhost:3000/api/update \
   -H "Content-Type: application/json" \
   -d '{"container":"nginx"}'
 ```
 
 With specific version:
 ```bash
-curl -X POST http://localhost:8080/api/update \
+curl -X POST http://localhost:3000/api/update \
   -H "Content-Type: application/json" \
   -d '{"container":"nginx","version":"1.25.0"}'
 ```
 
 With script override:
 ```bash
-curl -X POST http://localhost:8080/api/update \
+curl -X POST http://localhost:3000/api/update \
   -H "Content-Type: application/json" \
   -d '{"container":"nginx","script":"/scripts/check.sh"}'
 ```
@@ -185,7 +201,7 @@ Response:
 Update multiple containers.
 
 ```bash
-curl -X POST http://localhost:8080/api/update/batch \
+curl -X POST http://localhost:3000/api/update/batch \
   -H "Content-Type: application/json" \
   -d '{"containers":["nginx","redis","postgres"]}'
 ```
@@ -195,7 +211,7 @@ curl -X POST http://localhost:8080/api/update/batch \
 Rollback a previous update.
 
 ```bash
-curl -X POST http://localhost:8080/api/rollback \
+curl -X POST http://localhost:3000/api/rollback \
   -H "Content-Type: application/json" \
   -d '{"operation_id":"op_2024011510302345"}'
 ```
@@ -206,16 +222,16 @@ List operations with optional filtering.
 
 ```bash
 # All operations
-curl http://localhost:8080/api/operations
+curl http://localhost:3000/api/operations
 
 # Filter by container
-curl "http://localhost:8080/api/operations?container=nginx"
+curl "http://localhost:3000/api/operations?container=nginx"
 
 # Filter by status
-curl "http://localhost:8080/api/operations?status=complete"
+curl "http://localhost:3000/api/operations?status=complete"
 
 # Limit results
-curl "http://localhost:8080/api/operations?limit=10"
+curl "http://localhost:3000/api/operations?limit=10"
 ```
 
 Response:
@@ -242,7 +258,7 @@ Response:
 Set labels on a container. Updates compose file and restarts container.
 
 ```bash
-curl -X POST http://localhost:8080/api/labels/set \
+curl -X POST http://localhost:3000/api/labels/set \
   -H "Content-Type: application/json" \
   -d '{
     "container": "nginx",
@@ -258,7 +274,7 @@ curl -X POST http://localhost:8080/api/labels/set \
 Remove labels from a container.
 
 ```bash
-curl -X POST http://localhost:8080/api/labels/remove \
+curl -X POST http://localhost:3000/api/labels/remove \
   -H "Content-Type: application/json" \
   -d '{
     "container": "nginx",
@@ -271,7 +287,7 @@ curl -X POST http://localhost:8080/api/labels/remove \
 Server-Sent Events stream for real-time updates.
 
 ```bash
-curl -N http://localhost:8080/api/events
+curl -N http://localhost:3000/api/events
 ```
 
 Event types:
@@ -289,8 +305,8 @@ data: {"type":"update.progress","payload":{"container":"nginx","stage":"pulling_
 Get available tags for an image. Useful for testing regex patterns.
 
 ```bash
-curl http://localhost:8080/api/registry/tags/nginx
-curl http://localhost:8080/api/registry/tags/ghcr.io/linuxserver/plex
+curl http://localhost:3000/api/registry/tags/nginx
+curl http://localhost:3000/api/registry/tags/ghcr.io/linuxserver/plex
 ```
 
 Response:

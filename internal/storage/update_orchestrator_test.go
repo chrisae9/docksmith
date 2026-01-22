@@ -159,55 +159,6 @@ func TestGetUpdateOperationsByStatus(t *testing.T) {
 	}
 }
 
-// TestSaveAndGetComposeBackup tests saving and retrieving compose backups
-func TestSaveAndGetComposeBackup(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-
-	storage, err := NewSQLiteStorage(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer storage.Close()
-
-	ctx := context.Background()
-
-	// Create and save compose backup
-	backup := ComposeBackup{
-		OperationID:     "test-op-003",
-		ContainerName:   "test-container",
-		StackName:       "test-stack",
-		ComposeFilePath: "/path/to/docker-compose.yml",
-		BackupFilePath:  "/path/to/docker-compose.yml.backup.20250109-120000",
-		BackupTimestamp: time.Now(),
-	}
-
-	err = storage.SaveComposeBackup(ctx, backup)
-	if err != nil {
-		t.Fatalf("Failed to save compose backup: %v", err)
-	}
-
-	// Retrieve the backup
-	retrieved, found, err := storage.GetComposeBackup(ctx, "test-op-003")
-	if err != nil {
-		t.Fatalf("Failed to get compose backup: %v", err)
-	}
-	if !found {
-		t.Fatal("Expected to find saved compose backup")
-	}
-
-	// Verify fields
-	if retrieved.OperationID != backup.OperationID {
-		t.Errorf("Expected operation ID %s, got %s", backup.OperationID, retrieved.OperationID)
-	}
-	if retrieved.ComposeFilePath != backup.ComposeFilePath {
-		t.Errorf("Expected compose file path %s, got %s", backup.ComposeFilePath, retrieved.ComposeFilePath)
-	}
-	if retrieved.BackupFilePath != backup.BackupFilePath {
-		t.Errorf("Expected backup file path %s, got %s", backup.BackupFilePath, retrieved.BackupFilePath)
-	}
-}
-
 // TestGetAndSetRollbackPolicy tests rollback policy CRUD operations
 func TestGetAndSetRollbackPolicy(t *testing.T) {
 	tempDir := t.TempDir()

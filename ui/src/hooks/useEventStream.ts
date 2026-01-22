@@ -31,6 +31,9 @@ export interface ContainerUpdatedEvent {
 
 export interface EventStreamState {
   connected: boolean;
+  reconnecting: boolean;
+  reconnectAttempt: number;
+  wasDisconnected: boolean; // Track if we recovered from a disconnection
   events: UpdateProgressEvent[];
   lastEvent: UpdateProgressEvent | null;
   checkProgress: CheckProgressEvent | null;
@@ -40,6 +43,9 @@ export interface EventStreamState {
 export function useEventStream(enabled: boolean = true) {
   const [state, setState] = useState<EventStreamState>({
     connected: false,
+    reconnecting: false,
+    reconnectAttempt: 0,
+    wasDisconnected: false,
     events: [],
     lastEvent: null,
     checkProgress: null,
@@ -47,6 +53,9 @@ export function useEventStream(enabled: boolean = true) {
   });
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hadConnectionRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
 
   const connect = useCallback(() => {
     if (!enabled || eventSourceRef.current) return;
@@ -55,18 +64,43 @@ export function useEventStream(enabled: boolean = true) {
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
-      setState(prev => ({ ...prev, connected: true }));
+      const wasDisconnected = hadConnectionRef.current;
+      hadConnectionRef.current = true;
+      reconnectAttemptRef.current = 0; // Reset attempt counter on successful connection
+      setState(prev => ({
+        ...prev,
+        connected: true,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        wasDisconnected, // Signal that we recovered from a disconnection
+      }));
     };
 
     eventSource.onerror = () => {
-      setState(prev => ({ ...prev, connected: false }));
+      setState(prev => ({
+        ...prev,
+        connected: false,
+        reconnecting: true,
+        wasDisconnected: false,
+      }));
 
-      // Try to reconnect after 3 seconds
-      setTimeout(() => {
+      // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
+      // Use ref to avoid stale closure issue with state
+      const attempt = reconnectAttemptRef.current;
+      const delay = Math.min(1000 * Math.pow(2, attempt), 15000);
+
+      // Clear any existing timeout
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+
+      reconnectTimeoutRef.current = setTimeout(() => {
         eventSourceRef.current?.close();
         eventSourceRef.current = null;
+        reconnectAttemptRef.current += 1; // Increment ref
+        setState(prev => ({ ...prev, reconnectAttempt: reconnectAttemptRef.current }));
         connect();
-      }, 3000);
+      }, delay);
     };
 
     // Listen for connection event
@@ -129,15 +163,24 @@ export function useEventStream(enabled: boolean = true) {
   }, [enabled]);
 
   const disconnect = useCallback(() => {
+    // Clear any pending reconnect timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
-      setState(prev => ({ ...prev, connected: false }));
+      setState(prev => ({ ...prev, connected: false, reconnecting: false }));
     }
   }, []);
 
   const clearEvents = useCallback(() => {
     setState(prev => ({ ...prev, events: [], lastEvent: null }));
+  }, []);
+
+  const clearWasDisconnected = useCallback(() => {
+    setState(prev => ({ ...prev, wasDisconnected: false }));
   }, []);
 
   useEffect(() => {
@@ -155,6 +198,7 @@ export function useEventStream(enabled: boolean = true) {
   return {
     ...state,
     clearEvents,
+    clearWasDisconnected,
     reconnect: connect,
   };
 }

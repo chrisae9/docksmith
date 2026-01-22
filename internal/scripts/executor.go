@@ -16,14 +16,14 @@ import (
 // If translatePaths is true, it will translate container paths (e.g., /scripts/xxx.sh)
 // to host paths (e.g., $PWD/scripts/xxx.sh) for CLI usage.
 func ExecutePreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string, translatePaths bool) error {
+	// Normalize relative paths to absolute paths under /scripts/
+	if !filepath.IsAbs(scriptPath) {
+		scriptPath = filepath.Join("/scripts", scriptPath)
+	}
+
 	// Validate script path
 	if !docker.ValidatePreUpdateScript(scriptPath) {
 		return fmt.Errorf("invalid pre-update script path: %s", scriptPath)
-	}
-
-	// Check if script path is absolute (only when not translating paths)
-	if !translatePaths && !filepath.IsAbs(scriptPath) {
-		return fmt.Errorf("pre-update script path must be absolute: %s", scriptPath)
 	}
 
 	// Translate container path to host path if needed (for CLI usage)

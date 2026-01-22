@@ -144,22 +144,6 @@ func (m *mockStorage) UpdateOperationStatus(ctx context.Context, operationID str
 	return nil
 }
 
-func (m *mockStorage) SaveComposeBackup(ctx context.Context, backup storage.ComposeBackup) error {
-	return nil
-}
-
-func (m *mockStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
-	return storage.ComposeBackup{}, false, nil
-}
-
-func (m *mockStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
-	return nil, nil
-}
-
-func (m *mockStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
-	return nil, nil
-}
-
 func (m *mockStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {
 	return storage.RollbackPolicy{}, false, nil
 }
@@ -633,22 +617,6 @@ func (f *failingStorage) GetUpdateOperationsByTimeRange(ctx context.Context, sta
 
 func (f *failingStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	return errors.New("storage error")
-}
-
-func (f *failingStorage) SaveComposeBackup(ctx context.Context, backup storage.ComposeBackup) error {
-	return errors.New("storage error")
-}
-
-func (f *failingStorage) GetComposeBackup(ctx context.Context, operationID string) (storage.ComposeBackup, bool, error) {
-	return storage.ComposeBackup{}, false, errors.New("storage error")
-}
-
-func (f *failingStorage) GetComposeBackupsByContainer(ctx context.Context, containerName string) ([]storage.ComposeBackup, error) {
-	return nil, errors.New("storage error")
-}
-
-func (f *failingStorage) GetAllComposeBackups(ctx context.Context, limit int) ([]storage.ComposeBackup, error) {
-	return nil, errors.New("storage error")
 }
 
 func (f *failingStorage) GetRollbackPolicy(ctx context.Context, entityType, entityID string) (storage.RollbackPolicy, bool, error) {

@@ -173,8 +173,8 @@ test.describe('Script Selection Page', () => {
     await dashboard.clickContainer(TEST_CONTAINERS.NGINX_BASIC);
     await page.waitForTimeout(500);
 
-    // Click on Pre-Update Script setting
-    const scriptNav = page.locator('.precheck-nav-area, .setting-item:has-text("Pre-Update Script")');
+    // Click on Pre-Update Script setting - use role button to avoid strict mode violation
+    const scriptNav = page.getByRole('button', { name: /Pre-Update Script/ });
     await scriptNav.click();
     await page.waitForTimeout(500);
 

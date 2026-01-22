@@ -193,6 +193,34 @@
 }
 
 /* ============================================
+   GLOBAL INTERACTIVE ELEMENT STYLES
+   Cursor pointer for all clickable elements
+   ============================================ */
+button,
+[role="button"],
+input[type="button"],
+input[type="submit"],
+input[type="reset"],
+input[type="checkbox"],
+input[type="radio"],
+select,
+a,
+label[for],
+.clickable,
+[onclick],
+[tabindex]:not([tabindex="-1"]) {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+.disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* ============================================
    ACCESSIBILITY - REDUCED MOTION
    Respects user preference for less animation
    ============================================ */

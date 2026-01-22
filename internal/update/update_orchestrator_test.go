@@ -465,3 +465,159 @@ func TestQueueOperation_WhenStackLocked(t *testing.T) {
 	queued, _ := mockStorage.GetQueuedUpdates(context.Background())
 	assert.Len(t, queued, 1)
 }
+
+// Test: hasNetworkModeDependency correctly identifies network_mode dependencies
+func TestHasNetworkModeDependency(t *testing.T) {
+	orch := &UpdateOrchestrator{}
+
+	tests := []struct {
+		name       string
+		container  *docker.Container
+		batchNames map[string]bool
+		hasDep     bool
+		depName    string
+	}{
+		{
+			name: "container with network_mode: service:tailscale pointing to batch container",
+			container: &docker.Container{
+				Name: "traefik-ts",
+				Labels: map[string]string{
+					graph.NetworkModeLabel: "service:tailscale",
+				},
+			},
+			batchNames: map[string]bool{"tailscale": true, "traefik-ts": true},
+			hasDep:     true,
+			depName:    "tailscale",
+		},
+		{
+			name: "container with network_mode but dependency not in batch",
+			container: &docker.Container{
+				Name: "some-container",
+				Labels: map[string]string{
+					graph.NetworkModeLabel: "service:vpn",
+				},
+			},
+			batchNames: map[string]bool{"some-container": true, "other": true},
+			hasDep:     false,
+			depName:    "",
+		},
+		{
+			name: "container without network_mode label",
+			container: &docker.Container{
+				Name:   "regular-container",
+				Labels: map[string]string{},
+			},
+			batchNames: map[string]bool{"regular-container": true},
+			hasDep:     false,
+			depName:    "",
+		},
+		{
+			name: "container with network_mode: container:xxx (not service)",
+			container: &docker.Container{
+				Name: "container-mode",
+				Labels: map[string]string{
+					graph.NetworkModeLabel: "container:some-container",
+				},
+			},
+			batchNames: map[string]bool{"container-mode": true, "some-container": true},
+			hasDep:     false,
+			depName:    "",
+		},
+		{
+			name: "container with network_mode: host (not service)",
+			container: &docker.Container{
+				Name: "host-mode",
+				Labels: map[string]string{
+					graph.NetworkModeLabel: "host",
+				},
+			},
+			batchNames: map[string]bool{"host-mode": true},
+			hasDep:     false,
+			depName:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasDep, depName := orch.hasNetworkModeDependency(tt.container, tt.batchNames)
+			assert.Equal(t, tt.hasDep, hasDep, "hasDep mismatch")
+			assert.Equal(t, tt.depName, depName, "depName mismatch")
+		})
+	}
+}
+
+// Test: Batch update with network_mode containers uses correct recreation method
+func TestBatchUpdateWithNetworkModeDependency(t *testing.T) {
+	// Test that containers with network_mode: service:xxx are identified
+	// and would be handled by compose recreation instead of SDK
+	mockDocker := &MockDockerClient{
+		containers: []docker.Container{
+			{
+				ID:    "tailscale-id",
+				Name:  "tailscale",
+				Image: "tailscale/tailscale:v1.60",
+				Labels: map[string]string{
+					"com.docker.compose.project": "traefik",
+					"com.docker.compose.service": "tailscale",
+				},
+			},
+			{
+				ID:    "traefik-ts-id",
+				Name:  "traefik-ts",
+				Image: "traefik:v3.0",
+				Labels: map[string]string{
+					"com.docker.compose.project": "traefik",
+					"com.docker.compose.service": "traefik-ts",
+					graph.NetworkModeLabel:       "service:tailscale", // Key dependency
+				},
+			},
+		},
+	}
+	mockStorage := NewTestMockStorage()
+	bus := events.NewBus()
+
+	orch := &UpdateOrchestrator{
+		dockerClient: mockDocker,
+		storage:      mockStorage,
+		eventBus:     bus,
+		graphBuilder: graph.NewBuilder(),
+		stackManager: docker.NewStackManager(),
+		stackLocks:   make(map[string]*sync.Mutex),
+	}
+
+	// Build batch names map as the orchestrator would
+	batchNames := map[string]bool{
+		"tailscale":  true,
+		"traefik-ts": true,
+	}
+
+	// Test that network_mode dependency is detected
+	for _, cont := range mockDocker.containers {
+		hasDep, depName := orch.hasNetworkModeDependency(&cont, batchNames)
+		if cont.Name == "traefik-ts" {
+			assert.True(t, hasDep, "traefik-ts should have network_mode dependency")
+			assert.Equal(t, "tailscale", depName, "traefik-ts should depend on tailscale")
+		} else {
+			assert.False(t, hasDep, "tailscale should not have network_mode dependency")
+		}
+	}
+
+	// Test the dependency graph ordering
+	depGraph := orch.graphBuilder.BuildFromContainers(mockDocker.containers)
+	updateOrder, err := depGraph.GetUpdateOrder()
+	assert.NoError(t, err)
+
+	// Find positions
+	tailscaleIdx := -1
+	traefikTsIdx := -1
+	for i, name := range updateOrder {
+		if name == "tailscale" {
+			tailscaleIdx = i
+		}
+		if name == "traefik-ts" {
+			traefikTsIdx = i
+		}
+	}
+
+	assert.Greater(t, traefikTsIdx, tailscaleIdx, "tailscale should be updated before traefik-ts due to network_mode dependency")
+}

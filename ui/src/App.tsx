@@ -13,8 +13,7 @@ import { ToastProvider, ToastContainer } from './components/Toast'
 import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
 import { STORAGE_KEY_TAB } from './utils/constants'
-import './styles/page-layout.css'
-import './App.css'
+// CSS is now imported via index.css
 
 function AppContent() {
   const location = useLocation();

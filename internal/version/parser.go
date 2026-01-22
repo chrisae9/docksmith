@@ -15,9 +15,6 @@ var (
 	// Does NOT match prerelease or build - those are handled separately
 	semverPattern = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
 
-	// Prerelease/suffix pattern - anything after the version
-	suffixPattern = regexp.MustCompile(`^v?\d+(?:\.\d+)?(?:\.\d+)?(.*)$`)
-
 	// True prerelease identifiers (for semantic versioning)
 	prereleaseIdentifiers = map[string]bool{
 		"alpha": true, "beta": true, "rc": true, "dev": true,
@@ -38,6 +35,26 @@ var (
 
 	// Commit hash patterns
 	hashPattern = regexp.MustCompile(`^([a-f0-9]{7,40}|sha[0-9]+-[a-f0-9]+)`)
+
+	// LinuxServer build number pattern: extracts the number from "-lsXXX" suffix
+	// Matches both "-ls374" (when in middle of suffix) and "ls374" (when dash already stripped)
+	lsBuildPattern = regexp.MustCompile(`(?:^|-)ls(\d+)(?:[^0-9]|$)`)
+
+	// Pre-compiled patterns for removing build metadata from suffixes
+	// These patterns remove build numbers, timestamps, and other non-variant metadata
+	buildMetadataPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^ls\d+$`),       // LinuxServer build numbers (after dash stripped): ls286, ls250
+		regexp.MustCompile(`-ls\d+`),        // LinuxServer build numbers with dash: -ls286, -ls27
+		regexp.MustCompile(`-r\d+`),         // Revision numbers: -r3, -r12
+		regexp.MustCompile(`-\d{8}`),        // Date stamps: -20250413
+		regexp.MustCompile(`-\d{12,}`),      // Long numbers/timestamps
+		regexp.MustCompile(`-[0-9a-f]{7,}`), // Git hashes: -8cddf87
+		regexp.MustCompile(`\.dev\d+`),      // Dev builds: .dev20210710
+		regexp.MustCompile(`-ubuntu[\d.]+`), // Ubuntu version: -ubuntu18.04.1
+		regexp.MustCompile(`-\d+$`),         // Trailing numbers: -1, -2
+		regexp.MustCompile(`_\d+$`),         // Trailing numbers with underscore: _1, _2
+		regexp.MustCompile(`^\.\d{4}$`),     // 4-digit LinuxServer build numbers: .2946 (keep longer ones like .10274)
+	}
 )
 
 // Parser extracts version information from Docker image tags.
@@ -118,16 +135,30 @@ func (p *Parser) ParseImageTag(imageTag string) *TagInfo {
 		return info
 	}
 
-	// Check for meta tags
+	// Check for meta tags (with or without suffix)
 	metaTags := map[string]bool{
 		"stable": true, "main": true, "master": true,
 		"develop": true, "dev": true, "edge": true,
 		"nightly": true, "beta": true, "alpha": true, "rc": true,
 	}
 
+	// First check for exact meta tag match
 	if metaTags[strings.ToLower(tag)] {
 		info.VersionType = "meta"
 		info.MetaTag = tag
+		return info
+	}
+
+	// Check for meta tag with suffix (e.g., "stable-tensorrt", "latest-alpine")
+	// Split on hyphen and check if first part is a meta tag
+	if idx := strings.Index(tag, "-"); idx > 0 {
+		prefix := strings.ToLower(tag[:idx])
+		if metaTags[prefix] {
+			info.VersionType = "meta"
+			info.MetaTag = tag[:idx]
+			suffix := tag[idx+1:]
+			info.Suffix = p.normalizeSuffix(suffix)
+		}
 	}
 
 	return info
@@ -245,6 +276,14 @@ func (p *Parser) extractVersion(tag string) (*Version, string) {
 		}
 	}
 
+	// Extract LinuxServer build number (e.g., "-ls285" -> 285) before normalization
+	// This is used for tiebreaking when versions are otherwise equal
+	if matches := lsBuildPattern.FindStringSubmatch(suffix); matches != nil {
+		if num, err := strconv.Atoi(matches[1]); err == nil {
+			version.BuildNumber = num
+		}
+	}
+
 	// Normalize suffix by removing build metadata patterns
 	suffix = p.normalizeSuffix(suffix)
 
@@ -293,24 +332,8 @@ func (p *Parser) normalizeSuffix(suffix string) string {
 		return ""
 	}
 
-	// Patterns to remove (build metadata, not variants)
-	buildPatterns := []string{
-		`^ls\d+$`,          // LinuxServer build numbers (after dash stripped): ls286, ls250
-		`-ls\d+`,           // LinuxServer build numbers with dash: -ls286, -ls27
-		`-r\d+`,            // Revision numbers: -r3, -r12
-		`-\d{8}`,           // Date stamps: -20250413
-		`-\d{12,}`,         // Long numbers/timestamps
-		`-[0-9a-f]{7,}`,    // Git hashes: -8cddf87
-		`\.dev\d+`,         // Dev builds: .dev20210710
-		`-ubuntu[\d.]+`,    // Ubuntu version: -ubuntu18.04.1
-		`-\d+$`,            // Trailing numbers: -1, -2
-		`_\d+$`,            // Trailing numbers with underscore: _1, _2
-		`^\.\d{4}$`,        // 4-digit LinuxServer build numbers: .2946 (keep longer ones like .10274)
-	}
-
 	normalized := suffix
-	for _, pattern := range buildPatterns {
-		re := regexp.MustCompile(pattern)
+	for _, re := range buildMetadataPatterns {
 		normalized = re.ReplaceAllString(normalized, "")
 	}
 
