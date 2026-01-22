@@ -23,7 +23,12 @@ func main() {
 
 	// Start the API server
 	cmd := NewAPICommand()
-	if err := cmd.ParseFlags(os.Args[1:]); err != nil {
+	// Skip "api" subcommand if present (for docker-compose compatibility)
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "api" {
+		args = args[1:]
+	}
+	if err := cmd.ParseFlags(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to parse flags: %v\n", err)
 		os.Exit(1)
 	}
