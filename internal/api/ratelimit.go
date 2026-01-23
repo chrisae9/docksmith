@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -184,7 +185,7 @@ func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 			if !rl.Allow(clientID) {
 				w.Header().Set("Retry-After", "60")
-				w.Header().Set("X-RateLimit-Limit", string(rune(rl.limit)))
+				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(rl.limit))
 				w.Header().Set("X-RateLimit-Remaining", "0")
 				http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 				return
@@ -192,8 +193,8 @@ func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 			// Add rate limit headers
 			remaining := rl.GetRemaining(clientID)
-			w.Header().Set("X-RateLimit-Limit", string(rune(rl.limit)))
-			w.Header().Set("X-RateLimit-Remaining", string(rune(remaining)))
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(rl.limit))
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
 
 			next.ServeHTTP(w, r)
 		})
