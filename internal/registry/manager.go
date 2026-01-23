@@ -16,6 +16,7 @@ type Manager struct {
 	genericClientMu sync.RWMutex
 	cache           *RegistryCache
 	cacheEnabled    bool
+	circuitBreaker  *CircuitBreaker
 }
 
 // NewManager creates a new registry manager.
@@ -27,6 +28,7 @@ func NewManager(githubToken string) *Manager {
 		genericClients:  make(map[string]*HTTPClient),
 		cache:           NewRegistryCache(15 * time.Minute),
 		cacheEnabled:    true, // Enable caching by default
+		circuitBreaker:  NewCircuitBreaker(),
 	}
 }
 
@@ -43,6 +45,22 @@ func (m *Manager) SetCacheTTL(ttl time.Duration) {
 // ClearCache clears all cached entries
 func (m *Manager) ClearCache() {
 	m.cache.Clear()
+}
+
+// GetCircuitBreakerState returns the current state of the circuit breaker for a registry.
+func (m *Manager) GetCircuitBreakerState(registry string) CircuitState {
+	return m.circuitBreaker.GetState(registry)
+}
+
+// ResetCircuitBreaker resets the circuit breaker for a specific registry.
+// Use this when you know a registry has recovered and want to clear its failure history.
+func (m *Manager) ResetCircuitBreaker(registry string) {
+	m.circuitBreaker.Reset(registry)
+}
+
+// ResetAllCircuitBreakers resets all circuit breakers.
+func (m *Manager) ResetAllCircuitBreakers() {
+	m.circuitBreaker.ResetAll()
 }
 
 // withCache is a generic cache wrapper that handles the check-fetch-store pattern.
@@ -77,6 +95,27 @@ func withCache[T any](m *Manager, cacheKey string, ttl time.Duration, isEmpty fu
 	return result, nil
 }
 
+// withCircuitBreaker wraps a registry call with circuit breaker protection.
+// It checks if the circuit allows the request, executes it, and records the result.
+func withCircuitBreaker[T any](m *Manager, registry string, fetch func() (T, error)) (T, error) {
+	var zero T
+
+	// Check if circuit breaker allows this request
+	if !m.circuitBreaker.Allow(registry) {
+		return zero, fmt.Errorf("%w: %s", ErrCircuitOpen, registry)
+	}
+
+	// Execute the request
+	result, err := fetch()
+	if err != nil {
+		m.circuitBreaker.RecordFailure(registry)
+		return zero, err
+	}
+
+	m.circuitBreaker.RecordSuccess(registry)
+	return result, nil
+}
+
 // ListTags returns all available tags for an image with caching support.
 // The imageRef should be in the format: registry/repository
 // Examples:
@@ -89,7 +128,11 @@ func (m *Manager) ListTags(ctx context.Context, imageRef string) ([]string, erro
 
 	return withCache(m, fmt.Sprintf("tags:%s", imageRef), 0,
 		func(tags []string) bool { return len(tags) == 0 },
-		func() ([]string, error) { return client.ListTags(ctx, repository) },
+		func() ([]string, error) {
+			return withCircuitBreaker(m, registry, func() ([]string, error) {
+				return client.ListTags(ctx, repository)
+			})
+		},
 	)
 }
 
@@ -100,7 +143,11 @@ func (m *Manager) GetLatestTag(ctx context.Context, imageRef string) (string, er
 
 	return withCache(m, fmt.Sprintf("latest:%s", imageRef), 0,
 		func(tag string) bool { return tag == "" },
-		func() (string, error) { return client.GetLatestTag(ctx, repository) },
+		func() (string, error) {
+			return withCircuitBreaker(m, registry, func() (string, error) {
+				return client.GetLatestTag(ctx, repository)
+			})
+		},
 	)
 }
 
@@ -113,7 +160,11 @@ func (m *Manager) GetTagDigest(ctx context.Context, imageRef, tag string) (strin
 	// Use shorter TTL for digests since they can change more frequently for mutable tags like "latest"
 	return withCache(m, fmt.Sprintf("digest:%s:%s", imageRef, tag), 5*time.Minute,
 		func(digest string) bool { return digest == "" },
-		func() (string, error) { return client.GetTagDigest(ctx, repo, tag) },
+		func() (string, error) {
+			return withCircuitBreaker(m, registry, func() (string, error) {
+				return client.GetTagDigest(ctx, repo, tag)
+			})
+		},
 	)
 }
 
@@ -125,7 +176,11 @@ func (m *Manager) ListTagsWithDigests(ctx context.Context, imageRef string) (map
 
 	return withCache(m, fmt.Sprintf("tags-digests:%s", imageRef), 0,
 		func(tagDigests map[string][]string) bool { return len(tagDigests) == 0 },
-		func() (map[string][]string, error) { return client.ListTagsWithDigests(ctx, repository) },
+		func() (map[string][]string, error) {
+			return withCircuitBreaker(m, registry, func() (map[string][]string, error) {
+				return client.ListTagsWithDigests(ctx, repository)
+			})
+		},
 	)
 }
 

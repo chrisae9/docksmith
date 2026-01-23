@@ -35,6 +35,7 @@ type Server struct {
 	backgroundChecker     *update.BackgroundChecker
 	checkInterval         time.Duration
 	cacheTTL              time.Duration
+	rateLimiter           *PathRateLimiter
 }
 
 // Config holds configuration for the API server
@@ -127,6 +128,27 @@ func NewServer(cfg Config) *Server {
 	var backgroundChecker *update.BackgroundChecker
 	backgroundChecker = update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
 
+	// Create rate limiter with path-specific limits
+	rateLimiter := NewPathRateLimiter(DefaultRateLimitConfig())
+	// Allow higher rate for SSE events endpoint (long-lived connections)
+	rateLimiter.SetPathLimit("/api/events", RateLimitConfig{
+		RequestsPerMinute: 10,
+		BurstSize:         5,
+		CleanupInterval:   5 * time.Minute,
+	})
+	// Allow higher rate for health checks
+	rateLimiter.SetPathLimit("/api/health", RateLimitConfig{
+		RequestsPerMinute: 120,
+		BurstSize:         20,
+		CleanupInterval:   5 * time.Minute,
+	})
+	// Lower rate for mutation endpoints
+	rateLimiter.SetPathLimit("/api/update", RateLimitConfig{
+		RequestsPerMinute: 30,
+		BurstSize:         5,
+		CleanupInterval:   5 * time.Minute,
+	})
+
 	s := &Server{
 		dockerService:         cfg.DockerService,
 		registryManager:       cfg.RegistryManager,
@@ -139,15 +161,25 @@ func NewServer(cfg Config) *Server {
 		backgroundChecker:     backgroundChecker,
 		checkInterval:         checkInterval,
 		cacheTTL:              cacheTTL,
+		rateLimiter:           rateLimiter,
 	}
 
-	// Setup HTTP server
+	// Setup HTTP server with middleware chain
 	mux := http.NewServeMux()
 	s.registerRoutes(mux, cfg.StaticDir)
 
+	// Apply middleware: CORS -> Correlation ID -> Rate Limit -> Request Logging -> Handler
+	handler := ChainMiddleware(mux,
+		corsMiddleware,
+		CorrelationIDMiddleware,
+		PathRateLimitMiddleware(rateLimiter),
+		// Uncomment to enable request logging (can be verbose):
+		// RequestLoggingMiddleware,
+	)
+
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      corsMiddleware(mux),
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second, // Long timeout for discovery operations
 		IdleTimeout:  60 * time.Second,
@@ -242,10 +274,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.backgroundChecker.Stop()
 	}
 
+	// Stop rate limiter cleanup goroutines
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
+	}
+
 	return s.httpServer.Shutdown(ctx)
 }
 
-// corsMiddleware adds CORS headers for development
+// corsMiddleware adds CORS headers for development.
+// Returns middleware function compatible with ChainMiddleware.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Allow requests from common development ports

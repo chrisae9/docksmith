@@ -72,13 +72,14 @@ func (s *SQLiteStorage) GetUpdateLog(ctx context.Context, containerName string, 
 // GetAllUpdateLog retrieves update log for all containers.
 // Returns entries ordered by timestamp DESC (most recent first).
 func (s *SQLiteStorage) GetAllUpdateLog(ctx context.Context, limit int) ([]UpdateLogEntry, error) {
-	query := appendLimitClause(`
+	baseQuery := `
 		SELECT id, container_name, operation, from_version, to_version, timestamp, success, error
 		FROM update_log
 		ORDER BY timestamp DESC
-	`, limit)
+	`
+	query, args := withLimit(baseQuery, nil, limit)
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("Failed to query all update log: %v", err)
 		return nil, fmt.Errorf("failed to query all update log: %w", err)
@@ -213,16 +214,17 @@ func (s *SQLiteStorage) GetUpdateOperation(ctx context.Context, operationID stri
 // Retrieves update operations filtered by status.
 // Returns entries ordered by created_at DESC (most recent first).
 func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]UpdateOperation, error) {
-	query := appendLimitClause(`
+	baseQuery := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
 		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
 		FROM update_operations
 		WHERE status = ?
 		ORDER BY created_at DESC
-	`, limit)
+	`
+	query, args := withLimit(baseQuery, []interface{}{status}, limit)
 
-	rows, err := s.db.QueryContext(ctx, query, status)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("Failed to query update operations by status %s: %v", status, err)
 		return nil, fmt.Errorf("failed to query update operations by status: %w", err)
@@ -235,7 +237,7 @@ func (s *SQLiteStorage) GetUpdateOperationsByStatus(ctx context.Context, status 
 // GetUpdateOperationsByContainer retrieves update operations for a specific container.
 // Returns entries ordered by started_at DESC (most recent first).
 func (s *SQLiteStorage) GetUpdateOperationsByContainer(ctx context.Context, containerName string, limit int) ([]UpdateOperation, error) {
-	query := `
+	baseQuery := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
 		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
@@ -243,12 +245,9 @@ func (s *SQLiteStorage) GetUpdateOperationsByContainer(ctx context.Context, cont
 		WHERE container_name = ?
 		ORDER BY started_at DESC
 	`
+	query, args := withLimit(baseQuery, []interface{}{containerName}, limit)
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, containerName)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("Failed to query update operations for %s: %v", containerName, err)
 		return nil, fmt.Errorf("failed to query update operations: %w", err)
@@ -316,7 +315,7 @@ func (s *SQLiteStorage) UpdateOperationStatus(ctx context.Context, operationID s
 // Returns entries ordered by started_at DESC (most recent first).
 // Only returns completed or failed operations (not queued/in-progress).
 func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]UpdateOperation, error) {
-	query := `
+	baseQuery := `
 		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
 		       old_version, new_version, started_at, completed_at, error_message,
 		       dependents_affected, rollback_occurred, batch_details, created_at, updated_at
@@ -324,12 +323,9 @@ func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]U
 		WHERE status IN ('complete', 'failed')
 		ORDER BY started_at DESC
 	`
+	query, args := withLimit(baseQuery, nil, limit)
 
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("Failed to query update operations: %v", err)
 		return nil, fmt.Errorf("failed to query update operations: %w", err)

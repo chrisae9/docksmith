@@ -110,22 +110,26 @@ func (c *Config) loadFromDatabase(ctx context.Context, store storage.Storage) (C
 // Save saves the configuration to database storage with snapshot creation.
 // Creates a snapshot before saving to enable rollback capability.
 func (c *Config) Save(ctx context.Context, store storage.Storage, changedBy string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	// Initialize values map if needed
+	c.mu.Lock()
+	// Initialize values map if needed (under write lock to avoid race)
 	if c.values == nil {
-		c.mu.RUnlock()
-		c.mu.Lock()
 		c.values = c.toMap()
-		c.mu.Unlock()
-		c.mu.RLock()
 	}
+	// Copy values while holding lock, then release
+	valuesCopy := make(map[string]string, len(c.values))
+	for k, v := range c.values {
+		valuesCopy[k] = v
+	}
+	scanDirs := c.ScanDirectories
+	excludePatterns := c.ExcludePatterns
+	cacheTTL := c.CacheTTLDays
+	composePaths := c.ComposeFilePaths
+	c.mu.Unlock()
 
 	// Create snapshot of current configuration before saving
 	snapshot := storage.ConfigSnapshot{
 		SnapshotTime: time.Now(),
-		ConfigData:   c.values,
+		ConfigData:   valuesCopy,
 		ChangedBy:    changedBy,
 	}
 
@@ -133,34 +137,34 @@ func (c *Config) Save(ctx context.Context, store storage.Storage, changedBy stri
 		return fmt.Errorf("failed to create config snapshot: %w", err)
 	}
 
-	fmt.Printf("Config snapshot created: %d keys by %s\n", len(c.values), changedBy)
+	fmt.Printf("Config snapshot created: %d keys by %s\n", len(valuesCopy), changedBy)
 
 	// Save scan_directories
-	if len(c.ScanDirectories) > 0 {
-		data, _ := json.Marshal(c.ScanDirectories)
+	if len(scanDirs) > 0 {
+		data, _ := json.Marshal(scanDirs)
 		if err := store.SetConfig(ctx, "scan_directories", string(data)); err != nil {
 			return fmt.Errorf("failed to save scan_directories: %w", err)
 		}
 	}
 
 	// Save exclude_patterns
-	if len(c.ExcludePatterns) > 0 {
-		data, _ := json.Marshal(c.ExcludePatterns)
+	if len(excludePatterns) > 0 {
+		data, _ := json.Marshal(excludePatterns)
 		if err := store.SetConfig(ctx, "exclude_patterns", string(data)); err != nil {
 			return fmt.Errorf("failed to save exclude_patterns: %w", err)
 		}
 	}
 
 	// Save cache_ttl_days
-	if c.CacheTTLDays > 0 {
-		if err := store.SetConfig(ctx, "cache_ttl_days", strconv.Itoa(c.CacheTTLDays)); err != nil {
+	if cacheTTL > 0 {
+		if err := store.SetConfig(ctx, "cache_ttl_days", strconv.Itoa(cacheTTL)); err != nil {
 			return fmt.Errorf("failed to save cache_ttl_days: %w", err)
 		}
 	}
 
 	// Save compose_file_paths
-	if len(c.ComposeFilePaths) > 0 {
-		data, _ := json.Marshal(c.ComposeFilePaths)
+	if len(composePaths) > 0 {
+		data, _ := json.Marshal(composePaths)
 		if err := store.SetConfig(ctx, "compose_file_paths", string(data)); err != nil {
 			return fmt.Errorf("failed to save compose_file_paths: %w", err)
 		}
@@ -173,15 +177,20 @@ func (c *Config) Save(ctx context.Context, store storage.Storage, changedBy stri
 // Returns the value and true if found, empty string and false otherwise.
 func (c *Config) Get(key string) (string, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.values == nil {
-		// If values map not initialized, build it from struct fields
+	if c.values != nil {
+		val, found := c.values[key]
 		c.mu.RUnlock()
-		c.mu.Lock()
+		return val, found
+	}
+	c.mu.RUnlock()
+
+	// values is nil - need write lock to initialize
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine may have initialized)
+	if c.values == nil {
 		c.values = c.toMap()
-		c.mu.Unlock()
-		c.mu.RLock()
 	}
 
 	val, found := c.values[key]

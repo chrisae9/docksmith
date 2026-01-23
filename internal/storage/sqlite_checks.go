@@ -123,18 +123,14 @@ func (s *SQLiteStorage) GetCheckHistoryByTimeRange(ctx context.Context, start, e
 // GetAllCheckHistory retrieves check history for all containers.
 // Returns entries ordered by check_time DESC (most recent first).
 func (s *SQLiteStorage) GetAllCheckHistory(ctx context.Context, limit int) ([]CheckHistoryEntry, error) {
-	query := `
+	baseQuery := `
 		SELECT id, container_name, image, check_time, current_version, latest_version, status, error
 		FROM check_history
 		ORDER BY check_time DESC
 	`
+	query, args := withLimit(baseQuery, nil, limit)
 
-	// Add limit if specified
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		log.Printf("Failed to query all check history: %v", err)
 		return nil, fmt.Errorf("failed to query all check history: %w", err)

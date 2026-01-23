@@ -91,7 +91,7 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 5 * time.Second,
@@ -212,7 +212,7 @@ func TestIntegration_RollbackFlowOnHealthCheckFailure(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      10 * time.Second,
 			FallbackWait: 2 * time.Second,
@@ -299,7 +299,7 @@ func TestIntegration_DependentContainerRestartOrdering(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 5 * time.Second,
@@ -379,7 +379,7 @@ func TestIntegration_QueueProcessingWithConcurrentStacks(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 1 * time.Second,
@@ -463,7 +463,7 @@ func TestIntegration_APIToOrchestratorToStorageFullStack(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 5 * time.Second,
@@ -533,7 +533,7 @@ func TestIntegration_PermissionFailurePreventsPartialOperations(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 5 * time.Second,
@@ -620,7 +620,7 @@ func TestIntegration_BatchUpdateWithMixedResults(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 1 * time.Second,
@@ -685,7 +685,7 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 		storage:      store,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 5 * time.Second,
@@ -829,7 +829,7 @@ func TestIntegration_StackUpdateWithTopologicalOrdering(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      30 * time.Second,
 			FallbackWait: 1 * time.Second,

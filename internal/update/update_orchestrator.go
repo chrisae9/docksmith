@@ -37,11 +37,17 @@ type UpdateOrchestrator struct {
 	stackManager   *docker.StackManager
 	checker        *Checker
 	healthCheckCfg HealthCheckConfig
-	stackLocks     map[string]*sync.Mutex
+	stackLocks     map[string]*stackLockEntry
 	locksMu        sync.Mutex
 	pathTranslator *docker.PathTranslator
 	ctx            context.Context    // orchestrator lifecycle context
 	cancelFn       context.CancelFunc // cancels ctx on shutdown
+}
+
+// stackLockEntry tracks a stack lock with its last usage time for cleanup.
+type stackLockEntry struct {
+	mu       sync.Mutex
+	lastUsed time.Time
 }
 
 // HealthCheckConfig holds health check configuration.
@@ -79,13 +85,14 @@ func NewUpdateOrchestrator(
 			Timeout:      60 * time.Second,
 			FallbackWait: 3 * time.Second, // Containers without health checks just need to be "running"
 		},
-		stackLocks:     make(map[string]*sync.Mutex),
+		stackLocks:     make(map[string]*stackLockEntry),
 		pathTranslator: pathTranslator,
 		ctx:            ctx,
 		cancelFn:       cancel,
 	}
 
 	go orch.processQueue(orch.ctx)
+	go orch.cleanupStaleLocks(orch.ctx)
 
 	return orch
 }
@@ -1823,23 +1830,63 @@ func (o *UpdateOrchestrator) failOperation(ctx context.Context, operationID, sta
 // acquireStackLock attempts to acquire a lock for a stack.
 func (o *UpdateOrchestrator) acquireStackLock(stackName string) bool {
 	o.locksMu.Lock()
-	defer o.locksMu.Unlock()
-
-	if _, exists := o.stackLocks[stackName]; !exists {
-		o.stackLocks[stackName] = &sync.Mutex{}
+	entry, exists := o.stackLocks[stackName]
+	if !exists {
+		entry = &stackLockEntry{}
+		o.stackLocks[stackName] = entry
 	}
+	o.locksMu.Unlock()
 
-	locked := o.stackLocks[stackName].TryLock()
+	locked := entry.mu.TryLock()
+	if locked {
+		o.locksMu.Lock()
+		entry.lastUsed = time.Now()
+		o.locksMu.Unlock()
+	}
 	return locked
 }
 
 // releaseStackLock releases a stack lock.
 func (o *UpdateOrchestrator) releaseStackLock(stackName string) {
 	o.locksMu.Lock()
-	defer o.locksMu.Unlock()
+	entry, exists := o.stackLocks[stackName]
+	o.locksMu.Unlock()
 
-	if lock, exists := o.stackLocks[stackName]; exists {
-		lock.Unlock()
+	if exists {
+		entry.mu.Unlock()
+	}
+}
+
+// cleanupStaleLocks periodically removes stack locks that haven't been used recently.
+// This prevents unbounded memory growth from accumulating locks for stacks that no longer exist.
+func (o *UpdateOrchestrator) cleanupStaleLocks(ctx context.Context) {
+	const (
+		cleanupInterval = 10 * time.Minute
+		staleThreshold  = 30 * time.Minute
+	)
+
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			o.locksMu.Lock()
+			now := time.Now()
+			for stackName, entry := range o.stackLocks {
+				// Only remove if lock is not held and hasn't been used recently
+				if entry.mu.TryLock() {
+					if now.Sub(entry.lastUsed) > staleThreshold {
+						delete(o.stackLocks, stackName)
+						log.Printf("CLEANUP: Removed stale stack lock for %s", stackName)
+					}
+					entry.mu.Unlock()
+				}
+			}
+			o.locksMu.Unlock()
+		}
 	}
 }
 

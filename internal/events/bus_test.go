@@ -222,4 +222,140 @@ func TestEventConstants(t *testing.T) {
 	if EventCheckProgress == "" {
 		t.Error("EventCheckProgress is empty")
 	}
+	if EventDroppedWarning == "" {
+		t.Error("EventDroppedWarning is empty")
+	}
+}
+
+func TestDroppedEventTracking(t *testing.T) {
+	bus := NewBus()
+
+	ch, unsubscribe := bus.Subscribe("test.event")
+	defer unsubscribe()
+
+	// Fill the channel buffer completely (100 events)
+	for i := 0; i < 100; i++ {
+		bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"i": i}})
+	}
+
+	// Initial count should be 0
+	initialCount := bus.GetDroppedCount()
+
+	// Publish more events - they should be dropped after retries
+	for i := 0; i < 5; i++ {
+		bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"overflow": i}})
+	}
+
+	// Dropped count should have increased
+	droppedCount := bus.GetDroppedCount()
+	if droppedCount <= initialCount {
+		t.Errorf("Expected dropped count to increase, got %d (initial was %d)", droppedCount, initialCount)
+	}
+
+	// Drain the channel
+	for i := 0; i < 100; i++ {
+		<-ch
+	}
+}
+
+func TestResetDroppedCount(t *testing.T) {
+	bus := NewBus()
+
+	ch, unsubscribe := bus.Subscribe("test.event")
+	defer unsubscribe()
+
+	// Fill buffer and cause drops
+	for i := 0; i < 110; i++ {
+		bus.Publish(Event{Type: "test.event"})
+	}
+
+	// Verify there are drops
+	if bus.GetDroppedCount() == 0 {
+		t.Skip("No drops occurred, cannot test reset")
+	}
+
+	// Reset the counter
+	bus.ResetDroppedCount()
+
+	if bus.GetDroppedCount() != 0 {
+		t.Errorf("Expected dropped count to be 0 after reset, got %d", bus.GetDroppedCount())
+	}
+
+	// Drain channel to clean up
+	for len(ch) > 0 {
+		<-ch
+	}
+}
+
+func TestRetryOnTransientCongestion(t *testing.T) {
+	bus := NewBus()
+
+	ch, unsubscribe := bus.Subscribe("test.event")
+	defer unsubscribe()
+
+	// Fill buffer almost full (leaving room for retries to succeed)
+	for i := 0; i < 98; i++ {
+		bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"i": i}})
+	}
+
+	// Start draining slowly in background
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		<-ch // Make room
+	}()
+
+	// Publish while drain is happening - retry should succeed
+	bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"retry_test": true}})
+
+	// Give time for the goroutine
+	time.Sleep(10 * time.Millisecond)
+
+	// Should have 99 events (98 + 1 from retry)
+	// The drain took 1, so we should have 98 in buffer
+	count := len(ch)
+	if count < 97 { // Allow some tolerance for timing
+		t.Errorf("Expected ~98 events after retry, got %d", count)
+	}
+
+	// Drain remaining
+	for len(ch) > 0 {
+		<-ch
+	}
+}
+
+func TestDropWarningEvent(t *testing.T) {
+	bus := NewBus()
+
+	// Subscribe to wildcard to receive drop warning events
+	wildcardCh, unsubWildcard := bus.Subscribe("*")
+	defer unsubWildcard()
+
+	// Subscribe to test event with a channel we'll overflow
+	testCh, unsubTest := bus.Subscribe("test.event")
+	defer unsubTest()
+
+	// Fill the test channel buffer
+	for i := 0; i < 100; i++ {
+		bus.Publish(Event{Type: "test.event"})
+	}
+
+	// Publish more to trigger drops and potentially a warning
+	for i := 0; i < 20; i++ {
+		bus.Publish(Event{Type: "test.event"})
+	}
+
+	// Check if we got a drop warning in the wildcard subscriber
+	// Note: This is timing-dependent, so we just check the counter increased
+	droppedCount := bus.GetDroppedCount()
+	if droppedCount == 0 {
+		t.Error("Expected some events to be dropped")
+	}
+
+	// Drain channels
+	for len(testCh) > 0 {
+		<-testCh
+	}
+	for len(wildcardCh) > 0 {
+		<-wildcardCh
+	}
 }

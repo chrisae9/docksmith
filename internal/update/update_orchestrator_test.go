@@ -245,7 +245,7 @@ func TestUpdateSingleContainer_HappyPath(t *testing.T) {
 		storage:      mockStorage,
 		eventBus:     bus,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 	}
 
 	operationID, err := orch.UpdateSingleContainer(context.Background(), "test-container", "1.21")
@@ -293,7 +293,7 @@ func TestUpdateBatchContainers_DependencyOrdering(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 	}
 
 	operationID, err := orch.UpdateBatchContainers(context.Background(), []string{"app", "db"}, nil)
@@ -337,7 +337,7 @@ func TestUpdateStack(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 	}
 
 	operationID, err := orch.UpdateStack(context.Background(), "mystack")
@@ -448,7 +448,7 @@ func TestQueueOperation_WhenStackLocked(t *testing.T) {
 		dockerClient: mockDocker,
 		storage:      mockStorage,
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 	}
 
 	orch.acquireStackLock("test-stack")
@@ -582,7 +582,7 @@ func TestBatchUpdateWithNetworkModeDependency(t *testing.T) {
 		eventBus:     bus,
 		graphBuilder: graph.NewBuilder(),
 		stackManager: docker.NewStackManager(),
-		stackLocks:   make(map[string]*sync.Mutex),
+		stackLocks:   make(map[string]*stackLockEntry),
 	}
 
 	// Build batch names map as the orchestrator would

@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/chis/docksmith/internal/storage"
 )
@@ -218,5 +220,194 @@ func TestMergeConfigsPrioritizesDatabase(t *testing.T) {
 
 	if len(merged.ExcludePatterns) != 1 {
 		t.Errorf("Expected 1 exclude pattern from YAML, got %d", len(merged.ExcludePatterns))
+	}
+}
+
+// TestConfigConcurrentGetSet tests that concurrent Get and Set operations don't deadlock
+func TestConfigConcurrentGetSet(t *testing.T) {
+	cfg := &Config{
+		CacheTTLDays: 7,
+	}
+
+	var wg sync.WaitGroup
+	numGoroutines := 50
+	numOperations := 100
+
+	// Run concurrent Get and Set operations
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numOperations; j++ {
+				if id%2 == 0 {
+					cfg.Get("cache_ttl_days")
+				} else {
+					cfg.Set("cache_ttl_days", "14")
+				}
+			}
+		}(i)
+	}
+
+	// Use timeout to detect deadlock
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout: possible deadlock in concurrent Get/Set operations")
+	}
+}
+
+// TestConfigConcurrentSave tests that concurrent Save operations don't deadlock
+func TestConfigConcurrentSave(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := storage.NewSQLiteStorage(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &Config{
+		CacheTTLDays:    7,
+		ScanDirectories: []string{"/www"},
+	}
+
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	numSaves := 10
+
+	// Run concurrent Save operations
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numSaves; j++ {
+				cfg.Save(ctx, store, "test-user")
+			}
+		}(i)
+	}
+
+	// Use timeout to detect deadlock
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout: possible deadlock in concurrent Save operations")
+	}
+}
+
+// TestConfigConcurrentGetSaveMixed tests mixed concurrent operations
+func TestConfigConcurrentGetSaveMixed(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := storage.NewSQLiteStorage(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &Config{
+		CacheTTLDays:    7,
+		ScanDirectories: []string{"/www"},
+	}
+
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	numGoroutines := 30
+
+	// Run mixed operations concurrently
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				switch id % 3 {
+				case 0:
+					cfg.Get("cache_ttl_days")
+				case 1:
+					cfg.Set("cache_ttl_days", "14")
+				case 2:
+					cfg.Save(ctx, store, "test-user")
+				}
+			}
+		}(i)
+	}
+
+	// Use timeout to detect deadlock
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout: possible deadlock in mixed concurrent operations")
+	}
+}
+
+// TestConfigGetWithUninitializedValues tests Get with nil values map (lazy initialization)
+func TestConfigGetWithUninitializedValues(t *testing.T) {
+	cfg := &Config{
+		CacheTTLDays: 7,
+	}
+	// values map is nil at this point
+
+	// Get should initialize values and return the correct value
+	value, found := cfg.Get("cache_ttl_days")
+	if !found {
+		t.Fatal("Expected to find cache_ttl_days")
+	}
+	if value != "7" {
+		t.Errorf("Expected value '7', got '%s'", value)
+	}
+}
+
+// TestConfigSaveWithUninitializedValues tests Save with nil values map
+func TestConfigSaveWithUninitializedValues(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := storage.NewSQLiteStorage(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &Config{
+		CacheTTLDays: 14,
+	}
+	// values map is nil at this point
+
+	ctx := context.Background()
+
+	// Save should initialize values and succeed
+	if err := cfg.Save(ctx, store, "test-user"); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// Verify the value was saved
+	val, found, err := store.GetConfig(ctx, "cache_ttl_days")
+	if err != nil {
+		t.Fatalf("GetConfig failed: %v", err)
+	}
+	if !found {
+		t.Fatal("Expected to find cache_ttl_days in storage")
+	}
+	if val != "14" {
+		t.Errorf("Expected stored value '14', got '%s'", val)
 	}
 }
