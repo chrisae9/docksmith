@@ -257,17 +257,23 @@ func (prl *PathRateLimiter) SetPathLimit(pathPrefix string, cfg RateLimitConfig)
 
 // Allow checks if a request should be allowed based on client and path.
 func (prl *PathRateLimiter) Allow(clientID, path string) bool {
+	limiter, _ := prl.GetLimiterForPath(path)
+	return limiter.Allow(clientID)
+}
+
+// GetLimiterForPath returns the rate limiter and its limit for the given path.
+func (prl *PathRateLimiter) GetLimiterForPath(path string) (*RateLimiter, int) {
 	prl.mu.RLock()
 	defer prl.mu.RUnlock()
 
 	// Check for path-specific limiter
 	for prefix, limiter := range prl.pathLimiters {
 		if len(path) >= len(prefix) && path[:len(prefix)] == prefix {
-			return limiter.Allow(clientID)
+			return limiter, limiter.limit
 		}
 	}
 
-	return prl.defaultLimiter.Allow(clientID)
+	return prl.defaultLimiter, prl.defaultLimiter.limit
 }
 
 // Stop stops all rate limiters.
@@ -286,12 +292,22 @@ func PathRateLimitMiddleware(prl *PathRateLimiter) func(http.Handler) http.Handl
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			clientID := getClientIP(r)
+			path := r.URL.Path
 
-			if !prl.Allow(clientID, r.URL.Path) {
+			limiter, limit := prl.GetLimiterForPath(path)
+
+			if !limiter.Allow(clientID) {
 				w.Header().Set("Retry-After", "60")
+				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+				w.Header().Set("X-RateLimit-Remaining", "0")
 				http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 				return
 			}
+
+			// Add rate limit headers
+			remaining := limiter.GetRemaining(clientID)
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
 
 			next.ServeHTTP(w, r)
 		})
