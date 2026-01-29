@@ -36,6 +36,26 @@ export class HistoryPage {
     }, { timeout });
   }
 
+  /**
+   * Wait for a filter change to take effect.
+   * This waits for the operations list to stabilize after a filter/search change.
+   */
+  async waitForFilterUpdate(timeout = 5000) {
+    // Wait for any loading spinners to disappear
+    const spinner = this.page.locator('.spinner, .loading');
+    const hasSpinner = await spinner.count() > 0;
+    if (hasSpinner) {
+      await spinner.first().waitFor({ state: 'hidden', timeout }).catch(() => {});
+    }
+
+    // Wait for either operations or empty state to be visible
+    await this.page.waitForFunction(() => {
+      const ops = document.querySelectorAll('.operation-card');
+      const empty = document.querySelector('.empty');
+      return ops.length >= 0 && (ops.length > 0 || empty !== null);
+    }, { timeout });
+  }
+
   async getOperationCount(): Promise<number> {
     return this.operationCards.count();
   }
@@ -62,8 +82,29 @@ export class HistoryPage {
     }
   }
 
-  async setTypeFilter(type: 'all' | 'single' | 'batch' | 'stack' | 'rollback' | 'restart' | 'label_change') {
+  async setTypeFilter(type: 'all' | 'updates' | 'rollback' | 'restart' | 'stop' | 'remove' | 'label_change') {
     await this.typeFilterSelect.selectOption(type);
+  }
+
+  /**
+   * Check if an operation has a specific badge type (STOP, REMOVE, LABELS, etc.)
+   */
+  async hasOperationBadge(index: number, badgeType: string): Promise<boolean> {
+    const card = this.operationCards.nth(index);
+    const badge = card.locator(`.op-type-badge.${badgeType.toLowerCase()}`);
+    return badge.isVisible();
+  }
+
+  /**
+   * Get the info text for an operation (e.g., "Container stopped", "Container removed")
+   */
+  async getOperationInfoText(index: number): Promise<string | null> {
+    const card = this.operationCards.nth(index);
+    const infoText = card.locator('.op-label-info');
+    const count = await infoText.count();
+    if (count === 0) return null;
+    const text = await infoText.textContent();
+    return text?.trim() || null;
   }
 
   async getOperationCard(index: number): Promise<Locator> {

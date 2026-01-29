@@ -389,13 +389,17 @@ func TestEndToEndConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
 	// Perform concurrent writes (SQLite serializes these, but should not fail)
+	// Use error channels to collect errors from goroutines
+	errCh := make(chan error, 30) // 10 operations * 3 writers
 	done := make(chan bool, 3)
 
 	// Writer 1: Save cache entries
 	go func() {
 		for i := 0; i < 10; i++ {
 			sha := "sha256:concurrent" + string(rune('a'+i))
-			_ = storage.SaveVersionCache(ctx, sha, "docker.io/library/test", "1.0.0", "amd64")
+			if err := storage.SaveVersionCache(ctx, sha, "docker.io/library/test", "1.0.0", "amd64"); err != nil {
+				errCh <- err
+			}
 		}
 		done <- true
 	}()
@@ -404,7 +408,9 @@ func TestEndToEndConcurrentAccess(t *testing.T) {
 	go func() {
 		for i := 0; i < 10; i++ {
 			containerName := "container-" + string(rune('a'+i))
-			_ = storage.LogCheck(ctx, containerName, "image:latest", "1.0.0", "1.0.1", "update_available", nil)
+			if err := storage.LogCheck(ctx, containerName, "image:latest", "1.0.0", "1.0.1", "update_available", nil); err != nil {
+				errCh <- err
+			}
 		}
 		done <- true
 	}()
@@ -413,7 +419,9 @@ func TestEndToEndConcurrentAccess(t *testing.T) {
 	go func() {
 		for i := 0; i < 10; i++ {
 			key := "key-" + string(rune('a'+i))
-			_ = storage.SetConfig(ctx, key, "value")
+			if err := storage.SetConfig(ctx, key, "value"); err != nil {
+				errCh <- err
+			}
 		}
 		done <- true
 	}()
@@ -422,6 +430,16 @@ func TestEndToEndConcurrentAccess(t *testing.T) {
 	<-done
 	<-done
 	<-done
+	close(errCh)
+
+	// Check for any errors from concurrent operations
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		t.Errorf("Concurrent operations had %d errors: first error: %v", len(errs), errs[0])
+	}
 
 	// Verify all data was written successfully
 	var cacheCount, historyCount, configCount int

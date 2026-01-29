@@ -1,23 +1,21 @@
 import { test, expect, TEST_CONTAINERS } from '../fixtures/test-setup';
-import { DashboardPage } from '../pages/dashboard.page';
 import { HistoryPage } from '../pages/history.page';
 
 test.describe('History UI', () => {
   test('navigating to History tab shows history page', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
+    // Navigate to homepage (don't wait for containers)
+    await page.goto('/');
 
     // Click History tab
-    await dashboard.clickTab('History');
+    await page.locator('.tab-bar button:has-text("History"), .nav-tab:has-text("History")').click();
 
     // Should show History page
     await expect(page.locator('h1')).toContainText('History');
   });
 
   test('history page shows operations list', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
@@ -29,21 +27,20 @@ test.describe('History UI', () => {
   });
 
   test('status filter works', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Get all operations count
     await history.setStatusFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
     const allCount = await history.getOperationCount();
 
     // Filter to success only
     await history.setStatusFilter('success');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
     const successCount = await history.getOperationCount();
 
     // Success count should be <= all count
@@ -51,7 +48,7 @@ test.describe('History UI', () => {
 
     // Filter to failed
     await history.setStatusFilter('failed');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
     const failedCount = await history.getOperationCount();
 
     // Failed count should be <= all count
@@ -59,32 +56,31 @@ test.describe('History UI', () => {
 
     // Back to all
     await history.setStatusFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
     const resetCount = await history.getOperationCount();
     expect(resetCount).toBe(allCount);
   });
 
   test('type filter works', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Get initial count (default filter)
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
     const allCount = await history.getOperationCount();
 
-    // Filter by different types
-    const types: Array<'single' | 'batch' | 'stack' | 'rollback' | 'restart' | 'label_change'> = [
-      'single', 'batch', 'stack', 'rollback', 'restart', 'label_change'
+    // Filter by different types (including new stop and remove types)
+    const types: Array<'updates' | 'rollback' | 'restart' | 'stop' | 'remove' | 'label_change'> = [
+      'updates', 'rollback', 'restart', 'stop', 'remove', 'label_change'
     ];
 
     for (const type of types) {
       await history.setTypeFilter(type);
-      await page.waitForTimeout(300);
+      await history.waitForFilterUpdate();
       const typeCount = await history.getOperationCount();
 
       // Each type count should be <= all count
@@ -95,29 +91,122 @@ test.describe('History UI', () => {
     await history.setTypeFilter('all');
   });
 
+  test('stop filter shows only stop operations', async ({ page }) => {
+    // Navigate directly to history page
+    await page.goto('/history');
+
+    const history = new HistoryPage(page);
+    await history.waitForLoaded();
+
+    // Filter to stop operations
+    await history.setTypeFilter('stop');
+    await history.waitForFilterUpdate();
+
+    const count = await history.getOperationCount();
+
+    // If there are stop operations, verify they have the STOP badge
+    if (count > 0) {
+      const hasBadge = await history.hasOperationBadge(0, 'stop');
+      expect(hasBadge).toBe(true);
+
+      const infoText = await history.getOperationInfoText(0);
+      expect(infoText).toBe('Container stopped');
+    }
+  });
+
+  test('remove filter shows only remove operations', async ({ page }) => {
+    // Navigate directly to history page
+    await page.goto('/history');
+
+    const history = new HistoryPage(page);
+    await history.waitForLoaded();
+
+    // Filter to remove operations
+    await history.setTypeFilter('remove');
+    await history.waitForFilterUpdate();
+
+    const count = await history.getOperationCount();
+
+    // If there are remove operations, verify they have the REMOVE badge
+    if (count > 0) {
+      const hasBadge = await history.hasOperationBadge(0, 'remove');
+      expect(hasBadge).toBe(true);
+
+      const infoText = await history.getOperationInfoText(0);
+      expect(infoText).toBe('Container removed');
+    }
+  });
+
+  test('stop operation badge has correct styling', async ({ page }) => {
+    // Navigate directly to history page
+    await page.goto('/history');
+
+    const history = new HistoryPage(page);
+    await history.waitForLoaded();
+
+    // Filter to stop operations
+    await history.setTypeFilter('stop');
+    await history.waitForFilterUpdate();
+
+    const count = await history.getOperationCount();
+
+    if (count === 0) {
+      test.skip(true, 'No stop operations in history - skipping badge styling test');
+      return;
+    }
+
+    // Verify the badge exists with correct class
+    const badge = page.locator('.operation-card').first().locator('.op-type-badge.stop');
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText('STOP');
+  });
+
+  test('remove operation badge has correct styling', async ({ page }) => {
+    // Navigate directly to history page
+    await page.goto('/history');
+
+    const history = new HistoryPage(page);
+    await history.waitForLoaded();
+
+    // Filter to remove operations
+    await history.setTypeFilter('remove');
+    await history.waitForFilterUpdate();
+
+    const count = await history.getOperationCount();
+
+    if (count === 0) {
+      test.skip(true, 'No remove operations in history - skipping badge styling test');
+      return;
+    }
+
+    // Verify the badge exists with correct class
+    const badge = page.locator('.operation-card').first().locator('.op-type-badge.remove');
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText('REMOVE');
+  });
+
   test('search filters operations', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const initialCount = await history.getOperationCount();
 
     if (initialCount > 0) {
       // Search for a common term
       await history.search('test');
-      await page.waitForTimeout(300);
+      await history.waitForFilterUpdate();
 
       const searchCount = await history.getOperationCount();
       expect(searchCount).toBeLessThanOrEqual(initialCount);
 
       // Clear search
       await history.clearSearch();
-      await page.waitForTimeout(300);
+      await history.waitForFilterUpdate();
 
       const clearedCount = await history.getOperationCount();
       expect(clearedCount).toBe(initialCount);
@@ -125,14 +214,13 @@ test.describe('History UI', () => {
   });
 
   test('expand/collapse operation card works', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -142,14 +230,16 @@ test.describe('History UI', () => {
 
       // Expand first operation
       await history.expandOperation(0);
-      await page.waitForTimeout(300);
+      // Wait for expand animation to complete
+      await expect(history.operationCards.nth(0)).toHaveClass(/expanded/);
 
       const afterExpand = await history.isOperationExpanded(0);
       expect(afterExpand).toBe(true);
 
       // Collapse it
       await history.expandOperation(0);
-      await page.waitForTimeout(300);
+      // Wait for collapse animation to complete
+      await expect(history.operationCards.nth(0)).not.toHaveClass(/expanded/);
 
       const afterCollapse = await history.isOperationExpanded(0);
       expect(afterCollapse).toBe(false);
@@ -157,14 +247,13 @@ test.describe('History UI', () => {
   });
 
   test('operation card shows container name', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -176,14 +265,13 @@ test.describe('History UI', () => {
   });
 
   test('operation card shows correct status indicator', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -195,16 +283,15 @@ test.describe('History UI', () => {
   });
 
   test('clicking container link navigates to container detail', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Filter to single/update operations (most likely to have container links)
-    await history.setTypeFilter('single');
-    await page.waitForTimeout(300);
+    await history.setTypeFilter('updates');
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -215,7 +302,7 @@ test.describe('History UI', () => {
 
     // First expand the card to make container link visible
     await history.expandOperation(0);
-    await page.waitForTimeout(300);
+    await expect(history.operationCards.nth(0)).toHaveClass(/expanded/);
 
     // Check if container link exists in the first operation card
     const card = await history.getOperationCard(0);
@@ -233,21 +320,19 @@ test.describe('History UI', () => {
 
     // Click the container link
     await containerLink.click();
-    await page.waitForTimeout(500);
 
     // Should navigate to container detail page
     await expect(page).toHaveURL(/\/container\//);
   });
 
   test('copy operation ID button works', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
     await history.setTypeFilter('all');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -265,16 +350,15 @@ test.describe('History UI', () => {
   });
 
   test('rollback button shows for eligible operations', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Filter to single updates (most likely to have rollback option)
-    await history.setTypeFilter('single');
-    await page.waitForTimeout(300);
+    await history.setTypeFilter('updates');
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -287,17 +371,16 @@ test.describe('History UI', () => {
   });
 
   test('rollback confirmation dialog appears', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Filter to single updates
-    await history.setTypeFilter('single');
+    await history.setTypeFilter('updates');
     await history.setStatusFilter('success');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const count = await history.getOperationCount();
 
@@ -307,7 +390,8 @@ test.describe('History UI', () => {
       if (hasRollback) {
         // Click rollback
         await history.clickRollback(i);
-        await page.waitForTimeout(300);
+        // Wait for dialog to appear
+        await expect(history.rollbackConfirmDialog).toBeVisible();
 
         // Confirm dialog should appear
         const isVisible = await history.isRollbackConfirmVisible();
@@ -315,7 +399,8 @@ test.describe('History UI', () => {
 
         // Cancel the rollback
         await history.cancelRollback();
-        await page.waitForTimeout(300);
+        // Wait for dialog to disappear
+        await expect(history.rollbackConfirmDialog).toBeHidden();
 
         // Dialog should be gone
         const isGone = await history.isRollbackConfirmVisible();
@@ -327,18 +412,17 @@ test.describe('History UI', () => {
   });
 
   test('combined filters work together', async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.navigate();
-    await dashboard.clickTab('History');
+    // Navigate directly to history page
+    await page.goto('/history');
 
     const history = new HistoryPage(page);
     await history.waitForLoaded();
 
     // Apply multiple filters
     await history.setStatusFilter('success');
-    await history.setTypeFilter('single');
+    await history.setTypeFilter('updates');
     await history.search('test');
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const filteredCount = await history.getOperationCount();
 
@@ -346,7 +430,7 @@ test.describe('History UI', () => {
     await history.setStatusFilter('all');
     await history.setTypeFilter('all');
     await history.clearSearch();
-    await page.waitForTimeout(300);
+    await history.waitForFilterUpdate();
 
     const resetCount = await history.getOperationCount();
 

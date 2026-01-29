@@ -252,7 +252,10 @@ func TestRevertToSnapshot(t *testing.T) {
 	}
 
 	// Verify config was modified
-	value1, found, _ := storage.GetConfig(ctx, "key1")
+	value1, found, err := storage.GetConfig(ctx, "key1")
+	if err != nil {
+		t.Fatalf("Failed to get config key1: %v", err)
+	}
 	if !found || value1 != "modified_value1" {
 		t.Errorf("Expected key1 to be modified_value1, got %s", value1)
 	}
@@ -263,23 +266,35 @@ func TestRevertToSnapshot(t *testing.T) {
 	}
 
 	// Verify config was restored
-	value1, found, _ = storage.GetConfig(ctx, "key1")
+	value1, found, err = storage.GetConfig(ctx, "key1")
+	if err != nil {
+		t.Fatalf("Failed to get config key1 after revert: %v", err)
+	}
 	if !found || value1 != "original_value1" {
 		t.Errorf("Expected key1 to be reverted to original_value1, got %s", value1)
 	}
 
-	value2, found, _ := storage.GetConfig(ctx, "key2")
+	value2, found, err := storage.GetConfig(ctx, "key2")
+	if err != nil {
+		t.Fatalf("Failed to get config key2: %v", err)
+	}
 	if !found || value2 != "original_value2" {
 		t.Errorf("Expected key2 to be reverted to original_value2, got %s", value2)
 	}
 
-	value3, found, _ := storage.GetConfig(ctx, "key3")
+	value3, found, err := storage.GetConfig(ctx, "key3")
+	if err != nil {
+		t.Fatalf("Failed to get config key3: %v", err)
+	}
 	if !found || value3 != "original_value3" {
 		t.Errorf("Expected key3 to be reverted to original_value3, got %s", value3)
 	}
 
 	// Verify new_key was removed (should not exist in snapshot)
-	_, found, _ = storage.GetConfig(ctx, "new_key")
+	_, found, err = storage.GetConfig(ctx, "new_key")
+	if err != nil {
+		t.Fatalf("Failed to get config new_key: %v", err)
+	}
 	if found {
 		t.Error("Expected new_key to be removed after revert")
 	}

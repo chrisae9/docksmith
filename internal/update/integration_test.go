@@ -101,12 +101,23 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	// Subscribe to events
 	eventsSub, unsubscribe := bus.Subscribe("*")
 	defer unsubscribe()
+
+	// Use mutex to protect concurrent access to receivedEvents slice
+	var eventsMu sync.Mutex
 	receivedEvents := make([]events.Event, 0)
+	eventsDone := make(chan struct{})
+
 	go func() {
+		defer close(eventsDone)
 		for {
 			select {
-			case event := <-eventsSub:
+			case event, ok := <-eventsSub:
+				if !ok {
+					return
+				}
+				eventsMu.Lock()
 				receivedEvents = append(receivedEvents, event)
+				eventsMu.Unlock()
 			case <-time.After(5 * time.Second):
 				return
 			}
@@ -118,8 +129,11 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, operationID)
 
-	// Wait for operation to complete
-	time.Sleep(2 * time.Second)
+	// Wait for operation to complete using require.Eventually
+	require.Eventually(t, func() bool {
+		op, found, err := store.GetUpdateOperation(ctx, operationID)
+		return err == nil && found && (op.Status == "complete" || op.Status == "failed")
+	}, 10*time.Second, 100*time.Millisecond, "Operation should complete")
 
 	// Verify operation was saved
 	op, found, err := store.GetUpdateOperation(ctx, operationID)
@@ -133,10 +147,18 @@ func TestIntegration_FullSingleContainerUpdateWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(updatedContent), "nginx:1.21.0")
 
-	// Verify events were published
-	assert.NotEmpty(t, receivedEvents)
+	// Wait for event collector to finish, then verify events
+	unsubscribe() // This closes the channel
+	<-eventsDone  // Wait for goroutine to exit
+
+	eventsMu.Lock()
+	eventsCopy := make([]events.Event, len(receivedEvents))
+	copy(eventsCopy, receivedEvents)
+	eventsMu.Unlock()
+
+	assert.NotEmpty(t, eventsCopy)
 	hasValidatingEvent := false
-	for _, event := range receivedEvents {
+	for _, event := range eventsCopy {
 		if event.Type == events.EventUpdateProgress {
 			payload := event.Payload
 			if payload["operation_id"] == operationID {
@@ -698,62 +720,93 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 	sub2, unsub2 := bus.Subscribe("*")
 	defer unsub2()
 
+	// Use mutexes to protect concurrent access to received slices
+	var mu1, mu2 sync.Mutex
 	received1 := make([]events.Event, 0)
 	received2 := make([]events.Event, 0)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Subscriber 1 collector
+	// Subscriber 1 collector - runs until timeout or channel closed
 	go func() {
 		defer wg.Done()
-		timeout := time.After(3 * time.Second)
+		timeout := time.After(5 * time.Second)
 		for {
 			select {
-			case event := <-sub1:
+			case event, ok := <-sub1:
+				if !ok {
+					return
+				}
+				mu1.Lock()
 				received1 = append(received1, event)
+				mu1.Unlock()
 			case <-timeout:
 				return
 			}
 		}
 	}()
 
-	// Subscriber 2 collector
+	// Subscriber 2 collector - runs until timeout or channel closed
 	go func() {
 		defer wg.Done()
-		timeout := time.After(3 * time.Second)
+		timeout := time.After(5 * time.Second)
 		for {
 			select {
-			case event := <-sub2:
+			case event, ok := <-sub2:
+				if !ok {
+					return
+				}
+				mu2.Lock()
 				received2 = append(received2, event)
+				mu2.Unlock()
 			case <-timeout:
 				return
 			}
 		}
 	}()
 
-	// Trigger update (which publishes events)
+	// Trigger update (which publishes events asynchronously)
 	operationID, err := orch.UpdateSingleContainer(ctx, "web", "1.21")
 	require.NoError(t, err)
 	assert.NotEmpty(t, operationID)
 
-	// Wait for events
-	time.Sleep(1 * time.Second)
+	// Wait for both subscribers to receive at least one event (with timeout)
+	require.Eventually(t, func() bool {
+		mu1.Lock()
+		count1 := len(received1)
+		mu1.Unlock()
+		mu2.Lock()
+		count2 := len(received2)
+		mu2.Unlock()
+		return count1 > 0 && count2 > 0
+	}, 3*time.Second, 50*time.Millisecond, "Both subscribers should receive events")
+
+	// Copy events for verification (while goroutines might still be running)
+	mu1.Lock()
+	events1Copy := make([]events.Event, len(received1))
+	copy(events1Copy, received1)
+	mu1.Unlock()
+
+	mu2.Lock()
+	events2Copy := make([]events.Event, len(received2))
+	copy(events2Copy, received2)
+	mu2.Unlock()
 
 	// Both subscribers should have received events
-	assert.NotEmpty(t, received1, "Subscriber 1 should have received events")
-	assert.NotEmpty(t, received2, "Subscriber 2 should have received events")
+	assert.NotEmpty(t, events1Copy, "Subscriber 1 should have received events")
+	assert.NotEmpty(t, events2Copy, "Subscriber 2 should have received events")
 
 	// Verify event types
 	hasUpdateProgress1 := false
 	hasUpdateProgress2 := false
-	for _, event := range received1 {
+	for _, event := range events1Copy {
 		if event.Type == events.EventUpdateProgress {
 			hasUpdateProgress1 = true
 			break
 		}
 	}
-	for _, event := range received2 {
+	for _, event := range events2Copy {
 		if event.Type == events.EventUpdateProgress {
 			hasUpdateProgress2 = true
 			break
@@ -763,7 +816,7 @@ func TestIntegration_SSEEventFlowFromOrchestratorToSubscribers(t *testing.T) {
 	assert.True(t, hasUpdateProgress1, "Subscriber 1 should receive update progress events")
 	assert.True(t, hasUpdateProgress2, "Subscriber 2 should receive update progress events")
 
-	wg.Wait()
+	// Cleanup: wait for goroutines to finish (will happen via defer unsub or timeout)
 }
 
 // Integration Test 10: Stack update with topological ordering
@@ -1152,20 +1205,26 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 
 	// Subscribe to events
 	sub, unsubscribe := bus.Subscribe("*")
-	defer unsubscribe()
 
+	// Use mutex to protect concurrent access to capturedEvents
+	var eventsMu sync.Mutex
 	capturedEvents := make([]events.Event, 0)
-	done := make(chan bool)
+	done := make(chan struct{})
 
 	// Collect events in background
 	go func() {
+		defer close(done)
 		timeout := time.After(3 * time.Second)
 		for {
 			select {
-			case event := <-sub:
+			case event, ok := <-sub:
+				if !ok {
+					return
+				}
+				eventsMu.Lock()
 				capturedEvents = append(capturedEvents, event)
+				eventsMu.Unlock()
 			case <-timeout:
-				done <- true
 				return
 			}
 		}
@@ -1185,8 +1244,17 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 	orch.publishProgress("test-op", "web", "teststack", "streaming_compose", 73, "Starting container")
 	orch.publishProgress("test-op", "web", "teststack", "restarting_dependents", 75, "Dependent containers recreated")
 
-	// Wait for events
+	// Signal goroutine to stop by unsubscribing (closes channel)
+	unsubscribe()
+
+	// Wait for event collector to finish
 	<-done
+
+	// Now safe to access capturedEvents
+	eventsMu.Lock()
+	eventsCopy := make([]events.Event, len(capturedEvents))
+	copy(eventsCopy, capturedEvents)
+	eventsMu.Unlock()
 
 	// Verify events were published with correct stages and percentages
 	hasRecreating := false
@@ -1194,7 +1262,7 @@ func TestIntegration_ProgressEventsDuringComposeRecreation(t *testing.T) {
 	hasRestartingDependents := false
 	streamingComposeCount := 0
 
-	for _, event := range capturedEvents {
+	for _, event := range eventsCopy {
 		if stage, ok := event.Payload["stage"].(string); ok {
 			switch stage {
 			case "recreating":

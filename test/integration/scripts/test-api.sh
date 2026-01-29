@@ -46,6 +46,8 @@ print_header "Testing Docksmith API Endpoints"
 # Track operation IDs for testing
 UPDATE_OPERATION_ID=""
 BATCH_OPERATION_ID=""
+STOP_OPERATION_ID=""
+REMOVE_OPERATION_ID=""
 
 # Test 1: GET /api/health
 test_health() {
@@ -103,8 +105,8 @@ test_update_single() {
     UPDATE_OPERATION_ID=$(echo "$response" | jq -r '.data.operation_id')
     print_info "Operation ID: $UPDATE_OPERATION_ID"
 
-    # Wait for update to complete (increased timeout)
-    sleep 15
+    # Wait for operation to complete (condition-based, not fixed sleep)
+    wait_for_operation "$UPDATE_OPERATION_ID" 120
 
     # Verify new version
     assert_version "$TEST_CONTAINER" "1.29.3" "Container updated to version 1.29.3"
@@ -160,8 +162,11 @@ test_rollback() {
     local response=$(curl_api POST "/rollback" "$body")
     assert_api_success "$response" "Rollback initiated"
 
-    # Wait for rollback to complete (increased timeout)
-    sleep 20
+    # Extract rollback operation ID
+    local rollback_op_id=$(echo "$response" | jq -r '.data.operation_id')
+
+    # Wait for rollback to complete (condition-based, not fixed sleep)
+    wait_for_operation "$rollback_op_id" 120
 
     # Verify rolled back to old version
     assert_version "$TEST_CONTAINER" "1.25.0" "Container rolled back to version 1.25.0"
@@ -239,7 +244,152 @@ test_restart_container() {
     fi
 }
 
-# Test 15: POST /api/update/batch
+# Test 15: POST /api/containers/{name}/stop
+test_stop_container() {
+    print_info "Test: POST /api/containers/{name}/stop"
+
+    # Use Redis container for stop test (we'll start it again after)
+    local container="test-redis-basic"
+
+    # Verify container is running first
+    local state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo "false")
+    if [ "$state" != "true" ]; then
+        print_info "Container not running, starting it first..."
+        docker start "$container" 2>/dev/null || true
+        sleep 3
+    fi
+
+    local response=$(curl_api POST "/containers/$container/stop")
+    assert_api_success "$response" "Stop container endpoint returns success"
+
+    # Verify operation_id is returned
+    local op_id=$(echo "$response" | jq -r '.data.operation_id')
+    if [ -n "$op_id" ] && [ "$op_id" != "null" ]; then
+        print_success "Stop operation returned operation_id: ${op_id:0:8}..."
+        STOP_OPERATION_ID="$op_id"
+    else
+        print_error "Stop operation did not return operation_id"
+    fi
+
+    sleep 2
+
+    # Verify container is stopped
+    local new_state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo "true")
+    if [ "$new_state" = "false" ]; then
+        print_success "Container stopped successfully"
+    else
+        print_error "Container is still running after stop"
+    fi
+
+    # Verify stop operation was recorded in history
+    local ops_response=$(curl_api GET "/operations?limit=5")
+    local stop_op=$(echo "$ops_response" | jq -r '.data.operations[] | select(.operation_type == "stop" and .container_name == "'"$container"'") | .operation_id')
+    if [ -n "$stop_op" ] && [ "$stop_op" != "null" ]; then
+        print_success "Stop operation recorded in history"
+    else
+        print_error "Stop operation not found in history"
+    fi
+
+    # Start container again for subsequent tests
+    docker start "$container" 2>/dev/null || true
+    sleep 3
+}
+
+# Test 16: POST /api/containers/{name}/stop (already stopped - should fail)
+test_stop_already_stopped() {
+    print_info "Test: POST /api/containers/{name}/stop (already stopped)"
+
+    # Create a temporary stopped container for this test
+    local container="test-stop-temp"
+    docker run -d --name "$container" alpine:latest sleep 3600 2>/dev/null || true
+    sleep 1
+    docker stop "$container" 2>/dev/null || true
+    sleep 1
+
+    # Try to stop already stopped container
+    local response=$(curl_api POST "/containers/$container/stop")
+    local success=$(echo "$response" | jq -r '.success')
+
+    if [ "$success" = "false" ]; then
+        print_success "Stop on already stopped container correctly returns error"
+    else
+        print_error "Stop on already stopped container should have failed"
+    fi
+
+    # Cleanup
+    docker rm -f "$container" 2>/dev/null || true
+}
+
+# Test 17: DELETE /api/containers/{name} (remove)
+test_remove_container() {
+    print_info "Test: DELETE /api/containers/{name}"
+
+    # Create a temporary container for removal test
+    local container="test-remove-temp"
+    docker run -d --name "$container" alpine:latest sleep 3600 2>/dev/null || true
+    sleep 2
+
+    # Stop it first (remove without force requires stopped container)
+    docker stop "$container" 2>/dev/null || true
+    sleep 1
+
+    local response=$(curl_api DELETE "/containers/$container")
+    assert_api_success "$response" "Remove container endpoint returns success"
+
+    # Verify operation_id is returned
+    local op_id=$(echo "$response" | jq -r '.data.operation_id')
+    if [ -n "$op_id" ] && [ "$op_id" != "null" ]; then
+        print_success "Remove operation returned operation_id: ${op_id:0:8}..."
+        REMOVE_OPERATION_ID="$op_id"
+    else
+        print_error "Remove operation did not return operation_id"
+    fi
+
+    sleep 1
+
+    # Verify container is removed
+    if ! docker inspect "$container" &>/dev/null; then
+        print_success "Container removed successfully"
+    else
+        print_error "Container still exists after remove"
+        docker rm -f "$container" 2>/dev/null || true
+    fi
+
+    # Verify remove operation was recorded in history
+    local ops_response=$(curl_api GET "/operations?limit=5")
+    local remove_op=$(echo "$ops_response" | jq -r '.data.operations[] | select(.operation_type == "remove" and .container_name == "'"$container"'") | .operation_id')
+    if [ -n "$remove_op" ] && [ "$remove_op" != "null" ]; then
+        print_success "Remove operation recorded in history"
+    else
+        print_error "Remove operation not found in history"
+    fi
+}
+
+# Test 18: DELETE /api/containers/{name}?force=true (force remove running)
+test_remove_container_force() {
+    print_info "Test: DELETE /api/containers/{name}?force=true"
+
+    # Create a running container
+    local container="test-remove-force-temp"
+    docker run -d --name "$container" alpine:latest sleep 3600 2>/dev/null || true
+    sleep 2
+
+    # Force remove running container
+    local response=$(curl_api DELETE "/containers/$container?force=true")
+    assert_api_success "$response" "Force remove container endpoint returns success"
+
+    sleep 1
+
+    # Verify container is removed
+    if ! docker inspect "$container" &>/dev/null; then
+        print_success "Running container force removed successfully"
+    else
+        print_error "Container still exists after force remove"
+        docker rm -f "$container" 2>/dev/null || true
+    fi
+}
+
+# Test 19: POST /api/update/batch
 test_batch_update() {
     print_info "Test: POST /api/update/batch"
 
@@ -252,8 +402,8 @@ test_batch_update() {
     BATCH_OPERATION_ID=$(echo "$response" | jq -r '.data.operation_id')
     print_info "Batch operation ID: $BATCH_OPERATION_ID"
 
-    # Wait for batch update to complete (increased timeout)
-    sleep 25
+    # Wait for batch operation to complete (condition-based, not fixed sleep)
+    wait_for_operation "$BATCH_OPERATION_ID" 180
 
     # Verify versions
     assert_version "test-nginx-basic" "1.29.3" "Nginx updated to 1.29.3"
@@ -291,6 +441,10 @@ main() {
     test_set_labels
     test_remove_labels
     test_restart_container
+    test_stop_container
+    test_stop_already_stopped
+    test_remove_container
+    test_remove_container_force
     test_batch_update
 
     # Print summary

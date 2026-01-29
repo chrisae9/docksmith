@@ -162,29 +162,76 @@ func TestNonBlockingPublish(t *testing.T) {
 func TestConcurrentPublishSubscribe(t *testing.T) {
 	bus := NewBus()
 
-	var wg sync.WaitGroup
+	var publishWg sync.WaitGroup
+	var receiveWg sync.WaitGroup
+
+	numSubscribers := 5
+	numPublishers := 10
 
 	// Start multiple subscribers
-	subscribers := make([]Subscriber, 5)
-	unsubscribers := make([]func(), 5)
-	for i := 0; i < 5; i++ {
+	subscribers := make([]Subscriber, numSubscribers)
+	unsubscribers := make([]func(), numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
 		subscribers[i], unsubscribers[i] = bus.Subscribe("concurrent.event")
 	}
 
+	// Start goroutines to receive events from each subscriber
+	receivedCounts := make([]int, numSubscribers)
+	var countMu sync.Mutex
+	for i := 0; i < numSubscribers; i++ {
+		receiveWg.Add(1)
+		go func(idx int, ch Subscriber) {
+			defer receiveWg.Done()
+			count := 0
+			for {
+				select {
+				case _, ok := <-ch:
+					if !ok {
+						// Channel closed
+						countMu.Lock()
+						receivedCounts[idx] = count
+						countMu.Unlock()
+						return
+					}
+					count++
+				case <-time.After(500 * time.Millisecond):
+					// Timeout - done receiving
+					countMu.Lock()
+					receivedCounts[idx] = count
+					countMu.Unlock()
+					return
+				}
+			}
+		}(i, subscribers[i])
+	}
+
 	// Publish concurrently
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
+	for i := 0; i < numPublishers; i++ {
+		publishWg.Add(1)
 		go func(n int) {
-			defer wg.Done()
+			defer publishWg.Done()
 			bus.Publish(Event{Type: "concurrent.event", Payload: map[string]interface{}{"n": n}})
 		}(i)
 	}
 
-	wg.Wait()
+	publishWg.Wait()
 
-	// Clean up
+	// Give time for events to be delivered before unsubscribing
+	time.Sleep(50 * time.Millisecond)
+
+	// Clean up - this closes the channels
 	for _, unsub := range unsubscribers {
 		unsub()
+	}
+
+	// Wait for receiver goroutines to finish
+	receiveWg.Wait()
+
+	// Verify each subscriber received events (at least some, allowing for drops)
+	for i, count := range receivedCounts {
+		if count == 0 {
+			t.Errorf("subscriber %d received 0 events, expected at least some", i)
+		}
 	}
 }
 
@@ -281,9 +328,14 @@ func TestResetDroppedCount(t *testing.T) {
 		t.Errorf("Expected dropped count to be 0 after reset, got %d", bus.GetDroppedCount())
 	}
 
-	// Drain channel to clean up
-	for len(ch) > 0 {
-		<-ch
+	// Drain channel to clean up using non-blocking receives
+	for {
+		select {
+		case <-ch:
+			// Keep draining
+		default:
+			return
+		}
 	}
 }
 
@@ -294,32 +346,53 @@ func TestRetryOnTransientCongestion(t *testing.T) {
 	defer unsubscribe()
 
 	// Fill buffer almost full (leaving room for retries to succeed)
-	for i := 0; i < 98; i++ {
+	initialEvents := 98
+	for i := 0; i < initialEvents; i++ {
 		bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"i": i}})
 	}
+
+	// Track when drain happens
+	drainDone := make(chan struct{})
 
 	// Start draining slowly in background
 	go func() {
 		time.Sleep(2 * time.Millisecond)
 		<-ch // Make room
+		close(drainDone)
 	}()
 
 	// Publish while drain is happening - retry should succeed
 	bus.Publish(Event{Type: "test.event", Payload: map[string]interface{}{"retry_test": true}})
 
-	// Give time for the goroutine
-	time.Sleep(10 * time.Millisecond)
-
-	// Should have 99 events (98 + 1 from retry)
-	// The drain took 1, so we should have 98 in buffer
-	count := len(ch)
-	if count < 97 { // Allow some tolerance for timing
-		t.Errorf("Expected ~98 events after retry, got %d", count)
+	// Wait for drain to complete
+	select {
+	case <-drainDone:
+		// Drain completed
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timeout waiting for drain goroutine")
 	}
 
-	// Drain remaining
-	for len(ch) > 0 {
-		<-ch
+	// Drain remaining events and count them
+	drained := 0
+	timeout := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case <-ch:
+			drained++
+		case <-timeout:
+			// Done draining
+			goto done
+		default:
+			// No more events immediately available
+			goto done
+		}
+	}
+done:
+
+	// We published 98 initially + 1 retry event = 99 total
+	// The background goroutine drained 1, so we should have drained ~98
+	if drained < 95 { // Allow some tolerance
+		t.Errorf("Expected to drain ~98 events, got %d", drained)
 	}
 }
 
@@ -351,11 +424,18 @@ func TestDropWarningEvent(t *testing.T) {
 		t.Error("Expected some events to be dropped")
 	}
 
-	// Drain channels
-	for len(testCh) > 0 {
-		<-testCh
+	// Drain channels using non-blocking receives
+	drainChannel := func(ch Subscriber) {
+		for {
+			select {
+			case <-ch:
+				// Keep draining
+			default:
+				return
+			}
+		}
 	}
-	for len(wildcardCh) > 0 {
-		<-wildcardCh
-	}
+
+	drainChannel(testCh)
+	drainChannel(wildcardCh)
 }

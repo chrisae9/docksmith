@@ -252,3 +252,74 @@ check_docksmith() {
     print_success "Docksmith is running and healthy"
     return 0
 }
+
+# Wait for an operation to complete by polling the API
+# This replaces fixed sleep() calls with condition-based waiting
+wait_for_operation() {
+    local operation_id="$1"
+    local timeout="${2:-120}"
+    local poll_interval="${3:-3}"
+    local start_time=$(date +%s)
+
+    if [ -z "$operation_id" ] || [ "$operation_id" = "null" ]; then
+        print_error "No operation ID provided to wait_for_operation"
+        return 1
+    fi
+
+    print_info "Waiting for operation $operation_id to complete (timeout: ${timeout}s)..."
+
+    while true; do
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - start_time))
+
+        if [ $elapsed -ge $timeout ]; then
+            print_error "Timeout waiting for operation $operation_id after ${timeout}s"
+            return 1
+        fi
+
+        local response=$(curl_api GET "/operations/$operation_id")
+        local status=$(echo "$response" | jq -r '.data.status // empty')
+
+        if [ "$status" = "complete" ]; then
+            print_success "Operation $operation_id completed successfully (${elapsed}s)"
+            return 0
+        elif [ "$status" = "failed" ]; then
+            local error_msg=$(echo "$response" | jq -r '.data.error_message // "Unknown error"')
+            print_error "Operation $operation_id failed: $error_msg"
+            return 1
+        fi
+
+        # Still in progress, wait and poll again
+        sleep $poll_interval
+    done
+}
+
+# Wait for container version to change (with polling instead of fixed sleep)
+wait_for_version() {
+    local container_name="$1"
+    local expected_version="$2"
+    local timeout="${3:-120}"
+    local poll_interval="${4:-3}"
+    local start_time=$(date +%s)
+
+    print_info "Waiting for $container_name to be at version $expected_version (timeout: ${timeout}s)..."
+
+    while true; do
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - start_time))
+
+        if [ $elapsed -ge $timeout ]; then
+            local actual=$(get_container_version "$container_name")
+            print_error "Timeout waiting for version $expected_version (current: $actual)"
+            return 1
+        fi
+
+        local actual_version=$(get_container_version "$container_name")
+        if [ "$actual_version" = "$expected_version" ]; then
+            print_success "Container $container_name is now at version $expected_version (${elapsed}s)"
+            return 0
+        fi
+
+        sleep $poll_interval
+    done
+}
