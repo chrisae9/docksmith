@@ -55,7 +55,7 @@ export const STAGE_INFO: Record<string, StageInfo> = {
   },
 };
 
-// Restart-specific stages (for ContainerDetailPage)
+// Restart-specific stages (for ContainerPage)
 export const RESTART_STAGES: Record<string, StageInfo> = {
   'saving': {
     icon: 'fa-floppy-disk',

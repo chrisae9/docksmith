@@ -1,10 +1,23 @@
 #!/bin/bash
 # Plex Activity Checker - Pre-Update Script
 # Checks Tautulli API for active Plex sessions before allowing container updates
+#
+# Required environment variables:
+#   TAUTULLI_URL     - URL to your Tautulli instance (e.g., https://tautulli.example.com)
+#   TAUTULLI_API_KEY - Your Tautulli API key (found in Settings > Web Interface)
 
-# Tautulli server configuration
-TAUTULLI_URL="${TAUTULLI_URL:-https://tautulli.ts.chis.dev}"
-API_KEY="${TAUTULLI_API_KEY:-92f92962f1c846c2beafab9c3d81ce06}"
+# Tautulli server configuration - require environment variables
+if [ -z "$TAUTULLI_URL" ]; then
+    echo "Update blocked: TAUTULLI_URL environment variable not set"
+    exit 1
+fi
+
+if [ -z "$TAUTULLI_API_KEY" ]; then
+    echo "Update blocked: TAUTULLI_API_KEY environment variable not set"
+    exit 1
+fi
+
+API_KEY="$TAUTULLI_API_KEY"
 
 # Construct the API URL
 URL="${TAUTULLI_URL}/api/v2?apikey=${API_KEY}&cmd=get_activity"

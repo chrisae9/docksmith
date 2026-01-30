@@ -1,7 +1,7 @@
 import { test as base, expect, type Page, type APIRequestContext } from '@playwright/test';
 
 // API base URL (same as what we're testing against)
-export const API_BASE = process.env.DOCKSMITH_URL || 'https://docksmith.ts.chis.dev';
+export const API_BASE = process.env.DOCKSMITH_URL || 'http://localhost:8080';
 
 // Test container names - these are real containers from the production environment
 // Use containers that exist and are safe for testing
@@ -173,6 +173,55 @@ export class APIHelper {
       ? `${this.baseUrl}/api/restart/container/${containerName}?force=true`
       : `${this.baseUrl}/api/restart/container/${containerName}`;
     const response = await this.request.post(url);
+    return response.json();
+  }
+
+  // ==================== Stop and Remove ====================
+
+  /**
+   * Stop a running container
+   */
+  async stopContainer(containerName: string, timeout = 10): Promise<{
+    success: boolean;
+    data?: { operation_id: string; container: string; status: string };
+    error?: string;
+  }> {
+    const response = await this.request.post(
+      `${this.baseUrl}/api/containers/${containerName}/stop?timeout=${timeout}`
+    );
+    return response.json();
+  }
+
+  /**
+   * Start a stopped container
+   */
+  async startContainer(containerName: string): Promise<{
+    success: boolean;
+    data?: { container: string; status: string };
+    error?: string;
+  }> {
+    const response = await this.request.post(
+      `${this.baseUrl}/api/containers/${containerName}/start`
+    );
+    return response.json();
+  }
+
+  /**
+   * Remove a container
+   */
+  async removeContainer(containerName: string, force = false, removeVolumes = false): Promise<{
+    success: boolean;
+    data?: { operation_id: string; container: string; status: string };
+    error?: string;
+  }> {
+    const params = new URLSearchParams();
+    if (force) params.set('force', 'true');
+    if (removeVolumes) params.set('volumes', 'true');
+    const queryString = params.toString();
+    const url = queryString
+      ? `${this.baseUrl}/api/containers/${containerName}?${queryString}`
+      : `${this.baseUrl}/api/containers/${containerName}`;
+    const response = await this.request.delete(url);
     return response.json();
   }
 
@@ -492,13 +541,16 @@ export interface ContainerInfo {
 
 export interface Operation {
   operation_id: string;
-  type: string;
+  operation_type: string;
+  type?: string; // deprecated, use operation_type
   status: string;
   container_name?: string;
+  stack_name?: string;
   old_version?: string;
   new_version?: string;
   error_message?: string;
   created_at: string;
+  started_at?: string;
   completed_at?: string;
 }
 

@@ -13,7 +13,7 @@ export default defineConfig({
   },
 
   use: {
-    baseURL: process.env.DOCKSMITH_URL || 'https://docksmith.ts.chis.dev',
+    baseURL: process.env.DOCKSMITH_URL || 'http://localhost:8080',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/stretchr/testify/assert"
@@ -16,47 +15,6 @@ import (
 // ============================================================================
 // Mock Dependencies for BackgroundChecker Tests
 // ============================================================================
-
-// bgCheckerMockDockerClient implements docker.Client for background checker tests
-type bgCheckerMockDockerClient struct {
-	containers []docker.Container
-	mu         sync.Mutex
-}
-
-func newBGCheckerMockDockerClient() *bgCheckerMockDockerClient {
-	return &bgCheckerMockDockerClient{
-		containers: []docker.Container{
-			{
-				ID:    "abc123",
-				Name:  "nginx",
-				Image: "nginx:1.24",
-				State: "running",
-			},
-		},
-	}
-}
-
-func (m *bgCheckerMockDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.containers, nil
-}
-
-func (m *bgCheckerMockDockerClient) IsLocalImage(ctx context.Context, imageName string) (bool, error) {
-	return false, nil
-}
-
-func (m *bgCheckerMockDockerClient) GetImageVersion(ctx context.Context, imageName string) (string, error) {
-	return "1.24.0", nil
-}
-
-func (m *bgCheckerMockDockerClient) GetImageDigest(ctx context.Context, imageName string) (string, error) {
-	return "sha256:abc123", nil
-}
-
-func (m *bgCheckerMockDockerClient) Close() error {
-	return nil
-}
 
 // bgCheckerMockStorage implements storage.Storage for background checker tests
 type bgCheckerMockStorage struct {

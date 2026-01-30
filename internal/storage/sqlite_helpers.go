@@ -178,13 +178,6 @@ func scanScriptAssignmentRows(rows *sql.Rows) ([]ScriptAssignment, error) {
 	return assignments, nil
 }
 
-// queryWithLimit represents a query with an optional limit parameter.
-// Use this to build parameterized queries with limits.
-type queryWithLimit struct {
-	Query string
-	Args  []interface{}
-}
-
 // withLimit creates a query with an optional LIMIT clause using parameterized queries.
 // If limit <= 0, no LIMIT clause is added.
 // Returns the query string and arguments slice for use with QueryContext.

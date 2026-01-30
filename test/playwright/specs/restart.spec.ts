@@ -144,7 +144,7 @@ test.describe('Restart Dependencies UI', () => {
 
     // Try to find and select a container from the list
     // We'll use the API to find a container name that should be in the list
-    const status = await page.request.get(`${process.env.DOCKSMITH_URL || 'https://docksmith.ts.chis.dev'}/api/status`);
+    const status = await page.request.get(`${process.env.DOCKSMITH_URL || 'http://localhost:8080'}/api/status`);
     const statusData = await status.json();
 
     if (!statusData.data?.containers?.length) {
@@ -225,7 +225,7 @@ test.describe('Restart Dependencies UI', () => {
     }
 
     // Get status to find container names
-    const status = await page.request.get(`${process.env.DOCKSMITH_URL || 'https://docksmith.ts.chis.dev'}/api/status`);
+    const status = await page.request.get(`${process.env.DOCKSMITH_URL || 'http://localhost:8080'}/api/status`);
     const statusData = await status.json();
     const containers = statusData.data?.containers || [];
 

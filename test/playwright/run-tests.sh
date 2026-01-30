@@ -53,7 +53,7 @@ setup_environments() {
 
     # Trigger Docksmith to discover the new containers
     print_info "Triggering Docksmith discovery..."
-    curl -s -X POST "${DOCKSMITH_URL:-https://docksmith.ts.chis.dev}/api/trigger-check" > /dev/null
+    curl -s -X POST "${DOCKSMITH_URL:-http://localhost:8080}/api/trigger-check" > /dev/null
     sleep 5
 
     print_success "Test environments ready"

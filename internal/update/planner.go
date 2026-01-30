@@ -306,7 +306,7 @@ func (p *Planner) ValidatePlan(plan *UpdatePlan) error {
 
 // GetSummary returns a human-readable summary of the plan
 func (p *Planner) GetSummary(plan *UpdatePlan) string {
-	summary := fmt.Sprintf("Update Plan Summary:\n")
+	summary := "Update Plan Summary:\n"
 	summary += fmt.Sprintf("  Selected: %d containers\n", plan.Stats.TotalSelected)
 	if plan.Stats.TotalAffected > plan.Stats.TotalSelected {
 		summary += fmt.Sprintf("  Affected: %d containers (includes dependents)\n", plan.Stats.TotalAffected)
@@ -314,7 +314,7 @@ func (p *Planner) GetSummary(plan *UpdatePlan) string {
 
 	// Change types
 	if len(plan.Stats.ByChangeType) > 0 {
-		summary += fmt.Sprintf("  By type: ")
+		summary += "  By type: "
 		types := make([]string, 0)
 		for changeType, count := range plan.Stats.ByChangeType {
 			types = append(types, fmt.Sprintf("%s(%d)", changeType, count))
@@ -325,7 +325,7 @@ func (p *Planner) GetSummary(plan *UpdatePlan) string {
 
 	// Warnings
 	if len(plan.Warnings) > 0 {
-		summary += fmt.Sprintf("\nWarnings:\n")
+		summary += "\nWarnings:\n"
 		for _, warning := range plan.Warnings {
 			summary += fmt.Sprintf("  ⚠ %s\n", warning)
 		}

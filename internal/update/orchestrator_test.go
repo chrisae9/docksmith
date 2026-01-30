@@ -13,12 +13,11 @@ import (
 
 // MockDockerClient is a mock implementation of docker.Client for testing
 type MockDockerClient struct {
-	containers      []docker.Container
-	localImages     map[string]bool
-	imageVersions   map[string]string
-	imageDigests    map[string]string
-	listError       error
-	preUpdateChecks map[string]string
+	containers    []docker.Container
+	localImages   map[string]bool
+	imageVersions map[string]string
+	imageDigests  map[string]string
+	listError     error
 }
 
 func (m *MockDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
@@ -51,13 +50,6 @@ func (m *MockDockerClient) GetImageDigest(ctx context.Context, imageName string)
 
 func (m *MockDockerClient) Close() error {
 	return nil
-}
-
-// registryInterface defines the interface we need for the mock
-type registryInterface interface {
-	ListTags(ctx context.Context, imageRef string) ([]string, error)
-	GetTagDigest(ctx context.Context, imageRef, tag string) (string, error)
-	GetLatestTag(ctx context.Context, imageRef string) (string, error)
 }
 
 // mockRegistryManager is a mock implementation for testing
@@ -497,7 +489,7 @@ func TestOrchestratorParallelExecution(t *testing.T) {
 
 	// Add tags for each container
 	for i := 0; i < 20; i++ {
-		imageRef := fmt.Sprintf("docker.io/library/myapp")
+		imageRef := "docker.io/library/myapp"
 		mockRegistry.tags[imageRef] = []string{fmt.Sprintf("v%d", i), fmt.Sprintf("v%d", i+1)}
 	}
 
