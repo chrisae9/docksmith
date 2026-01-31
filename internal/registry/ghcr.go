@@ -77,25 +77,15 @@ func (c *GHCRClient) doWithRetry(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
-// getMaxPages determines optimal page limit based on repository type
-// Well-known orgs tend to have many tags, user repos have fewer
+// getMaxPages returns the page limit for tag fetching.
+// We use conservative limits since GitHub Releases API now supplements
+// version tags directly, reducing the need to paginate through many container tags.
 func (c *GHCRClient) getMaxPages(repository string, isV2API bool) int {
-	// Check for well-known organizations with many tags
-	wellKnownOrgs := []string{"linuxserver/", "homeassistant/", "home-assistant/"}
-	for _, org := range wellKnownOrgs {
-		if strings.HasPrefix(repository, org) {
-			if isV2API {
-				return 5 // V2 API can handle more
-			}
-			return 3 // Packages API
-		}
-	}
-
-	// User repositories - typically fewer tags
+	_ = repository // unused, kept for potential future use
 	if isV2API {
-		return 3 // 300 tags for V2
+		return 3 // 300 tags from V2 API
 	}
-	return 2 // 200 versions for Packages API
+	return 2 // 200 versions from Packages API
 }
 
 // dockerConfigAuth represents auth entry in Docker config
@@ -245,27 +235,100 @@ func (c *GHCRClient) ListTags(ctx context.Context, repository string) ([]string,
 			<-c.rateLimiter.C
 		}
 
-		// If we got tags successfully, return them
+		// If we got tags successfully from this URL, move on
+		// (don't return early - we want to also try V2 API as supplement)
 		if len(allTags) > 0 {
-			return allTags, nil
+			break
 		}
 	}
 
-	// Always try V2 API as fallback to get complete tag list
-	// GitHub Packages API may not include older versions that were cleaned up
-	if len(allTags) == 0 {
-		return c.listTagsV2(ctx, repository)
+	// Always try V2 API as fallback/supplement
+	// GitHub Packages API returns tags sorted by push date, which means dev/cache
+	// tags often appear first. V2 API returns all tags which ensures we get version tags.
+	v2Tags, err := c.listTagsV2(ctx, repository)
+	if err == nil {
+		if len(allTags) == 0 {
+			// Packages API found nothing, use V2 exclusively
+			allTags = v2Tags
+			for _, tag := range v2Tags {
+				seenTags[tag] = true
+			}
+		} else {
+			// Merge V2 tags into allTags (add any tags we don't already have)
+			for _, tag := range v2Tags {
+				if !seenTags[tag] {
+					allTags = append(allTags, tag)
+					seenTags[tag] = true
+				}
+			}
+		}
 	}
 
-	// Also try V2 API to supplement GitHub Packages results
-	// This ensures we don't miss tags that exist in registry but not in Packages API
-	v2Tags, err := c.listTagsV2(ctx, repository)
-	if err == nil && len(v2Tags) > len(allTags) {
-		// V2 API found more tags, use that instead
-		return v2Tags, nil
+	// For repos with many dev/cache tags, version tags may be buried.
+	// Use GitHub Releases API to get actual release version tags directly.
+	// This is much more efficient than paginating through thousands of container tags.
+	releaseTags := c.getGitHubReleaseTags(ctx, owner, packageName)
+	for _, tag := range releaseTags {
+		if !seenTags[tag] {
+			allTags = append(allTags, tag)
+			seenTags[tag] = true
+		}
+	}
+
+	if len(allTags) == 0 {
+		return nil, fmt.Errorf("no tags found for repository %s", repository)
 	}
 
 	return allTags, nil
+}
+
+// githubRelease represents a release from GitHub API
+type githubRelease struct {
+	TagName string `json:"tag_name"`
+}
+
+// getGitHubReleaseTags fetches version tags from GitHub Releases API.
+// This is useful for repos with many dev/cache tags where version tags are hard to find.
+func (c *GHCRClient) getGitHubReleaseTags(ctx context.Context, owner, repo string) []string {
+	// Rate limiting
+	<-c.rateLimiter.C
+
+	// GitHub Releases API - works for repos that use GitHub releases
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=100", owner, repo)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil
+	}
+
+	if c.githubPAT != "" {
+		req.Header.Set("Authorization", "Bearer "+c.githubPAT)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := c.doWithRetry(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var releases []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil
+	}
+
+	var tags []string
+	for _, r := range releases {
+		if r.TagName != "" {
+			tags = append(tags, r.TagName)
+		}
+	}
+
+	return tags
 }
 
 // listTagsV2 uses the registry V2 API as a fallback
@@ -277,56 +340,69 @@ func (c *GHCRClient) listTagsV2(ctx context.Context, repository string) ([]strin
 	}
 
 	var allTags []string
-	lastTag := ""
-	// Adaptive maxPages based on repository type
-	maxPages := c.getMaxPages(repository, true) // true = V2 API
+	seenTags := make(map[string]bool)
 
-	for range maxPages {
-		url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list?n=100", repository)
-		if lastTag != "" {
-			url += "&last=" + lastTag
-		}
+	// Fetch tags starting from different prefixes to ensure we get version tags
+	// V2 API returns tags in lexicographic order, so "cache-", "dev-", "git-"
+	// all come before "v0.x.x". We fetch from start and from "v" prefix.
+	startPoints := []string{"", "v", "v0"}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
+	for _, startFrom := range startPoints {
+		maxPages := c.getMaxPages(repository, true) // true = V2 API
+		lastTag := startFrom
 
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+		for range maxPages {
+			url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list?n=100", repository)
+			if lastTag != "" {
+				url += "&last=" + lastTag
+			}
 
-		resp, err := c.doWithRetry(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query GHCR: %w", err)
-		}
+			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+			if err != nil {
+				break
+			}
 
-		if resp.StatusCode != http.StatusOK {
-			err := handleHTTPError(resp, "GHCR tags request")
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+
+			resp, err := c.doWithRetry(req)
+			if err != nil {
+				break
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				break
+			}
+
+			var tagList ghcrTagList
+			if err := json.NewDecoder(resp.Body).Decode(&tagList); err != nil {
+				resp.Body.Close()
+				break
+			}
 			resp.Body.Close()
-			return nil, err
+
+			if len(tagList.Tags) == 0 {
+				break
+			}
+
+			// Add unique tags
+			for _, tag := range tagList.Tags {
+				if !seenTags[tag] {
+					allTags = append(allTags, tag)
+					seenTags[tag] = true
+				}
+			}
+
+			if len(tagList.Tags) < 100 {
+				break
+			}
+
+			lastTag = tagList.Tags[len(tagList.Tags)-1]
+			<-c.rateLimiter.C
 		}
-
-		var tagList ghcrTagList
-		if err := json.NewDecoder(resp.Body).Decode(&tagList); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to decode response: %w", err)
-		}
-		resp.Body.Close()
-
-		if len(tagList.Tags) == 0 {
-			break
-		}
-
-		allTags = append(allTags, tagList.Tags...)
-
-		if len(tagList.Tags) < 100 {
-			break
-		}
-
-		lastTag = tagList.Tags[len(tagList.Tags)-1]
-		<-c.rateLimiter.C
 	}
 
 	return allTags, nil
@@ -390,7 +466,6 @@ func (c *GHCRClient) getRegistryToken(ctx context.Context, repository string) (s
 			lastErr = fmt.Errorf("%s request failed: %w", attempt.desc, err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
 			var tokenResp struct {
@@ -400,9 +475,11 @@ func (c *GHCRClient) getRegistryToken(ctx context.Context, repository string) (s
 			}
 
 			if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+				resp.Body.Close()
 				lastErr = fmt.Errorf("failed to decode token response: %w", err)
 				continue
 			}
+			resp.Body.Close()
 
 			token := tokenResp.Token
 			if token == "" {
@@ -430,11 +507,13 @@ func (c *GHCRClient) getRegistryToken(ctx context.Context, repository string) (s
 
 		// For anonymous access to public repos, a 401 might still work
 		if !attempt.useAuth && resp.StatusCode == http.StatusUnauthorized {
+			resp.Body.Close()
 			// Return empty token - the API might work without auth
 			return "", nil
 		}
 
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		lastErr = fmt.Errorf("%s request returned status %d: %s", attempt.desc, resp.StatusCode, string(body))
 	}
 
@@ -589,24 +668,28 @@ func (c *GHCRClient) ListTagsWithDigests(ctx context.Context, repository string)
 			lastErr = fmt.Errorf("failed to query GitHub Packages API: %w", err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
 			// Try next URL
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			lastErr = fmt.Errorf("GitHub Packages API returned %d: %s", resp.StatusCode, string(body))
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, handleHTTPError(resp, "GitHub Packages API request")
+			err := handleHTTPError(resp, "GitHub Packages API request")
+			resp.Body.Close()
+			return nil, err
 		}
 
 		var versions []githubPackageVersion
 		if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
+			resp.Body.Close()
 			lastErr = fmt.Errorf("failed to decode response: %w", err)
 			continue
 		}
+		resp.Body.Close()
 
 		// Build digest→tags mapping first
 		digestToTagsTemp := make(map[string][]string)
