@@ -6,6 +6,7 @@ Configure Docksmith behavior using Docker labels in your compose files.
 
 - [Quick Reference](#quick-reference)
 - [Basic Labels](#basic-labels)
+- [Update Lifecycle Labels](#update-lifecycle-labels)
 - [Version Constraint Labels](#version-constraint-labels)
 - [Common Patterns](#common-patterns)
 - [Label Sync](#label-sync)
@@ -17,8 +18,11 @@ Configure Docksmith behavior using Docker labels in your compose files.
 |-------|--------|-------------|
 | `docksmith.ignore` | `true` | Skip container from all checks and updates |
 | `docksmith.allow-latest` | `true` | Allow `:latest` tag without warnings |
+| `docksmith.allow-prerelease` | `true` | Include prerelease versions (alpha, beta, rc) |
 | `docksmith.pre-update-check` | `/scripts/check.sh` | Script to run before updates |
+| `docksmith.post-update` | `restart:name` | Action to run after updates |
 | `docksmith.restart-after` | `container-name` | Restart when another container updates |
+| `docksmith.auto_rollback` | `true` | Auto-rollback on health check failure |
 | `docksmith.version-pin-major` | `true` | Stay within current major version |
 | `docksmith.version-pin-minor` | `true` | Stay within current minor version |
 | `docksmith.tag-regex` | `^v?[0-9.]+$` | Only consider matching tags |
@@ -61,6 +65,8 @@ Use for:
 - LinuxServer images that use `:latest` well
 - Images with poor versioning
 
+## Update Lifecycle Labels
+
 ### docksmith.pre-update-check
 
 Run a script before allowing updates. Exit 0 to allow, non-zero to block.
@@ -74,6 +80,75 @@ services:
 ```
 
 See [scripts.md](scripts.md) for script examples.
+
+### docksmith.allow-prerelease
+
+Include prerelease versions (alpha, beta, rc, dev) when checking for updates. By default, prerelease versions are skipped unless you're already running one.
+
+```yaml
+services:
+  app:
+    image: myapp:2.0.0
+    labels:
+      - docksmith.allow-prerelease=true
+```
+
+Use for:
+- Testing beta releases before stable
+- Applications where you want early access to features
+
+### docksmith.post-update
+
+Run actions after an update completes successfully.
+
+```yaml
+services:
+  app:
+    image: myapp:latest
+    labels:
+      - docksmith.post-update=restart:cache,worker
+```
+
+**Action types:**
+
+| Type | Format | Description |
+|------|--------|-------------|
+| `restart` | `restart:container1,container2` | Restart containers by name |
+| `compose-restart` | `compose-restart:service1` | Restart via docker compose |
+| `script` | `script:/scripts/post-update.sh` | Run a script |
+| `exec` | `exec:curl https://example.com/notify` | Execute a command |
+
+**Examples:**
+
+```yaml
+# Restart related containers
+- docksmith.post-update=restart:cache,worker
+
+# Run a notification script
+- docksmith.post-update=script:/scripts/notify-slack.sh
+
+# Call a webhook
+- docksmith.post-update=exec:curl -X POST https://example.com/webhook
+```
+
+### docksmith.auto_rollback
+
+Automatically rollback if the container fails health checks after an update.
+
+```yaml
+services:
+  app:
+    image: myapp:latest
+    labels:
+      - docksmith.auto_rollback=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+```
+
+Requires a Docker healthcheck to be configured. If the container becomes unhealthy after update, Docksmith will automatically restore the previous version.
 
 ### docksmith.restart-after
 
