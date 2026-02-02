@@ -94,26 +94,6 @@ echo "No active streams, allowing update"
 exit 0
 ```
 
-### Check Jellyfin Active Sessions
-
-```bash
-#!/bin/bash
-# scripts/check-jellyfin.sh
-
-JELLYFIN_URL="http://jellyfin:8096"
-JELLYFIN_API_KEY="your-api-key"
-
-SESSIONS=$(curl -s "${JELLYFIN_URL}/Sessions?api_key=${JELLYFIN_API_KEY}" \
-  | jq '[.[] | select(.NowPlayingItem != null)] | length')
-
-if [ "$SESSIONS" -gt 0 ]; then
-    echo "Jellyfin has $SESSIONS active session(s), blocking update"
-    exit 1
-fi
-
-exit 0
-```
-
 ### Backup Database Before Update
 
 Run a backup before allowing updates:

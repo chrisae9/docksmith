@@ -197,12 +197,6 @@ services:
     labels:
       - docksmith.allow-latest=true
       - docksmith.pre-update-check=/scripts/check-plex.sh
-
-  jellyfin:
-    image: jellyfin/jellyfin:latest
-    labels:
-      - docksmith.allow-latest=true
-      - docksmith.pre-update-check=/scripts/check-jellyfin.sh
 ```
 
 ### VPN with Dependent Containers
