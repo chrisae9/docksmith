@@ -1,6 +1,11 @@
-# Docksmith
+<p align="center">
+  <img src="ui/public/docksmith-title.svg" alt="Docksmith" width="400">
+</p>
 
-A Docker container update manager for self-hosters. Monitors your compose stacks, checks registries for newer versions, and provides a web UI for managing updates.
+<p align="center">
+  A Docker container update manager for self-hosters.<br>
+  Monitors your compose stacks, checks registries for newer versions, and provides a web UI for managing updates.
+</p>
 
 ## Features
 
