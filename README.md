@@ -67,6 +67,10 @@ Mount your compose directories with `:rw` so Docksmith can update image tags in 
 
 ## What It Does
 
+<p align="center">
+  <img src="docs/docksmith_sub.png" alt="Docksmith Features" width="800">
+</p>
+
 **Updates** - Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
 
 **Version Control** - [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
@@ -74,10 +78,6 @@ Mount your compose directories with `:rw` so Docksmith can update image tags in 
 **Pre-Update Checks** - Run [scripts](docs/scripts.md) before updates. Block an update if Plex has active streams, backup a database first, or check disk space.
 
 **Explorer** - Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
-
-<p align="center">
-  <img src="docs/docksmith_sub.png" alt="Docksmith Explorer" width="800">
-</p>
 
 **Dependency Handling** - Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
