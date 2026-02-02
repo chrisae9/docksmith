@@ -41,7 +41,7 @@
 .explorer-header h1 {
   font-size: var(--text-5xl);
   font-weight: var(--font-bold);
-  margin: 0;
+  margin: 0 0 var(--space-6) 0;
   color: var(--color-text-primary);
 }
 
@@ -613,14 +613,6 @@
 }
 
 @media (max-width: 480px) {
-  .explorer-header {
-    padding: var(--space-8) var(--space-8) var(--space-6);
-  }
-
-  .explorer-header h1 {
-    font-size: var(--text-4xl);
-  }
-
   .explorer-tabs {
     margin-top: var(--space-5);
   }

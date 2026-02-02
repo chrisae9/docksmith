@@ -517,10 +517,6 @@
 
 /* Mobile Responsive */
 @media (max-width: 640px) {
-  .history-page header {
-    padding: var(--space-6) var(--space-8);
-  }
-
   .history-page header h1 {
     font-size: var(--text-6xl);
   }
@@ -546,5 +542,16 @@
 
   .op-detail-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Responsive - Large Desktop */
+@media (min-width: 1200px) {
+  .history-page header {
+    padding: var(--space-10) var(--space-16);
+  }
+
+  .history-list {
+    padding: var(--space-8) var(--space-20) var(--space-bottom-nav);
   }
 }

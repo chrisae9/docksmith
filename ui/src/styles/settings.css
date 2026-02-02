@@ -20,6 +20,13 @@
   border-bottom: 1px solid var(--color-separator);
 }
 
+.settings-page header h1 {
+  font-size: var(--text-5xl);
+  font-weight: var(--font-bold);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
 .settings-content {
   flex: 1;
   overflow-y: auto;
@@ -199,4 +206,23 @@
   font-size: 0.9rem;
   color: var(--color-text-secondary);
   font-weight: 500;
+}
+
+/* Responsive - Mobile */
+@media (max-width: 640px) {
+  .settings-page header h1 {
+    font-size: var(--text-6xl);
+  }
+}
+
+/* Responsive - Large Desktop */
+@media (min-width: 1200px) {
+  .settings-page header {
+    padding: var(--space-10) var(--space-16);
+  }
+
+  .settings-content {
+    padding: var(--space-8) var(--space-20);
+    padding-bottom: calc(var(--space-8) + var(--safe-area-inset-bottom) + 70px);
+  }
 }
