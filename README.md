@@ -75,6 +75,10 @@ Mount your compose directories with `:rw` so Docksmith can update image tags in 
 
 **Explorer** — Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
 
+<p align="center">
+  <img src="docs/docksmith_sub.png" alt="Docksmith Explorer" width="800">
+</p>
+
 **Dependency Handling** — Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
 ---
