@@ -99,7 +99,9 @@ For private registries, mount your Docker config. See [registry setup](docs/regi
 
 ## Security
 
-Docksmith has no built-in authentication. It should only be accessed on trusted networks. See [integrations](docs/integrations.md) for deployment with Tailscale.
+Docksmith requires access to the Docker socket, which grants full control over your containers. There is no built-in authentication - **do not expose it to the internet**.
+
+Run it on a trusted network or behind [Tailscale](docs/integrations.md).
 
 ---
 
