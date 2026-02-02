@@ -26,7 +26,7 @@ docker run -d \
   -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v ./data:/data \
-  -v /path/to/your/stacks:/stacks:rw \
+  -v /home/user/stacks:/home/user/stacks:rw \
   ghcr.io/chrisae9/docksmith:latest
 ```
 
@@ -46,7 +46,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
-      - /path/to/your/stacks:/stacks:rw
+      - /home/user/stacks:/home/user/stacks:rw
 ```
 
 ```bash
@@ -56,6 +56,12 @@ docker compose up -d
 </details>
 
 Mount your compose directories with `:rw` so Docksmith can update image tags in your compose files.
+
+> **Tip**: If your compose files use `env_file`, mount with the same path inside and outside the container:
+> ```
+> -v /home/user/stacks:/home/user/stacks:rw
+> ```
+> This ensures Docker can find your `.env` files when Docksmith recreates containers.
 
 ---
 
