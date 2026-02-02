@@ -18,6 +18,24 @@
 
 ---
 
+## Why I Built This
+
+<p align="center">
+  <img src="docs/docksmith_sub.png" alt="Docksmith Features" width="800">
+</p>
+
+I was using [What's Up Docker](https://github.com/fmartinou/whats-up-docker) with most of my containers running on `latest` tags and felt like I didn't have much control over updates. I wanted something focused on semantic version detection and management for docker compose stacks.
+
+A few specific problems I kept running into:
+
+- **No container dependencies** - Updating certain containers (like a VPN) would break others that depended on them. I'd have to SSH into my server and manually restart things. Docksmith handles this with the `restart-after` label.
+
+- **No way to block risky updates** - I could never tell if someone was watching Plex before an update kicked off. Now I use pre-update checks to block updates when there are active streams.
+
+- **Wanted VS Code Docker on mobile** - I love the VS Code Docker extension for managing containers, but wanted that same control from my phone. The Explorer tab is basically that.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -67,10 +85,6 @@ Mount your compose directories with `:rw` so Docksmith can update image tags in 
 
 ## What It Does
 
-<p align="center">
-  <img src="docs/docksmith_sub.png" alt="Docksmith Features" width="800">
-</p>
-
 **Updates** - Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
 
 **Version Control** - [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
@@ -105,20 +119,6 @@ Run it on a trusted network or behind [Tailscale](docs/integrations.md).
 
 ---
 
-## Why I Built This
-
-I was using [What's Up Docker](https://github.com/fmartinou/whats-up-docker) with most of my containers running on `latest` tags and felt like I didn't have much control over updates. I wanted something focused on semantic version detection and management for docker compose stacks.
-
-A few specific problems I kept running into:
-
-- **No container dependencies** - Updating certain containers (like a VPN) would break others that depended on them. I'd have to SSH into my server and manually restart things. Docksmith handles this with the `restart-after` label.
-
-- **No way to block risky updates** - I could never tell if someone was watching Plex before an update kicked off. Now I use pre-update checks to block updates when there are active streams.
-
-- **Wanted VS Code Docker on mobile** - I love the VS Code Docker extension for managing containers, but wanted that same control from my phone. The Explorer tab is basically that.
-
----
-
 ## More Info
 
 - [Labels](docs/labels.md) - Version constraints, pre-update checks, auto-rollback
@@ -126,4 +126,3 @@ A few specific problems I kept running into:
 - [Registries](docs/registries.md) - Docker Hub, GHCR, private registries
 - [Integrations](docs/integrations.md) - Homepage widget, Tailscale, Traefik
 - [API](docs/api.md) - REST API reference
-
