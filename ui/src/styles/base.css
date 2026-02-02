@@ -94,7 +94,7 @@
   --color-separator-opaque: #2A2A2A;
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-glow: rgba(10, 132, 255, 0.2);
+  --color-border-glow: rgba(14, 165, 233, 0.2);
   --color-border-separator: rgba(255, 255, 255, 0.06);
 
   /* === SHADOWS === */
@@ -113,8 +113,8 @@
   --color-status-ignored: #52525B;
 
   /* === OPERATION TYPE COLORS === */
-  --color-op-batch: #0A84FF;
-  --color-op-batch-dim: rgba(10, 132, 255, 0.15);
+  --color-op-batch: #0ea5e9;
+  --color-op-batch-dim: rgba(14, 165, 233, 0.15);
   --color-op-rollback: #F97316;
   --color-op-rollback-dim: rgba(249, 115, 22, 0.15);
   --color-op-restart: #06B6D4;
@@ -129,8 +129,8 @@
   --color-op-remove-dim: rgba(239, 68, 68, 0.15);
 
   /* === BADGE COLORS === */
-  --color-badge-update: #0A84FF;
-  --color-badge-update-dim: rgba(10, 132, 255, 0.15);
+  --color-badge-update: #0ea5e9;
+  --color-badge-update-dim: rgba(14, 165, 233, 0.15);
   --color-badge-blocked: #F97316;
   --color-badge-blocked-dim: rgba(249, 115, 22, 0.15);
   --color-badge-current: #22C55E;
