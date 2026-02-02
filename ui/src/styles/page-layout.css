@@ -120,9 +120,9 @@
   left: 0;
   right: 0;
   padding: var(--space-8);
-  background: rgba(28, 28, 30, 0.9);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: var(--color-bg-primary-translucent);
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
   border-top: 1px solid var(--color-separator);
   display: flex;
   gap: var(--space-6);
@@ -185,7 +185,13 @@
 
 .button-primary {
   background: var(--color-accent);
-  color: var(--color-text-primary);
+  color: var(--color-bg-primary);
+  font-weight: var(--font-bold);
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--color-accent-bright);
+  filter: none;
 }
 
 .button-secondary {
@@ -234,13 +240,75 @@
   color: var(--color-text-primary);
 }
 
+/* Button Size Variants */
+.button-sm {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--text-md);
+  border-radius: var(--radius-lg);
+  gap: var(--space-2);
+}
+
+.button-lg {
+  padding: var(--space-8) var(--space-12);
+  font-size: var(--text-3xl);
+  border-radius: var(--radius-3xl);
+  gap: var(--space-5);
+}
+
+/* Button Variants */
+.button-ghost {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+.button-ghost:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+  filter: none;
+}
+
+.button-ghost.button-danger {
+  background: transparent;
+  color: var(--color-danger);
+}
+
+.button-ghost.button-danger:hover:not(:disabled) {
+  background: var(--color-danger-dim);
+}
+
+/* Icon-only Button */
+.button-icon {
+  width: var(--size-button-md);
+  height: var(--size-button-md);
+  padding: 0;
+  flex: none;
+}
+
+.button-icon.button-sm {
+  width: var(--size-button-sm);
+  height: var(--size-button-sm);
+}
+
+.button-icon.button-lg {
+  width: var(--size-button-lg);
+  height: var(--size-button-lg);
+}
+
+/* Inline Button (doesn't expand to fill) */
+.button-inline {
+  flex: none;
+  width: auto;
+}
+
 /* Common Card Styles */
 .card {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-3xl);
+  border-radius: var(--radius-xl);
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.card:hover {
+  border-color: var(--color-border);
 }
 
 .card-row {
@@ -404,12 +472,12 @@ textarea:focus-visible {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.85);
+  background: var(--color-overlay);
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 200;
-  animation: fadeInOverlay 0.3s ease-out;
+  z-index: var(--z-modal);
+  animation: fadeInOverlay var(--transition-medium) var(--ease-out);
   padding: var(--space-8);
 }
 
@@ -424,7 +492,7 @@ textarea:focus-visible {
   padding: var(--space-8);
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-xl);
 }
 
 .progress-header {
@@ -593,59 +661,541 @@ textarea:focus-visible {
   font-size: var(--text-md);
 }
 
-/* Shared Search Bar Styles */
-.search-section {
-  margin-bottom: var(--space-10);
-}
+/* ============================================
+   SHARED MAIN PAGE STYLES
+   Used by Dashboard, Explorer, History for consistent layout
+   ============================================ */
 
+/* iOS-style Search Bar - Simple variant for main pages */
 .search-bar {
-  position: relative;
   display: flex;
   align-items: center;
+  gap: var(--space-5);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-5) var(--space-7);
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-2xl);
-  padding: var(--space-6) var(--space-8);
-  gap: var(--space-6);
-  border: var(--border-subtle);
-  box-shadow: var(--shadow-xs);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-subtle);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .search-bar:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-focus);
+  border-color: var(--color-accent-border);
+  box-shadow: 0 0 0 3px var(--color-accent-faint);
 }
 
-.search-bar i.fa-search {
+.search-bar > i:first-child {
   color: var(--color-text-tertiary);
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);
+  flex-shrink: 0;
 }
 
-.search-input {
+.search-bar .search-input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--color-text-primary);
-  font-size: var(--text-xl);
+  font-size: var(--text-base);
+  padding: 0;
 }
 
-.search-input::placeholder {
+.search-bar .search-input::placeholder {
   color: var(--color-text-tertiary);
 }
 
-.clear-search {
+.search-bar .clear-search {
   background: none;
   border: none;
   color: var(--color-text-tertiary);
   cursor: pointer;
   padding: var(--space-2);
-  font-size: var(--text-xl);
-  transition: color var(--transition-fast);
+  font-size: var(--text-lg);
 }
 
-.clear-search:hover {
+.search-bar .clear-search:hover {
   color: var(--color-text-primary);
+}
+
+/* Datadog-style Segmented Control */
+.segmented-control {
+  display: flex;
+  background-color: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.segmented-control button {
+  flex: 1;
+  padding: var(--space-4) var(--space-8);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-lg);
+  font-weight: var(--font-medium);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.segmented-control button:hover:not(.active):not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover-faint);
+}
+
+.segmented-control button:active {
+  transform: scale(0.98);
+}
+
+.segmented-control button.active {
+  background: var(--color-accent);
+  color: white;
+  font-weight: var(--font-semibold);
+}
+
+.segmented-control button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Segmented Control - Small variant */
+.segmented-control-sm button {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--text-md);
+}
+
+/* Segmented Control - Icon support */
+.segmented-control button i {
+  font-size: inherit;
+}
+
+/* Underline Tabs - Classic tabs with bottom border indicator */
+.tabs-underline {
+  display: flex;
+  border-bottom: 1px solid var(--color-separator);
+}
+
+.tabs-underline button {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  padding: var(--space-7) var(--space-8);
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--transition-normal), border-color var(--transition-normal);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tabs-underline button.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+.tabs-underline button:hover:not(.active) {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+/* Stack Group - Collapsible container groups */
+.stack-group {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-subtle);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.stack-group:hover {
+  border-color: var(--color-border);
+}
+
+/* Stack Header - Container for toggle button and actions */
+.stack-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding-right: var(--space-4);
+}
+
+/* Stack Toggle Button - The actual clickable element */
+.stack-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-6) var(--space-7);
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  font-size: var(--text-lg);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stack-toggle:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.stack-toggle:active {
+  opacity: 0.8;
+}
+
+.stack-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-md);
+}
+
+/* Actions container - sits outside the toggle button */
+.stack-actions-container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.stack-header .toggle-icon {
+  font-size: var(--text-2xs);
+  color: var(--color-text-tertiary);
+  width: var(--space-6);
+  flex-shrink: 0;
+}
+
+.stack-header .stack-icon,
+.stack-toggle .stack-icon {
+  font-size: var(--text-lg);
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.stack-header.standalone .stack-icon,
+.stack-toggle.standalone .stack-icon {
+  color: var(--color-text-tertiary);
+}
+
+.stack-header .stack-name,
+.stack-toggle .stack-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stack-header .stack-count,
+.stack-toggle .stack-count {
+  font-size: var(--text-sm);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-tertiary);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+
+/* Stack List Container */
+.stack-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* List Item - Base style for all list items
+   Also used by .explorer-item in Explorer components */
+.list-item,
+.explorer-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-7);
+  border-bottom: 1px solid var(--color-separator);
+  transition: background var(--transition-fast);
+}
+
+.list-item:last-child,
+.explorer-item:last-child {
+  border-bottom: none;
+}
+
+.list-item:hover,
+.explorer-item:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.list-item.dangling,
+.explorer-item.dangling {
+  opacity: 0.6;
+}
+
+/* List Item Content
+   Also used by .item-content, .item-name, .item-meta in Explorer */
+.list-item-content,
+.item-content {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* Keyboard focus styles for interactive content areas */
+.item-content:focus-visible,
+.list-item-content:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+  border-radius: var(--radius-md);
+}
+
+.list-item-name,
+.item-name {
+  display: block;
+  font-size: var(--text-lg);
+  font-weight: var(--font-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list-item-meta,
+.item-meta {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: var(--space-0);
+}
+
+/* Additional labels row for show labels option */
+.item-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.item-label {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* State Indicator Dot
+   Also used by .state-indicator in Explorer */
+.state-dot,
+.state-indicator {
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  background: var(--color-text-quaternary);
+}
+
+.state-dot.running, .state-indicator.running { background: var(--color-success); }
+.state-dot.starting, .state-indicator.starting { background: var(--color-warning); animation: pulse 1.5s ease-in-out infinite; }
+.state-dot.unhealthy, .state-indicator.unhealthy { background: var(--color-danger); }
+.state-dot.paused, .state-indicator.paused { background: var(--color-warning); }
+.state-dot.stopped, .state-indicator.stopped { background: var(--color-text-quaternary); }
+.state-dot.restarting, .state-indicator.restarting { background: var(--color-accent); animation: pulse 1s ease-in-out infinite; }
+.state-dot.loading, .state-indicator.loading { background: transparent; width: auto; height: auto; }
+.state-dot.loading i, .state-indicator.loading i { font-size: var(--text-sm); color: var(--color-accent); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Action Menu Button */
+.action-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-16);
+  height: var(--space-16);
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.action-menu-btn:hover,
+.action-menu-btn.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.action-menu-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Dropdown Action Menu */
+.action-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: var(--z-dropdown);
+  min-width: 140px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--color-border-subtle);
+  overflow: hidden;
+  animation: menuFadeIn var(--transition-fast);
+}
+
+/* Flip menu upward when near bottom of viewport */
+.action-menu.flip-up {
+  top: auto;
+  bottom: 100%;
+  animation: menuFadeInUp var(--transition-fast);
+}
+
+@keyframes menuFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes menuFadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.action-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  width: 100%;
+  padding: var(--space-5) var(--space-7);
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  font-size: var(--text-lg);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.action-menu button:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.action-menu button i {
+  width: var(--space-8);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.action-menu button.danger {
+  color: var(--color-danger);
+}
+
+.action-menu button.danger i {
+  color: var(--color-danger);
+}
+
+.action-menu .menu-divider {
+  height: 1px;
+  background: var(--color-separator);
+  margin: var(--space-2) 0;
+}
+
+.action-menu button.disabled,
+.action-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.action-menu button.disabled:hover,
+.action-menu button:disabled:hover {
+  background: none;
+}
+
+/* Confirm Remove Row */
+.action-menu .confirm-remove {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-7);
+  font-size: var(--text-md);
+  color: var(--color-text-secondary);
+}
+
+.action-menu .confirm-remove span {
+  flex: 1;
+}
+
+.action-menu .confirm-yes,
+.action-menu .confirm-no {
+  padding: var(--space-2) var(--space-6);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  width: auto;
+}
+
+.action-menu .confirm-yes {
+  background: var(--color-danger);
+  color: white;
+}
+
+.action-menu .confirm-yes:hover {
+  filter: brightness(1.1);
+}
+
+.action-menu .confirm-no {
+  background: var(--color-bg-tertiary);
+}
+
+/* Responsive - Mobile */
+@media (max-width: 480px) {
+  .search-bar {
+    padding: var(--space-4) var(--space-6);
+  }
+
+  .stack-header {
+    padding: var(--space-5) var(--space-6);
+  }
+
+  .list-item {
+    padding: var(--space-4) var(--space-6);
+    gap: var(--space-5);
+  }
+
+  .list-item-name {
+    font-size: var(--text-md);
+  }
+
+  .list-item-meta {
+    font-size: var(--text-xs);
+  }
+}
+
+/* ============================================
+   LEGACY SHARED STYLES
+   For other pages using design tokens
+   ============================================ */
+
+/* Search Section */
+.search-section {
+  margin-bottom: var(--space-10);
 }
 
 /* Info Card for info/warning messages */
@@ -660,7 +1210,7 @@ textarea:focus-visible {
 }
 
 .info-card-message.warning {
-  background: rgba(255, 159, 10, 0.1);
+  background: var(--color-orange-faint);
   border-color: var(--color-warning);
 }
 

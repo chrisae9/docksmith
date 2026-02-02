@@ -12,8 +12,8 @@
   margin-bottom: var(--space-10);
   background: var(--color-bg-secondary);
   border-radius: var(--radius-4xl);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 2px 8px var(--color-shadow), 0 0 1px var(--color-border-glow);
+  border: 1px solid var(--color-border-glow);
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -95,11 +95,11 @@
 }
 
 .progress-bar-fill.accent {
-  background: linear-gradient(90deg, var(--color-accent), var(--color-cyan));
+  background: var(--color-accent);
 }
 
 .progress-bar-fill.warning {
-  background: linear-gradient(90deg, var(--color-warning), var(--color-orange));
+  background: var(--color-warning);
 }
 
 .progress-bar-text {
@@ -111,7 +111,7 @@
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
   z-index: 1;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 2px var(--color-shadow-text);
 }
 
 /* Containers Section */
@@ -142,8 +142,8 @@
   background: var(--color-bg-secondary);
   border-radius: var(--radius-3xl);
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 2px 8px var(--color-shadow), 0 0 1px var(--color-border-glow);
+  border: 1px solid var(--color-border-glow);
 }
 
 .container-item {
@@ -264,8 +264,8 @@
   overflow-y: auto;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 2px 8px var(--color-shadow), 0 0 1px var(--color-border-glow);
+  border: 1px solid var(--color-border-glow);
 }
 
 .log-entry {
@@ -353,8 +353,8 @@
   background: var(--color-bg-secondary);
   border-radius: var(--radius-3xl);
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 2px 8px var(--color-shadow), 0 0 1px var(--color-border-glow);
+  border: 1px solid var(--color-border-glow);
 }
 
 .info-row {
@@ -468,8 +468,8 @@
   border-radius: var(--radius-2xl);
   padding: var(--space-6);
   text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 1px rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 2px 8px var(--color-shadow), 0 0 1px var(--color-border-glow);
+  border: 1px solid var(--color-border-glow);
 }
 
 .stat-value {

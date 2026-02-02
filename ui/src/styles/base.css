@@ -1,6 +1,6 @@
 /* ============================================
    BASE STYLES
-   Root variables (colors), resets, and app container
+   Premium OLED Dark Theme
    ============================================ */
 
 :root {
@@ -10,52 +10,145 @@
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
 
-  /* === iOS DARK MODE COLOR PALETTE === */
+  /* === PREMIUM OLED COLOR PALETTE === */
 
-  /* Accent Colors */
-  --color-accent: #64D2FF;              /* iOS Teal - primary accent */
-  --color-accent-dim: rgba(100, 210, 255, 0.2);
-  --color-primary: #64D2FF;             /* Alias for accent */
-  --color-primary-rgb: 100, 210, 255;   /* RGB for rgba() usage */
-  --color-success: #30D158;             /* iOS Green */
-  --color-success-dim: rgba(48, 209, 88, 0.2);
-  --color-warning: #FFD60A;             /* iOS Yellow */
-  --color-warning-dim: rgba(255, 214, 10, 0.2);
-  --color-danger: #FF453A;              /* iOS Red */
-  --color-danger-dim: rgba(255, 69, 58, 0.2);
-  --color-error: #FF453A;               /* Alias for danger */
-  --color-orange: #FF9F0A;              /* iOS Orange */
-  --color-orange-dim: rgba(255, 159, 10, 0.2);
-  --color-purple: #AF52DE;              /* iOS Purple */
-  --color-purple-dim: rgba(175, 82, 222, 0.15);
-  --color-cyan: #5AC8FA;                /* iOS Cyan */
-  --color-cyan-dim: rgba(90, 200, 250, 0.2);
+  /* Primary Accent - Sky Blue (matches Docksmith logo #0ea5e9) */
+  --color-accent: #0ea5e9;
+  --color-accent-bright: #38bdf8;
+  --color-accent-dim: rgba(14, 165, 233, 0.15);
+  --color-accent-faint: rgba(14, 165, 233, 0.08);
+  --color-accent-border: rgba(14, 165, 233, 0.4);
+  --color-primary: #0ea5e9;
+  --color-primary-rgb: 14, 165, 233;
 
-  /* Background Colors */
-  --color-bg-primary: #000000;          /* True black (OLED) */
-  --color-bg-secondary: #1C1C1E;        /* iOS secondary system background */
-  --color-bg-tertiary: #2C2C2E;         /* iOS tertiary system background */
-  --color-bg-elevated: #3A3A3C;         /* Elevated surfaces */
+  /* Success - Soft Green */
+  --color-success: #22C55E;
+  --color-success-bright: #4ADE80;
+  --color-success-dim: rgba(34, 197, 94, 0.15);
+  --color-success-subtle: rgba(34, 197, 94, 0.1);
+  --color-success-faint: rgba(34, 197, 94, 0.06);
 
-  /* Text Colors */
-  --color-text-primary: #FFFFFF;        /* Primary labels */
-  --color-text-secondary: #AEAEB2;      /* Secondary labels */
-  --color-text-tertiary: #636366;       /* Tertiary labels */
-  --color-text-quaternary: #48484A;     /* Quaternary labels */
+  /* Warning - Warm Orange */
+  --color-warning: #FB923C;
+  --color-warning-bright: #FDBA74;
+  --color-warning-dim: rgba(251, 146, 60, 0.15);
+  --color-warning-faint: rgba(251, 146, 60, 0.08);
+  --color-warning-border: rgba(251, 146, 60, 0.3);
+  --color-warning-border-dim: rgba(251, 146, 60, 0.2);
 
-  /* Separators */
-  --color-separator: #2C2C2E;           /* Subtle separator */
-  --color-separator-opaque: #48484A;    /* Opaque separator */
+  /* Danger - Soft Red */
+  --color-danger: #EF4444;
+  --color-danger-bright: #F87171;
+  --color-danger-dim: rgba(239, 68, 68, 0.15);
+  --color-danger-faint: rgba(239, 68, 68, 0.08);
+  --color-danger-border: rgba(239, 68, 68, 0.3);
+  --color-danger-text-muted: rgba(239, 68, 68, 0.9);
+  --color-error: #EF4444;
 
-  /* Status Indicators */
-  --color-status-major: #FF453A;        /* Major version update */
-  --color-status-minor: #FF9F0A;        /* Minor version update */
-  --color-status-patch: #64D2FF;        /* Patch version update (blue - distinct from up-to-date) */
-  --color-status-current: #30D158;      /* Up to date */
-  --color-status-pinnable: #FFD60A;     /* Needs version pinning */
-  --color-status-local: #636366;        /* Local image */
-  --color-status-blocked: #FF9F0A;      /* Update blocked */
-  --color-status-ignored: #48484A;      /* Ignored container */
+  /* Orange - For caution/attention */
+  --color-orange: #F97316;
+  --color-orange-dim: rgba(249, 115, 22, 0.15);
+  --color-orange-subtle: rgba(249, 115, 22, 0.1);
+  --color-orange-faint: rgba(249, 115, 22, 0.06);
+
+  /* Purple - For configuration/settings */
+  --color-purple: #A855F7;
+  --color-purple-dim: rgba(168, 85, 247, 0.15);
+
+  /* Cyan - For info/patches */
+  --color-cyan: #06B6D4;
+  --color-cyan-dim: rgba(6, 182, 212, 0.15);
+
+  /* Slate - Neutral/muted */
+  --color-slate: #64748B;
+  --color-slate-dim: rgba(100, 116, 139, 0.15);
+
+  /* Update Types - Semantic Colors */
+  --color-update-patch: #06B6D4;        /* Cyan - safe, routine */
+  --color-update-minor: #FF9F0A;        /* iOS Orange - notable change */
+  --color-update-major: #EF4444;        /* Red - breaking change */
+
+  /* === BACKGROUND COLORS - TRUE BLACK OLED === */
+  --color-bg-primary: #000000;
+  --color-bg-primary-translucent: rgba(0, 0, 0, 0.95);
+  --color-bg-secondary: #0A0A0A;
+  --color-bg-tertiary: #141414;
+  --color-bg-quaternary: #1C1C1C;
+  --color-bg-elevated: #242424;
+  --color-bg-hover: #2A2A2A;
+  --color-bg-hover-faint: rgba(255, 255, 255, 0.03);
+
+  /* Overlay */
+  --color-overlay: rgba(0, 0, 0, 0.92);
+  --color-overlay-light: rgba(0, 0, 0, 0.75);
+
+  /* === TEXT COLORS === */
+  --color-text-primary: #FAFAFA;
+  --color-text-secondary: #A1A1AA;
+  --color-text-tertiary: #71717A;
+  --color-text-quaternary: #52525B;
+  --color-text-tertiary-dim: rgba(161, 161, 170, 0.1);
+
+  /* === BORDERS & SEPARATORS === */
+  --color-separator: #1E1E1E;
+  --color-separator-opaque: #2A2A2A;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-glow: rgba(10, 132, 255, 0.2);
+  --color-border-separator: rgba(255, 255, 255, 0.06);
+
+  /* === SHADOWS === */
+  --color-shadow: rgba(0, 0, 0, 0.5);
+  --color-shadow-text: rgba(0, 0, 0, 0.6);
+  --color-shadow-dark: rgba(0, 0, 0, 0.7);
+
+  /* === STATUS INDICATORS === */
+  --color-status-major: #EF4444;
+  --color-status-minor: #FF9F0A;
+  --color-status-patch: #06B6D4;
+  --color-status-current: #22C55E;
+  --color-status-pinnable: #A855F7;
+  --color-status-local: #64748B;
+  --color-status-blocked: #F97316;
+  --color-status-ignored: #52525B;
+
+  /* === OPERATION TYPE COLORS === */
+  --color-op-batch: #0A84FF;
+  --color-op-batch-dim: rgba(10, 132, 255, 0.15);
+  --color-op-rollback: #F97316;
+  --color-op-rollback-dim: rgba(249, 115, 22, 0.15);
+  --color-op-restart: #06B6D4;
+  --color-op-restart-dim: rgba(6, 182, 212, 0.15);
+  --color-op-labels: #A855F7;
+  --color-op-labels-dim: rgba(168, 85, 247, 0.15);
+  --color-op-rolled-back: #64748B;
+  --color-op-rolled-back-dim: rgba(100, 116, 139, 0.15);
+  --color-op-stop: #FB923C;
+  --color-op-stop-dim: rgba(251, 146, 60, 0.15);
+  --color-op-remove: #EF4444;
+  --color-op-remove-dim: rgba(239, 68, 68, 0.15);
+
+  /* === BADGE COLORS === */
+  --color-badge-update: #0A84FF;
+  --color-badge-update-dim: rgba(10, 132, 255, 0.15);
+  --color-badge-blocked: #F97316;
+  --color-badge-blocked-dim: rgba(249, 115, 22, 0.15);
+  --color-badge-current: #22C55E;
+  --color-badge-current-dim: rgba(34, 197, 94, 0.15);
+  --color-badge-pinnable: #A855F7;
+  --color-badge-pinnable-dim: rgba(168, 85, 247, 0.15);
+  --color-badge-local: #64748B;
+  --color-badge-local-dim: rgba(100, 116, 139, 0.15);
+  --color-badge-ignored: #52525B;
+  --color-badge-ignored-dim: rgba(82, 82, 91, 0.15);
+  --color-badge-major: #EF4444;
+  --color-badge-major-dim: rgba(239, 68, 68, 0.15);
+  --color-badge-minor: #FF9F0A;
+  --color-badge-minor-dim: rgba(255, 159, 10, 0.15);
+  --color-badge-patch: #06B6D4;
+  --color-badge-patch-dim: rgba(6, 182, 212, 0.15);
+  --color-badge-pin: #A855F7;
+  --color-badge-pin-dim: rgba(168, 85, 247, 0.15);
 }
 
 * {
@@ -302,3 +395,4 @@ h1 {
   align-items: flex-start;
   justify-content: center;
 }
+

@@ -1,18 +1,54 @@
 /* ============================================
    DOCKSMITH DESIGN TOKENS
-   ============================================
-
-   A comprehensive design token system for consistent
-   spacing, typography, borders, transitions, and shadows.
-
-   Usage: Import this file first, then use tokens throughout.
+   Clean & Minimal
    ============================================ */
 
 :root {
   /* ============================================
+     TYPOGRAPHY
+     System fonts for speed and clarity
+     ============================================ */
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --font-sans: var(--font-body);
+
+  /* Type Scale - Slightly larger for impact */
+  --text-2xs: 9px;
+  --text-xs: 10px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-3xl: 22px;
+  --text-4xl: 24px;
+  --text-5xl: 28px;
+  --text-6xl: 32px;
+  --text-7xl: 40px;
+  --text-8xl: 56px;
+
+  /* Font weights */
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* Line heights */
+  --leading-tight: 1.15;
+  --leading-normal: 1.4;
+  --leading-relaxed: 1.6;
+
+  /* Letter spacing */
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-wider: 0.05em;
+
+  /* ============================================
      SPACING SCALE
      Base unit: 4px
-     Use for margins, paddings, gaps
      ============================================ */
   --space-0: 0;
   --space-1: 2px;
@@ -23,112 +59,103 @@
   --space-6: 12px;
   --space-7: 14px;
   --space-8: 16px;
+  --space-9: 18px;
   --space-10: 20px;
   --space-12: 24px;
+  --space-14: 28px;
   --space-16: 32px;
   --space-20: 40px;
   --space-24: 48px;
+  --space-32: 64px;
+
+  /* Semantic spacing */
+  --height-tab-bar: 60px;
+  --space-bottom-nav: 100px;
 
   /* ============================================
-     TYPOGRAPHY SCALE
-     iOS-inspired sizes
-     ============================================ */
-  --text-2xs: 9px;
-  --text-xs: 10px;
-  --text-sm: 11px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 15px;
-  --text-xl: 16px;
-  --text-2xl: 17px;
-  --text-3xl: 18px;
-  --text-4xl: 20px;
-  --text-5xl: 24px;
-  --text-6xl: 28px;
-  --text-7xl: 32px;
-  --text-8xl: 48px;
-
-  /* Font weights */
-  --font-normal: 400;
-  --font-medium: 500;
-  --font-semibold: 600;
-  --font-bold: 700;
-
-  /* Font families */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
-
-  /* Line heights */
-  --leading-tight: 1.2;
-  --leading-normal: 1.4;
-  --leading-relaxed: 1.5;
-
-  /* ============================================
-     BORDER RADIUS SCALE
-     iOS-inspired rounded corners
+     BORDER RADIUS
+     More geometric, industrial feel
      ============================================ */
   --radius-none: 0;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 10px;
-  --radius-2xl: 12px;
-  --radius-3xl: 14px;
-  --radius-4xl: 16px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-4xl: 24px;
   --radius-full: 9999px;
 
   /* ============================================
-     TRANSITION TOKENS
-     Consistent animation timing
+     TRANSITIONS & ANIMATIONS
+     Snappy, mechanical feel
      ============================================ */
   --duration-instant: 0.05s;
-  --duration-fast: 0.1s;
-  --duration-normal: 0.15s;
-  --duration-medium: 0.2s;
-  --duration-slow: 0.3s;
+  --duration-fast: 0.12s;
+  --duration-normal: 0.18s;
+  --duration-medium: 0.25s;
+  --duration-slow: 0.35s;
   --duration-slower: 0.5s;
 
-  /* Easing functions */
-  --ease-default: ease;
-  --ease-in: ease-in;
-  --ease-out: ease-out;
-  --ease-in-out: ease-in-out;
+  /* Easing - more mechanical/industrial */
+  --ease-default: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.3, 1);
 
   /* Preset transitions */
-  --transition-fast: var(--duration-fast) var(--ease-default);
+  --transition-fast: var(--duration-fast) var(--ease-snap);
   --transition-normal: var(--duration-normal) var(--ease-default);
   --transition-medium: var(--duration-medium) var(--ease-default);
   --transition-slow: var(--duration-slow) var(--ease-out);
   --transition-colors: var(--duration-normal) var(--ease-default);
-  --transition-transform: var(--duration-fast) var(--ease-out);
+  --transition-transform: var(--duration-fast) var(--ease-snap);
   --transition-all: var(--duration-normal) var(--ease-default);
 
   /* ============================================
-     SHADOW SCALE
-     Optimized for dark mode (more subtle)
+     SHADOWS
+     Subtle and functional
      ============================================ */
   --shadow-none: none;
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.6);
-  --shadow-2xl: 0 16px 48px rgba(0, 0, 0, 0.7);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-2xl: 0 12px 32px rgba(0, 0, 0, 0.35);
 
-  /* Focus ring shadow */
-  --shadow-focus: 0 0 0 2px var(--color-accent-dim);
-  --shadow-focus-danger: 0 0 0 2px var(--color-danger-dim);
-  --shadow-focus-success: 0 0 0 2px var(--color-success-dim);
+  /* No glow shadows - clean look */
+  --shadow-glow-accent: none;
+  --shadow-glow-amber: none;
+  --shadow-glow-success: none;
+  --shadow-glow-danger: none;
 
-  /* Elevation shadows (with subtle glow for dark mode) */
-  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-floating: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 1px rgba(255, 255, 255, 0.08);
+  /* Focus rings - iOS Blue accent */
+  --shadow-focus: 0 0 0 2px rgba(10, 132, 255, 0.5);
+  --shadow-focus-danger: 0 0 0 2px rgba(239, 68, 68, 0.4);
+  --shadow-focus-success: 0 0 0 2px rgba(34, 197, 94, 0.4);
+
+  /* Elevated surfaces - simple */
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-floating: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* Inner shadows */
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-inset-lg: inset 0 2px 4px rgba(0, 0, 0, 0.2);
 
   /* ============================================
-     Z-INDEX SCALE
-     Layering hierarchy
+     BLUR
+     ============================================ */
+  --blur-sm: blur(8px);
+  --blur-md: blur(16px);
+  --blur-lg: blur(24px);
+  --blur-xl: blur(40px);
+
+  /* ============================================
+     Z-INDEX
      ============================================ */
   --z-base: 0;
   --z-dropdown: 100;
@@ -141,30 +168,27 @@
 
   /* ============================================
      COMPONENT SIZES
-     Standard sizes for interactive elements
      ============================================ */
-  --size-touch-min: 44px;  /* iOS minimum touch target */
+  --size-touch-min: 44px;
   --size-button-sm: 32px;
   --size-button-md: 40px;
   --size-button-lg: 48px;
-  --size-input-height: 36px;
+  --size-input-height: 40px;
   --size-icon-sm: 16px;
   --size-icon-md: 20px;
   --size-icon-lg: 24px;
 
   /* ============================================
      BORDERS
-     Standard border styles
      ============================================ */
   --border-width: 1px;
   --border-width-thick: 2px;
-  --border-subtle: 1px solid rgba(255, 255, 255, 0.05);
+  --border-subtle: 1px solid rgba(255, 255, 255, 0.06);
   --border-separator: 1px solid var(--color-separator);
 }
 
 /* ============================================
    GLOBAL ANIMATIONS
-   Shared keyframes used across components
    ============================================ */
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -184,7 +208,7 @@
 @keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -192,9 +216,27 @@
   }
 }
 
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(10, 132, 255, 0);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
 /* ============================================
-   GLOBAL INTERACTIVE ELEMENT STYLES
-   Cursor pointer for all clickable elements
+   INTERACTIVE ELEMENT CURSORS
    ============================================ */
 button,
 [role="button"],
@@ -221,8 +263,7 @@ select:disabled,
 }
 
 /* ============================================
-   ACCESSIBILITY - REDUCED MOTION
-   Respects user preference for less animation
+   REDUCED MOTION
    ============================================ */
 @media (prefers-reduced-motion: reduce) {
   *,

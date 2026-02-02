@@ -1,6 +1,7 @@
 /* ============================================
    UPDATE AND RESTART PROGRESS STYLES
    Progress modals, stages, stats cards
+   Industrial Forge Aesthetic
    ============================================ */
 
 /* Update progress overlay */
@@ -10,7 +11,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.75);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -20,11 +21,12 @@
 
 .update-progress-modal {
   background: var(--color-bg-secondary);
-  border-radius: 16px;
+  border-radius: var(--radius-2xl);
   padding: 24px;
   min-width: 320px;
   max-width: 90%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-2xl), 0 0 0 1px var(--color-border-subtle);
+  border: 1px solid var(--color-accent-border);
 }
 
 .update-progress-header {
@@ -74,7 +76,7 @@
 }
 
 .update-progress-operation code {
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  font-family: var(--font-mono);
   background: var(--color-bg-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
@@ -92,16 +94,17 @@
   position: relative;
   width: 100%;
   height: 20px;
-  background: var(--color-separator);
-  border-radius: 10px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-inset);
 }
 
 .update-progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-success));
-  border-radius: 10px;
-  transition: width 0.3s ease;
+  background: var(--color-accent);
+  border-radius: var(--radius-lg);
+  transition: width 0.3s var(--ease-out);
 }
 
 .update-progress-bar-text {
@@ -112,7 +115,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-primary);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  text-shadow: 0 1px 2px var(--color-shadow-dark);
 }
 
 .update-progress-stage {
@@ -169,7 +172,7 @@
 
 .update-container-item {
   padding: 4px 6px;
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   display: flex;
   flex-wrap: wrap;
@@ -231,7 +234,7 @@
 }
 
 .log-entries {
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   max-height: 80px;
   overflow-y: auto;
@@ -337,7 +340,7 @@
 
 .stat-card {
   background: var(--color-bg-tertiary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 12px 8px;
   display: flex;
   flex-direction: column;
@@ -345,14 +348,18 @@
   gap: 4px;
   min-height: fit-content;
   max-height: 80px;
+  border: 1px solid var(--color-border-subtle);
+  transition: all var(--transition-fast);
 }
 
 .stat-card.success {
-  background: rgba(48, 209, 88, 0.1);
+  background: var(--color-success-faint);
+  border-color: rgba(34, 197, 94, 0.2);
 }
 
 .stat-card.error {
-  background: rgba(255, 69, 58, 0.1);
+  background: var(--color-danger-faint);
+  border-color: rgba(239, 68, 68, 0.2);
 }
 
 .stat-card .stat-label {
@@ -360,20 +367,24 @@
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  font-weight: var(--font-medium);
 }
 
 .stat-card .stat-value {
-  font-size: 18px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: var(--font-bold);
   color: var(--color-text-primary);
 }
 
 .stat-card.success .stat-value {
   color: var(--color-success);
+  text-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
 }
 
 .stat-card.error .stat-value {
   color: var(--color-danger);
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
 }
 
 .update-footer {
@@ -533,12 +544,12 @@
 }
 
 .dependents-summary.success {
-  background: rgba(48, 209, 88, 0.1);
+  background: var(--color-success-faint);
   color: var(--color-success);
 }
 
 .dependents-summary.warning {
-  background: rgba(255, 214, 10, 0.1);
+  background: var(--color-warning-faint);
   color: var(--color-warning);
 }
 

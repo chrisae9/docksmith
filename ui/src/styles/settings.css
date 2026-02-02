@@ -14,9 +14,9 @@
 .settings-page header {
   flex-shrink: 0;
   background: var(--color-bg-primary);
-  padding: 12px 16px;
-  padding-left: calc(16px + var(--safe-area-inset-left));
-  padding-right: calc(16px + var(--safe-area-inset-right));
+  padding: var(--space-8) var(--space-8) var(--space-6);
+  padding-left: calc(var(--space-8) + var(--safe-area-inset-left));
+  padding-right: calc(var(--space-8) + var(--safe-area-inset-right));
   border-bottom: 1px solid var(--color-separator);
 }
 
