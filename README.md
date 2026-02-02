@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Docksmith Updates Dashboard" width="800">
+  <img src="docs/docksmith_main.png" alt="Docksmith Updates Dashboard" width="800">
 </p>
 
 ---
