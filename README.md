@@ -12,6 +12,10 @@
   <a href="https://github.com/chrisae9/docksmith/pkgs/container/docksmith"><img src="https://img.shields.io/badge/ghcr.io-docksmith-blue" alt="GHCR"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Docksmith Updates Dashboard" width="800">
+</p>
+
 ---
 
 ## Quick Start
@@ -97,12 +101,3 @@ Docksmith has no built-in authentication. It should only be accessed on trusted 
 - [Integrations](docs/integrations.md) — Homepage widget, Tailscale, Traefik
 - [API](docs/api.md) — REST API reference
 
----
-
-## About
-
-Docksmith was built as an AI-first project, developed collaboratively with Claude. While AI assisted throughout, significant effort went into architecture, testing, and refinement to create something useful for the self-hosting community.
-
-## License
-
-MIT

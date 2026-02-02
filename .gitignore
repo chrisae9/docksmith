@@ -41,3 +41,4 @@ test/playwright/node_modules/
 # OS files
 .DS_Store
 Thumbs.db
+\!docs/screenshot.png
