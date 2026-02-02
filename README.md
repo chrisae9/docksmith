@@ -3,31 +3,14 @@
 </p>
 
 <p align="center">
-  <strong>A smarter way to manage Docker container updates.</strong><br>
-  Monitor your compose stacks, check for newer versions, update with confidence, and rollback when needed.
+  <strong>A Docker container update manager for self-hosters.</strong><br>
+  Monitor your compose stacks, check for newer versions, and manage updates through a web UI.
 </p>
 
 <p align="center">
   <a href="https://github.com/chrisae9/docksmith/blob/main/LICENSE"><img src="https://img.shields.io/github/license/chrisae9/docksmith" alt="License"></a>
   <a href="https://github.com/chrisae9/docksmith/pkgs/container/docksmith"><img src="https://img.shields.io/badge/ghcr.io-docksmith-blue" alt="GHCR"></a>
 </p>
-
----
-
-## Why Docksmith?
-
-Unlike Watchtower which updates containers automatically and silently, Docksmith gives you **visibility and control**:
-
-| | Docksmith | Watchtower |
-|---|:---:|:---:|
-| Web UI | ✅ | ❌ |
-| See available updates before applying | ✅ | ❌ |
-| Rollback to previous version | ✅ | ❌ |
-| Pre-update checks (e.g., block if Plex is streaming) | ✅ | ❌ |
-| Version constraints (pin major/minor) | ✅ | ❌ |
-| Automatic updates | ❌ | ✅ |
-
-**Docksmith is for self-hosters who want to know what's updating and when.**
 
 ---
 
@@ -43,10 +26,10 @@ docker run -d \
   ghcr.io/chrisae9/docksmith:latest
 ```
 
-Open **http://localhost:8080** and you're done.
+Open **http://localhost:8080** — that's it.
 
 <details>
-<summary><strong>Docker Compose (recommended)</strong></summary>
+<summary><strong>Docker Compose</strong></summary>
 
 ```yaml
 services:
@@ -68,20 +51,21 @@ docker compose up -d
 
 </details>
 
-> **Note**: Mount your compose directories with `:rw` — Docksmith edits compose files to update image tags.
+Mount your compose directories with `:rw` so Docksmith can update image tags in your compose files.
 
 ---
 
-## Features
+## What It Does
 
-- **Update Dashboard** — See all containers with available updates at a glance
-- **One-Click Updates** — Update individual containers or batch update multiple
-- **Rollback Support** — Revert to previous versions when updates cause issues
-- **Pre-Update Checks** — Run scripts before updates (block if Plex has active streams, backup databases first, etc.)
-- **Version Constraints** — Pin to major/minor versions, use regex filters, set min/max bounds
-- **Explorer** — Browse and manage containers, images, networks, and volumes
-- **Container Controls** — Stop, start, restart, and remove containers directly from the UI
-- **Prune** — Clean up unused images, containers, networks, and volumes
+**Updates** — Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
+
+**Version Control** — [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
+
+**Pre-Update Checks** — Run [scripts](docs/scripts.md) before updates. Block an update if Plex has active streams, backup a database first, or check disk space.
+
+**Explorer** — Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
+
+**Dependency Handling** — Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
 ---
 
@@ -95,40 +79,29 @@ docker compose up -d
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `GITHUB_TOKEN` | - | For private GHCR images |
 
-For private registries, mount your Docker config:
-
-```yaml
-volumes:
-  - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
-```
-
----
-
-## Documentation
-
-| Guide | Description |
-|-------|-------------|
-| [Labels](docs/labels.md) | Container labels for version constraints, pre-update checks |
-| [Scripts](docs/scripts.md) | Pre-update check script examples |
-| [Registries](docs/registries.md) | Docker Hub, GHCR, private registry setup |
-| [Integrations](docs/integrations.md) | Homepage widget, Tailscale, Traefik |
-| [API](docs/api.md) | REST API reference |
+For private registries, mount your Docker config. See [registry setup](docs/registries.md).
 
 ---
 
 ## Security
 
-**Docksmith has no built-in authentication.** It should only be accessed on trusted networks.
+Docksmith has no built-in authentication. It should only be accessed on trusted networks. See [integrations](docs/integrations.md) for deployment with Tailscale.
 
-See [Integrations](docs/integrations.md) for secure deployment with Tailscale.
+---
+
+## More Info
+
+- [Labels](docs/labels.md) — Version constraints, pre-update checks, auto-rollback
+- [Scripts](docs/scripts.md) — Pre-update script examples
+- [Registries](docs/registries.md) — Docker Hub, GHCR, private registries
+- [Integrations](docs/integrations.md) — Homepage widget, Tailscale, Traefik
+- [API](docs/api.md) — REST API reference
 
 ---
 
 ## About
 
-Docksmith was built as an AI-first project — developed collaboratively with Claude as a coding partner. While AI assisted throughout development, significant effort went into architecture decisions, testing, and refinement to create a polished, production-ready tool for the self-hosting community.
-
----
+Docksmith was built as an AI-first project, developed collaboratively with Claude. While AI assisted throughout, significant effort went into architecture, testing, and refinement to create something useful for the self-hosting community.
 
 ## License
 
