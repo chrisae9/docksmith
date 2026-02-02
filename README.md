@@ -30,7 +30,7 @@ docker run -d \
   ghcr.io/chrisae9/docksmith:latest
 ```
 
-Open **http://localhost:8080** — that's it.
+Open **http://localhost:8080** - that's it.
 
 <details>
 <summary><strong>Docker Compose</strong></summary>
@@ -67,19 +67,19 @@ Mount your compose directories with `:rw` so Docksmith can update image tags in 
 
 ## What It Does
 
-**Updates** — Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
+**Updates** - Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
 
-**Version Control** — [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
+**Version Control** - [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
 
-**Pre-Update Checks** — Run [scripts](docs/scripts.md) before updates. Block an update if Plex has active streams, backup a database first, or check disk space.
+**Pre-Update Checks** - Run [scripts](docs/scripts.md) before updates. Block an update if Plex has active streams, backup a database first, or check disk space.
 
-**Explorer** — Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
+**Explorer** - Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
 
 <p align="center">
   <img src="docs/docksmith_sub.png" alt="Docksmith Explorer" width="800">
 </p>
 
-**Dependency Handling** — Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
+**Dependency Handling** - Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
 ---
 
@@ -105,9 +105,9 @@ Docksmith has no built-in authentication. It should only be accessed on trusted 
 
 ## More Info
 
-- [Labels](docs/labels.md) — Version constraints, pre-update checks, auto-rollback
-- [Scripts](docs/scripts.md) — Pre-update script examples
-- [Registries](docs/registries.md) — Docker Hub, GHCR, private registries
-- [Integrations](docs/integrations.md) — Homepage widget, Tailscale, Traefik
-- [API](docs/api.md) — REST API reference
+- [Labels](docs/labels.md) - Version constraints, pre-update checks, auto-rollback
+- [Scripts](docs/scripts.md) - Pre-update script examples
+- [Registries](docs/registries.md) - Docker Hub, GHCR, private registries
+- [Integrations](docs/integrations.md) - Homepage widget, Tailscale, Traefik
+- [API](docs/api.md) - REST API reference
 
