@@ -36,7 +36,7 @@ Mount your Docker config for authenticated access:
 services:
   docksmith:
     volumes:
-      - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
+      - ~/.docker/config.json:/root/.docker/config.json:ro
 ```
 
 Login on the host first:
@@ -71,7 +71,7 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
 services:
   docksmith:
     volumes:
-      - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
+      - ~/.docker/config.json:/root/.docker/config.json:ro
 ```
 
 Your GitHub token needs the `read:packages` scope.
@@ -92,7 +92,7 @@ Mount the config:
 services:
   docksmith:
     volumes:
-      - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
+      - ~/.docker/config.json:/root/.docker/config.json:ro
 ```
 
 ### Registry Types Supported
@@ -181,7 +181,7 @@ docker login registry.example.com
 
 2. Verify the config is mounted:
 ```bash
-docker exec docksmith cat /home/docksmith/.docker/config.json
+docker exec docksmith cat /root/.docker/config.json
 ```
 
 3. Check token hasn't expired (GHCR tokens can expire)

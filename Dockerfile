@@ -22,22 +22,12 @@ FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates bash curl jq docker-cli docker-cli-compose
 
-# Create docker group with GID 972 (matches host) and docksmith user
-RUN addgroup -g 972 docker && \
-    addgroup -g 1000 docksmith && \
-    adduser -D -u 1000 -G docksmith docksmith && \
-    adduser docksmith docker
-
-RUN mkdir -p /data && chown docksmith:docksmith /data
+RUN mkdir -p /data
 
 WORKDIR /app
 
 COPY --from=backend-builder /build/docksmith /app/docksmith
 COPY --from=frontend-builder /build/ui/dist /app/ui/dist
-
-RUN chown -R docksmith:docksmith /app
-
-USER docksmith
 
 EXPOSE 8080
 

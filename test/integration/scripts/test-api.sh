@@ -398,12 +398,16 @@ test_batch_update() {
     local response=$(curl_api POST "/update/batch" "$body")
     assert_api_success "$response" "Batch update initiated"
 
-    # Save operation ID
-    BATCH_OPERATION_ID=$(echo "$response" | jq -r '.data.operation_id')
-    print_info "Batch operation ID: $BATCH_OPERATION_ID"
+    # Get all operation IDs from the operations array
+    local op_ids=$(echo "$response" | jq -r '.data.operations[].operation_id // empty')
+    print_info "Batch operation IDs: $op_ids"
 
-    # Wait for batch operation to complete (condition-based, not fixed sleep)
-    wait_for_operation "$BATCH_OPERATION_ID" 180
+    # Wait for each operation to complete
+    for op_id in $op_ids; do
+        if [ -n "$op_id" ] && [ "$op_id" != "null" ]; then
+            wait_for_operation "$op_id" 180
+        fi
+    done
 
     # Verify versions
     assert_version "test-nginx-basic" "1.29.3" "Nginx updated to 1.29.3"
