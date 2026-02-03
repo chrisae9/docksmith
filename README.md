@@ -23,21 +23,6 @@
 
 ## Quick Start
 
-```bash
-docker run -d \
-  --name docksmith \
-  -p 8080:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v ./data:/data \
-  -v /home/user/stacks:/home/user/stacks:rw \
-  ghcr.io/chrisae9/docksmith:latest
-```
-
-Open **http://localhost:8080** - that's it.
-
-<details>
-<summary><strong>Docker Compose</strong></summary>
-
 ```yaml
 services:
   docksmith:
@@ -47,24 +32,14 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # Required: Docker socket for container management
       - /var/run/docker.sock:/var/run/docker.sock
+      # Required: Persistent storage for database
       - ./data:/data
+      # Your compose directories (add as many as needed)
+      # Use same path inside/outside so env_file references work
       - /home/user/stacks:/home/user/stacks:rw
 ```
-
-```bash
-docker compose up -d
-```
-
-</details>
-
-Mount your compose directories with `:rw` so Docksmith can update image tags in your compose files.
-
-> **Tip**: If your compose files use `env_file`, mount with the same path inside and outside the container:
-> ```
-> -v /home/user/stacks:/home/user/stacks:rw
-> ```
-> This ensures Docker can find your `.env` files when Docksmith recreates containers.
 
 ---
 
