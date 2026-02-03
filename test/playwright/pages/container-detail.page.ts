@@ -8,42 +8,58 @@ export class ContainerDetailPage {
   readonly changeTypeBadge: Locator;
   readonly syncWarningBanner: Locator;
   readonly syncButton: Locator;
-  readonly settingsSection: Locator;
+  readonly tabNav: Locator;
+  readonly overviewTab: Locator;
+  readonly configTab: Locator;
+  readonly logsTab: Locator;
+  readonly inspectTab: Locator;
   readonly ignoreCheckbox: Locator;
   readonly allowLatestCheckbox: Locator;
   readonly versionPinControl: Locator;
   readonly tagFilterRow: Locator;
   readonly preUpdateScriptRow: Locator;
   readonly restartDependenciesRow: Locator;
-  readonly labelsSection: Locator;
+  readonly configFooter: Locator;
   readonly saveRestartButton: Locator;
-  readonly restartButton: Locator;
-  readonly updateButton: Locator;
   readonly cancelButton: Locator;
+  readonly updateButton: Locator;
+  readonly labelsSection: Locator;
 
   constructor(page: Page) {
     this.page = page;
-    this.backButton = page.locator('.back-button');
-    this.containerName = page.locator('.page-header h1');
-    this.statusBadge = page.locator('.status-badge');
-    this.changeTypeBadge = page.locator('.change-badge');
-    this.syncWarningBanner = page.locator('.labels-sync-warning');
-    this.syncButton = page.locator('.labels-sync-warning button');
-    this.settingsSection = page.locator('.settings-section');
-    // Use accessibility-based selectors for checkboxes
-    this.ignoreCheckbox = page.getByRole('checkbox', { name: 'Ignore Container' });
-    this.allowLatestCheckbox = page.getByRole('checkbox', { name: 'Allow :latest Tag' });
-    this.versionPinControl = page.locator('.segmented-control');
-    this.tagFilterRow = page.locator('.nav-row:has-text("Tag Filter")');
-    this.preUpdateScriptRow = page.locator('.nav-row:has-text("Pre-Update Script")');
-    this.restartDependenciesRow = page.locator('.nav-row:has-text("Restart Dependencies")');
-    this.labelsSection = page.locator('.labels-section');
-    // Use CSS class selectors for footer buttons to avoid conflicts with segmented controls
-    this.saveRestartButton = page.locator('.page-footer .button-primary:has-text("Save & Restart")');
-    this.restartButton = page.locator('.page-footer .button-secondary:has-text("Restart")');
-    // Update button has specific color classes based on change type
-    this.updateButton = page.locator('.page-footer .button-patch, .page-footer .button-minor, .page-footer .button-major, .page-footer .button-accent:has-text("Update")');
-    this.cancelButton = page.locator('.page-footer .button-secondary:has-text("Cancel")');
+    // Header elements - using the actual container-page structure
+    this.backButton = page.locator('.container-page .back-btn');
+    this.containerName = page.locator('.container-page .header-info h1');
+    this.statusBadge = page.locator('.container-page .status-badge');
+    this.changeTypeBadge = page.locator('.container-page .change-badge');
+    this.syncWarningBanner = page.locator('.container-page .sync-warning');
+    this.syncButton = page.locator('.container-page .sync-warning .sync-btn');
+
+    // Tab navigation
+    this.tabNav = page.locator('.container-page .tab-nav');
+    this.overviewTab = this.tabNav.getByRole('button', { name: /Overview/i });
+    this.configTab = this.tabNav.getByRole('button', { name: /Config/i });
+    this.logsTab = this.tabNav.getByRole('button', { name: /Logs/i });
+    this.inspectTab = this.tabNav.getByRole('button', { name: /Inspect/i });
+
+    // Config tab elements - use label text matching
+    this.ignoreCheckbox = page.locator('.container-page .checkbox-row').filter({ hasText: 'Ignore Container' }).locator('input[type="checkbox"]');
+    this.allowLatestCheckbox = page.locator('.container-page .checkbox-row').filter({ hasText: 'Allow :latest' }).locator('input[type="checkbox"]');
+    this.versionPinControl = page.locator('.container-page .segmented-row .segmented-control');
+    this.tagFilterRow = page.locator('.container-page .nav-row-with-help').filter({ hasText: 'Tag Filter' });
+    this.preUpdateScriptRow = page.locator('.container-page .precheck-row-with-help');
+    this.restartDependenciesRow = page.locator('.container-page .nav-row-with-help').filter({ hasText: 'Restart Dependencies' });
+
+    // Config footer buttons (only visible when changes pending)
+    this.configFooter = page.locator('.container-page .config-footer');
+    this.saveRestartButton = this.configFooter.locator('.button-primary');
+    this.cancelButton = this.configFooter.locator('.button-secondary');
+
+    // Update button in version card (overview tab)
+    this.updateButton = page.locator('.container-page .version-card .update-btn');
+
+    // Labels section in overview tab
+    this.labelsSection = page.locator('.container-page .info-section').filter({ has: page.locator('h3:has-text("Labels")') });
   }
 
   async navigate(containerName: string) {
@@ -54,10 +70,10 @@ export class ContainerDetailPage {
   async waitForLoaded(timeout = 30000) {
     // Wait for page header to show container name
     await expect(this.containerName).toBeVisible({ timeout });
-    // Wait for settings to load
-    await expect(this.settingsSection).toBeVisible({ timeout });
-    // Make sure loading is done
-    await expect(this.page.locator('.loading-inline')).toBeHidden({ timeout });
+    // Wait for tab navigation to appear
+    await expect(this.tabNav).toBeVisible({ timeout });
+    // Make sure loading spinner is gone
+    await expect(this.page.locator('.container-page .main-loading')).toBeHidden({ timeout });
   }
 
   async getContainerName(): Promise<string> {
@@ -85,8 +101,28 @@ export class ContainerDetailPage {
     await this.syncButton.click();
   }
 
+  // Tab navigation
+  async clickOverviewTab() {
+    await this.overviewTab.click();
+  }
+
+  async clickConfigTab() {
+    await this.configTab.click();
+  }
+
+  async clickLogsTab() {
+    await this.logsTab.click();
+  }
+
+  async clickInspectTab() {
+    await this.inspectTab.click();
+  }
+
+  // Config tab methods
   async toggleIgnore() {
-    await this.ignoreCheckbox.click();
+    // Click on the row's label area to toggle, not the checkbox directly
+    const row = this.page.locator('.container-page .checkbox-row').filter({ hasText: 'Ignore Container' });
+    await row.locator('.row-label-area').click();
   }
 
   async isIgnoreChecked(): Promise<boolean> {
@@ -94,7 +130,8 @@ export class ContainerDetailPage {
   }
 
   async toggleAllowLatest() {
-    await this.allowLatestCheckbox.click();
+    const row = this.page.locator('.container-page .checkbox-row').filter({ hasText: 'Allow :latest' });
+    await row.locator('.row-label-area').click();
   }
 
   async isAllowLatestChecked(): Promise<boolean> {
@@ -113,7 +150,7 @@ export class ContainerDetailPage {
   }
 
   async clickTagFilter() {
-    await this.tagFilterRow.click();
+    await this.tagFilterRow.locator('.nav-row-content').click();
   }
 
   async getTagFilterValue(): Promise<string> {
@@ -124,7 +161,7 @@ export class ContainerDetailPage {
   }
 
   async clickPreUpdateScript() {
-    await this.preUpdateScriptRow.click();
+    await this.preUpdateScriptRow.locator('.precheck-nav-area').click();
   }
 
   async getPreUpdateScriptValue(): Promise<string> {
@@ -134,7 +171,7 @@ export class ContainerDetailPage {
   }
 
   async clickRestartDependencies() {
-    await this.restartDependenciesRow.click();
+    await this.restartDependenciesRow.locator('.nav-row-content').click();
   }
 
   async getRestartDependenciesValue(): Promise<string> {
@@ -143,9 +180,10 @@ export class ContainerDetailPage {
     return text?.replace('›', '').trim() || 'None';
   }
 
+  // Labels (in overview tab)
   async getLabels(): Promise<Record<string, string>> {
     const labels: Record<string, string> = {};
-    const items = this.labelsSection.locator('.label-item');
+    const items = this.page.locator('.container-page .label-list li');
     const count = await items.count();
 
     for (let i = 0; i < count; i++) {
@@ -160,7 +198,7 @@ export class ContainerDetailPage {
   }
 
   async getLabelValue(labelKey: string): Promise<string | null> {
-    const item = this.labelsSection.locator(`.label-item:has(.label-key:has-text("${labelKey}"))`);
+    const item = this.page.locator(`.container-page .label-list li:has(.label-key:has-text("${labelKey}"))`);
     const count = await item.count();
     if (count === 0) return null;
     const value = await item.locator('.label-value').textContent();
@@ -168,18 +206,8 @@ export class ContainerDetailPage {
   }
 
   async hasUnsavedChanges(): Promise<boolean> {
-    // Check if the changes warning banner is visible (more reliable than button check)
-    const warningBanner = this.page.locator('.changes-warning-banner');
-    const bannerVisible = await warningBanner.isVisible().catch(() => false);
-    if (bannerVisible) return true;
-
-    // Fallback: check for Save & Restart button using role selector
-    const saveButton = this.page.getByRole('button', { name: /Save & Restart/i });
-    return saveButton.isVisible().catch(() => false);
-  }
-
-  async clickRestart() {
-    await this.restartButton.click();
+    // Check if the config footer is visible (only shows when changes pending)
+    return this.configFooter.isVisible().catch(() => false);
   }
 
   async clickSaveRestart() {
@@ -198,28 +226,58 @@ export class ContainerDetailPage {
     await this.backButton.click();
   }
 
-  // Version information
+  // Version information (in overview tab, from version-card or info-grid)
   async getCurrentVersion(): Promise<string | null> {
-    const item = this.page.locator('.detail-item:has(.detail-label:has-text("Current Version"))');
-    const count = await item.count();
-    if (count === 0) return null;
-    const value = await item.locator('.detail-value').textContent();
-    return value?.trim() || null;
+    // Check version card first
+    const versionCard = this.page.locator('.container-page .version-card .version-current');
+    if (await versionCard.count() > 0) {
+      const text = await versionCard.textContent();
+      return text?.trim() || null;
+    }
+    return null;
   }
 
   async getLatestVersion(): Promise<string | null> {
-    const item = this.page.locator('.detail-item:has(.detail-label:has-text("Latest Version"))');
-    const count = await item.count();
-    if (count === 0) return null;
-    const value = await item.locator('.detail-value').textContent();
-    return value?.trim() || null;
+    // Check version card first
+    const versionCard = this.page.locator('.container-page .version-card .version-latest');
+    if (await versionCard.count() > 0) {
+      const text = await versionCard.textContent();
+      return text?.trim() || null;
+    }
+    return null;
   }
 
   async getImage(): Promise<string | null> {
-    const item = this.page.locator('.detail-item:has(.detail-label:has-text("Repository"))');
+    // Image is shown in the Container info section
+    const item = this.page.locator('.container-page .info-item').filter({ hasText: 'Image' });
     const count = await item.count();
     if (count === 0) return null;
-    const value = await item.locator('.detail-value').textContent();
+    const value = await item.locator('.info-value').textContent();
     return value?.trim() || null;
+  }
+
+  // Header action buttons
+  async clickStartButton() {
+    await this.page.locator('.container-page .action-btn[title="Start"]').click();
+  }
+
+  async clickStopButton() {
+    await this.page.locator('.container-page .action-btn[title="Stop"]').click();
+  }
+
+  async clickRestartButton() {
+    await this.page.locator('.container-page .action-btn[title="Restart"]').click();
+  }
+
+  async clickRemoveButton() {
+    await this.page.locator('.container-page .action-btn[title="Remove"]').click();
+  }
+
+  async confirmRemove() {
+    await this.page.locator('.container-page .confirm-remove .action-btn[title="Confirm remove"]').click();
+  }
+
+  async cancelRemove() {
+    await this.page.locator('.container-page .confirm-remove .action-btn[title="Cancel"]').click();
   }
 }
