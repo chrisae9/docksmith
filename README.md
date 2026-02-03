@@ -34,7 +34,7 @@ services:
     volumes:
       # Required: Docker socket for container management
       - /var/run/docker.sock:/var/run/docker.sock
-      # Required: Persistent storage for database
+      # Required: Persistent storage for update history
       - ./data:/data
       # Your compose directories (add as many as needed)
       # Use same path inside/outside so env_file references work
@@ -53,7 +53,7 @@ A few specific problems I kept running into:
 
 - **No way to block risky updates** - I could never tell if someone was watching Plex before an update kicked off. Now I use pre-update checks to block updates when there are active streams.
 
-- **Wanted VS Code Docker on mobile** - I love the VS Code Docker extension for managing containers, but wanted that same control from my phone. The Explorer tab is basically that.
+- **Wanted VS Code Docker on mobile** - I love the [VS Code Docker extension](https://github.com/microsoft/vscode-docker) for managing containers, but wanted that same control from my phone. The Explorer tab is basically that.
 
 ---
 
