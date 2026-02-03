@@ -68,34 +68,34 @@
   --color-update-minor: #FF9F0A;        /* iOS Orange - notable change */
   --color-update-major: #EF4444;        /* Red - breaking change */
 
-  /* === BACKGROUND COLORS - TRUE BLACK OLED === */
-  --color-bg-primary: #000000;
-  --color-bg-primary-translucent: rgba(0, 0, 0, 0.95);
-  --color-bg-secondary: #0A0A0A;
-  --color-bg-tertiary: #141414;
-  --color-bg-quaternary: #1C1C1C;
-  --color-bg-elevated: #242424;
-  --color-bg-hover: #2A2A2A;
-  --color-bg-hover-faint: rgba(255, 255, 255, 0.03);
+  /* === BACKGROUND COLORS - RICH DARK THEME === */
+  --color-bg-primary: #0C0C0E;
+  --color-bg-primary-translucent: rgba(12, 12, 14, 0.97);
+  --color-bg-secondary: #121214;
+  --color-bg-tertiary: #1A1A1E;
+  --color-bg-quaternary: #222226;
+  --color-bg-elevated: #2A2A30;
+  --color-bg-hover: #32323A;
+  --color-bg-hover-faint: rgba(255, 255, 255, 0.04);
 
   /* Overlay */
-  --color-overlay: rgba(0, 0, 0, 0.92);
-  --color-overlay-light: rgba(0, 0, 0, 0.75);
+  --color-overlay: rgba(8, 8, 10, 0.94);
+  --color-overlay-light: rgba(8, 8, 10, 0.80);
 
-  /* === TEXT COLORS === */
-  --color-text-primary: #FAFAFA;
-  --color-text-secondary: #A1A1AA;
-  --color-text-tertiary: #71717A;
-  --color-text-quaternary: #52525B;
-  --color-text-tertiary-dim: rgba(161, 161, 170, 0.1);
+  /* === TEXT COLORS - IMPROVED CONTRAST === */
+  --color-text-primary: #F4F4F5;
+  --color-text-secondary: #A8A8B3;
+  --color-text-tertiary: #85858F;
+  --color-text-quaternary: #5C5C66;
+  --color-text-tertiary-dim: rgba(161, 161, 170, 0.12);
 
-  /* === BORDERS & SEPARATORS === */
-  --color-separator: #1E1E1E;
-  --color-separator-opaque: #2A2A2A;
-  --color-border: rgba(255, 255, 255, 0.1);
-  --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-glow: rgba(14, 165, 233, 0.2);
-  --color-border-separator: rgba(255, 255, 255, 0.06);
+  /* === BORDERS & SEPARATORS - MORE VISIBLE === */
+  --color-separator: #2A2A30;
+  --color-separator-opaque: #363640;
+  --color-border: rgba(255, 255, 255, 0.15);
+  --color-border-subtle: rgba(255, 255, 255, 0.10);
+  --color-border-glow: rgba(14, 165, 233, 0.25);
+  --color-border-separator: rgba(255, 255, 255, 0.08);
 
   /* === SHADOWS === */
   --color-shadow: rgba(0, 0, 0, 0.5);
