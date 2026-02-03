@@ -85,9 +85,8 @@ export function OperationProgressPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Determine operation type from location state
-  const getOperationInfo = (): OperationInfo | null => {
-    const state = location.state as any;
+  // Determine operation type from location state - capture once on mount
+  const getOperationInfoFromState = (state: any): OperationInfo | null => {
     if (!state) return null;
 
     if (state.restart) {
@@ -114,7 +113,9 @@ export function OperationProgressPage() {
     return null;
   };
 
-  const operationInfo = getOperationInfo();
+  // Store operation info in ref so it persists even after clearing location state
+  const operationInfoRef = useRef<OperationInfo | null>(getOperationInfoFromState(location.state));
+  const operationInfo = operationInfoRef.current;
   const operationType: OperationType | null = operationInfo?.type || null;
 
   // Common state
@@ -567,6 +568,10 @@ export function OperationProgressPage() {
     processedEventsRef.current.clear();
     maxPercentRef.current.clear();
     lastLoggedStageRef.current.clear();
+
+    // Clear location state to prevent re-triggering on page refresh
+    // Replace current history entry with empty state
+    navigate(location.pathname, { replace: true, state: null });
 
     switch (operationInfo.type) {
       case 'restart':
