@@ -8,6 +8,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/chrisae9/docksmith/actions/workflows/build.yml"><img src="https://github.com/chrisae9/docksmith/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/chrisae9/docksmith/releases"><img src="https://img.shields.io/github/v/release/chrisae9/docksmith" alt="Release"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/chrisae9/docksmith" alt="Go Version"></a>
   <a href="https://github.com/chrisae9/docksmith/blob/main/LICENSE"><img src="https://img.shields.io/github/license/chrisae9/docksmith" alt="License"></a>
   <a href="https://github.com/chrisae9/docksmith/pkgs/container/docksmith"><img src="https://img.shields.io/badge/ghcr.io-docksmith-blue" alt="GHCR"></a>
 </p>
