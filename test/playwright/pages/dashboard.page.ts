@@ -19,8 +19,8 @@ export class DashboardPage {
     this.updateButton = page.locator('.selection-bar .update-btn');
     // Filter buttons inside segmented control
     this.filterButtons = page.locator('.segmented-control button');
-    // Container list items - use getByRole for accessibility tree matching
-    this.containerList = page.getByRole('listitem');
+    // Container list items - buttons inside list elements
+    this.containerList = page.getByRole('list').getByRole('button');
     // Loading states
     this.loadingState = page.locator('.main-loading');
     this.skeletonLoader = page.locator('.skeleton-dashboard');
@@ -39,8 +39,8 @@ export class DashboardPage {
   }
 
   async getContainerByName(name: string): Promise<Locator> {
-    // Find listitem containing the container name
-    return this.page.getByRole('listitem').filter({ hasText: name });
+    // Find button inside list containing the container name
+    return this.page.getByRole('list').getByRole('button').filter({ hasText: name });
   }
 
   async clickContainer(name: string) {

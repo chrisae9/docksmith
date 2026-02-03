@@ -3,15 +3,16 @@ import { test as base, expect, type Page, type APIRequestContext } from '@playwr
 // API base URL (same as what we're testing against)
 export const API_BASE = process.env.DOCKSMITH_URL || 'http://localhost:8080';
 
-// Test container names from test/integration/environments/
-// These are created by docker compose in the test environment
-export const TEST_CONTAINERS = {
-  // From basic-compose/docker-compose.yml
+// Test container names - configurable via environment for CI
+// Local dev: defaults to real containers visible to production Docksmith
+// CI: set TEST_ENV=ci to use test containers from test/integration/environments/
+const isCI = process.env.TEST_ENV === 'ci' || process.env.CI === 'true';
+
+export const TEST_CONTAINERS = isCI ? {
+  // CI mode: use containers from test/integration/environments/
   NGINX_BASIC: 'test-nginx-basic',
   REDIS_BASIC: 'test-redis-basic',
   POSTGRES_BASIC: 'test-postgres-basic',
-
-  // From labels/docker-compose.yml (containers with various label configs)
   LABELS_IGNORED: 'test-labels-ignored',
   LABELS_LATEST: 'test-labels-latest',
   LABELS_PRE_PASS: 'test-labels-pre-pass',
@@ -24,6 +25,24 @@ export const TEST_CONTAINERS = {
   LABELS_POSTGRES: 'test-labels-postgres',
   LABELS_REDIS: 'test-labels-redis',
   LABELS_NODE: 'test-labels-node',
+} : {
+  // Local dev mode: use real containers visible to Docksmith
+  // These should be containers that exist and are safe for testing
+  NGINX_BASIC: process.env.TEST_CONTAINER_NGINX || 'ntfy',
+  REDIS_BASIC: process.env.TEST_CONTAINER_REDIS || 'bazarr',
+  POSTGRES_BASIC: process.env.TEST_CONTAINER_POSTGRES || 'calibre',
+  LABELS_IGNORED: process.env.TEST_CONTAINER_IGNORED || 'factorio',
+  LABELS_LATEST: process.env.TEST_CONTAINER_LATEST || 'mosquitto',
+  LABELS_PRE_PASS: process.env.TEST_CONTAINER_PRE_PASS || 'plex',
+  LABELS_PRE_FAIL: process.env.TEST_CONTAINER_PRE_FAIL || 'prowlarr',
+  LABELS_RESTART_DEPS: process.env.TEST_CONTAINER_RESTART_DEPS || 'gluetun',
+  LABELS_DEPENDENT_1: process.env.TEST_CONTAINER_DEP1 || 'sonarr',
+  LABELS_DEPENDENT_2: process.env.TEST_CONTAINER_DEP2 || 'torrent',
+  LABELS_NGINX: process.env.TEST_CONTAINER_NGINX2 || 'plex',
+  LABELS_ALPINE: process.env.TEST_CONTAINER_ALPINE || 'tautulli',
+  LABELS_POSTGRES: process.env.TEST_CONTAINER_POSTGRES2 || 'calibre',
+  LABELS_REDIS: process.env.TEST_CONTAINER_REDIS2 || 'kavita',
+  LABELS_NODE: process.env.TEST_CONTAINER_NODE || 'whoami',
 };
 
 // Extend Playwright test with custom fixtures
