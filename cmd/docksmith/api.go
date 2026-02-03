@@ -212,48 +212,54 @@ func (c *APICommand) Run(ctx context.Context) error {
 	return nil
 }
 
-// resumePendingSelfUpdates checks for and completes any pending self-update operations.
-// This is called on startup to finalize self-updates that triggered a restart.
+// resumePendingSelfOperations checks for and completes any pending self-update/restart operations.
+// This is called on startup to finalize operations that required docksmith to restart itself.
 func resumePendingSelfUpdates(ctx context.Context, store storage.Storage) {
-	log.Println("Checking for pending self-update operations...")
+	log.Println("Checking for pending self-operations...")
 
 	// Find any operations with pending_restart status
 	ops, err := store.GetUpdateOperationsByStatus(ctx, "pending_restart", 0)
 	if err != nil {
-		log.Printf("Warning: Failed to check for pending self-updates: %v", err)
+		log.Printf("Warning: Failed to check for pending self-operations: %v", err)
 		return
 	}
 
 	if len(ops) == 0 {
-		log.Println("No pending self-update operations found")
+		log.Println("No pending self-operations found")
 		return
 	}
 
-	log.Printf("Found %d pending self-update operation(s) to complete", len(ops))
+	log.Printf("Found %d pending self-operation(s) to complete", len(ops))
 
 	for _, op := range ops {
-		// Verify this was a self-update operation
+		// Verify this was a self-operation (docksmith operating on itself)
 		if !selfupdate.IsSelfByImage(op.ContainerName) && !selfupdate.IsSelfByName(op.ContainerName) {
-			// Not a self-update, but has pending_restart status - this shouldn't happen
+			// Not a self-operation, but has pending_restart status - this shouldn't happen
 			// Mark as failed to clean up the stuck state
-			log.Printf("Warning: Operation %s has pending_restart status but is not a self-update (container: %s). Marking as failed.", op.OperationID, op.ContainerName)
-			if err := store.UpdateOperationStatus(ctx, op.OperationID, "failed", "Invalid pending_restart status for non-self-update operation"); err != nil {
+			log.Printf("Warning: Operation %s has pending_restart status but is not a self-operation (container: %s). Marking as failed.", op.OperationID, op.ContainerName)
+			if err := store.UpdateOperationStatus(ctx, op.OperationID, "failed", "Invalid pending_restart status for non-self operation"); err != nil {
 				log.Printf("Warning: Failed to update operation %s status: %v", op.OperationID, err)
 			}
 			continue
 		}
 
-		// Complete the self-update operation
+		// Complete the self-operation
 		now := time.Now()
 		op.Status = "complete"
 		op.CompletedAt = &now
-		op.ErrorMessage = "Self-update completed successfully after restart"
+
+		// Set appropriate completion message based on operation type
+		if op.OperationType == "restart" {
+			op.ErrorMessage = "Self-restart completed successfully"
+		} else {
+			op.ErrorMessage = "Self-update completed successfully after restart"
+		}
 
 		if err := store.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Warning: Failed to complete self-update operation %s: %v", op.OperationID, err)
+			log.Printf("Warning: Failed to complete self-operation %s: %v", op.OperationID, err)
 			continue
 		}
 
-		log.Printf("Completed self-update operation %s: %s -> %s", op.OperationID, op.OldVersion, op.NewVersion)
+		log.Printf("Completed self-%s operation %s", op.OperationType, op.OperationID)
 	}
 }

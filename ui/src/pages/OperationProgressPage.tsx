@@ -144,7 +144,10 @@ export function OperationProgressPage() {
   const lastLoggedStageRef = useRef<Map<string, string>>(new Map());
 
   // SSE for progress
-  const { lastEvent, clearEvents } = useEventStream(status === 'in_progress' || operationId !== null);
+  const { lastEvent, clearEvents, wasDisconnected, clearWasDisconnected } = useEventStream(status === 'in_progress' || operationId !== null);
+
+  // Track if we saw pending_restart stage (self-update/restart in progress)
+  const sawPendingRestartRef = useRef(false);
 
   // Calculate elapsed time
   const isRunning = startTime !== null && status === 'in_progress';
@@ -199,6 +202,89 @@ export function OperationProgressPage() {
            errorMessage.includes('pre_update_check') ||
            errorMessage.includes('Dependent container');
   };
+
+  // Handle reconnection after self-restart: poll operation status to see if it completed
+  useEffect(() => {
+    if (!wasDisconnected || !sawPendingRestartRef.current || !operationId || status !== 'in_progress') {
+      return;
+    }
+
+    // Clear the wasDisconnected flag so we don't keep polling
+    clearWasDisconnected();
+
+    // Poll the operation status
+    const checkOperationStatus = async () => {
+      addLog('Checking operation status after reconnect...', 'info', 'fa-wifi');
+
+      try {
+        const response = await fetch(`/api/operations/${operationId}`);
+        if (!response.ok) {
+          addLog(`API error: ${response.status}`, 'error', 'fa-circle-xmark');
+          return;
+        }
+
+        const data = await response.json();
+
+        if (!data.success) {
+          addLog(`API returned error: ${data.error || 'unknown'}`, 'error', 'fa-circle-xmark');
+          return;
+        }
+
+        if (!data.data) {
+          addLog('No operation data returned', 'error', 'fa-circle-xmark');
+          return;
+        }
+
+        const op = data.data;
+        addLog(`Operation status: ${op.status}`, 'info', 'fa-info-circle');
+
+        if (op.status === 'complete') {
+          // Operation completed! Update UI
+          const containerName = operationType === 'restart' && operationInfo?.type === 'restart'
+            ? operationInfo.containerName
+            : op.container_name;
+
+          if (containerName) {
+            setContainers(prev => prev.map(c =>
+              c.name === containerName
+                ? { ...c, status: 'success', percent: 100, message: op.error_message || 'Completed successfully' }
+                : c
+            ));
+          }
+
+          setStatus('success');
+          addLog(op.error_message || 'Operation completed successfully', 'success', 'fa-circle-check');
+          sawPendingRestartRef.current = false;
+        } else if (op.status === 'failed') {
+          const containerName = operationType === 'restart' && operationInfo?.type === 'restart'
+            ? operationInfo.containerName
+            : op.container_name;
+
+          if (containerName) {
+            setContainers(prev => prev.map(c =>
+              c.name === containerName
+                ? { ...c, status: 'failed', message: op.error_message || 'Operation failed' }
+                : c
+            ));
+          }
+
+          setStatus('failed');
+          addLog(op.error_message || 'Operation failed', 'error', 'fa-circle-xmark');
+          sawPendingRestartRef.current = false;
+        } else {
+          // Still in progress - wait for SSE events
+          addLog(`Waiting for completion (current: ${op.status})...`, 'info', 'fa-spinner');
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        addLog(`Failed to check status: ${errMsg}`, 'error', 'fa-circle-xmark');
+      }
+    };
+
+    // Small delay to ensure backend is fully ready
+    const timeout = setTimeout(checkOperationStatus, 1500);
+    return () => clearTimeout(timeout);
+  }, [wasDisconnected, operationId, status, operationType, operationInfo, clearWasDisconnected]);
 
   // Handle SSE progress events
   useEffect(() => {
@@ -271,6 +357,9 @@ export function OperationProgressPage() {
 
     // Handle pending_restart stage (self-update)
     if (event.stage === 'pending_restart') {
+      // Track that we saw pending_restart - used to poll after reconnection
+      sawPendingRestartRef.current = true;
+
       // Docksmith is about to restart - show special UI
       if (targetContainer) {
         updateContainer(targetContainer, {
@@ -281,7 +370,70 @@ export function OperationProgressPage() {
         });
       }
       addLog('Docksmith is restarting to apply the update...', 'info', 'fa-rotate');
-      addLog('This page will reconnect automatically when docksmith restarts.', 'info', 'fa-wifi');
+      addLog('Will check for completion automatically...', 'info', 'fa-wifi');
+
+      // Start polling immediately - don't rely on SSE reconnection
+      const pollForCompletion = async () => {
+        const opId = operationId || event.operation_id;
+        if (!opId) return;
+
+        let attempts = 0;
+        const maxAttempts = 60; // 2 minutes max
+        const pollInterval = 2000; // 2 seconds
+
+        while (attempts < maxAttempts) {
+          attempts++;
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+          try {
+            const response = await fetch(`/api/operations/${opId}`);
+            if (!response.ok) continue;
+
+            const data = await response.json();
+            if (!data.success || !data.data) continue;
+
+            const op = data.data;
+
+            if (op.status === 'complete') {
+              // Operation completed!
+              const cName = targetContainer || op.container_name;
+              if (cName) {
+                setContainers(prev => prev.map(c =>
+                  c.name === cName
+                    ? { ...c, status: 'success', percent: 100, message: op.error_message || 'Completed successfully' }
+                    : c
+                ));
+              }
+              setStatus('success');
+              addLog(op.error_message || 'Self-restart completed successfully', 'success', 'fa-circle-check');
+              sawPendingRestartRef.current = false;
+              return;
+            } else if (op.status === 'failed') {
+              const cName = targetContainer || op.container_name;
+              if (cName) {
+                setContainers(prev => prev.map(c =>
+                  c.name === cName
+                    ? { ...c, status: 'failed', message: op.error_message || 'Failed' }
+                    : c
+                ));
+              }
+              setStatus('failed');
+              addLog(op.error_message || 'Self-restart failed', 'error', 'fa-circle-xmark');
+              sawPendingRestartRef.current = false;
+              return;
+            }
+            // Still pending_restart or in_progress, keep polling
+          } catch {
+            // Network error - server probably still restarting, keep polling
+          }
+        }
+
+        // Timeout
+        addLog('Timed out waiting for restart completion', 'error', 'fa-clock');
+        setStatus('failed');
+      };
+
+      pollForCompletion();
       return;
     }
 

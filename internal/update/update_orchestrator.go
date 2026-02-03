@@ -670,6 +670,84 @@ func (o *UpdateOrchestrator) executeSelfUpdate(ctx context.Context, operationID 
 	log.Printf("SELF-UPDATE: Restart initiated, operation=%s will be completed on next startup", operationID)
 }
 
+// executeSelfRestart handles the special case of docksmith restarting itself.
+// Since restarting kills the docksmith process, we mark the operation as pending_restart
+// and complete it on the next startup.
+func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID string, container *docker.Container, stackName string) {
+	log.Printf("SELF-RESTART: Starting self-restart for operation=%s container=%s", operationID, container.Name)
+
+	o.publishProgress(operationID, container.Name, stackName, "stopping", 20, "Preparing to restart docksmith...")
+
+	// Get compose file path (needed for restart command)
+	composeFilePath := o.getComposeFilePath(container)
+	if composeFilePath == "" {
+		o.failOperation(ctx, operationID, "stopping", "Cannot self-restart: no compose file found for docksmith")
+		return
+	}
+
+	resolvedPath, err := o.resolveComposeFile(composeFilePath)
+	if err != nil {
+		o.failOperation(ctx, operationID, "stopping", fmt.Sprintf("Failed to resolve compose file: %v", err))
+		return
+	}
+
+	// Mark operation as pending_restart
+	log.Printf("SELF-RESTART: Marking operation as pending_restart")
+	o.publishProgress(operationID, container.Name, stackName, "pending_restart", 50, "Docksmith is restarting...")
+
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.Status = "pending_restart"
+		op.ErrorMessage = "Self-restart initiated. Docksmith is restarting..."
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("SELF-RESTART: Warning - failed to save pending_restart status: %v", err)
+		}
+	}
+
+	// Publish SSE event to notify UI that docksmith is restarting
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventUpdateProgress,
+			Payload: map[string]interface{}{
+				"operation_id":   operationID,
+				"container_name": container.Name,
+				"stage":          "pending_restart",
+				"percent":        90,
+				"message":        "Docksmith is restarting. This page will reconnect automatically.",
+			},
+		})
+	}
+
+	// Trigger restart using docker compose
+	// This is done in a goroutine with a small delay to allow the SSE event to be sent
+	log.Printf("SELF-RESTART: Triggering docker compose restart")
+	go func() {
+		// Give the SSE event time to be sent
+		time.Sleep(1 * time.Second)
+
+		// Get the host path for compose file (needed for docker compose command)
+		hostComposePath := o.getComposeFilePathForHost(container)
+		if hostComposePath == "" {
+			hostComposePath = resolvedPath
+		}
+
+		// Run docker compose restart to restart the container
+		// This will kill our process, which is expected
+		cmd := exec.Command("docker", "compose", "-f", hostComposePath, "restart", container.Name)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		log.Printf("SELF-RESTART: Executing: docker compose -f %s restart %s", hostComposePath, container.Name)
+		if err := cmd.Run(); err != nil {
+			// We likely won't reach here because the container will restart
+			log.Printf("SELF-RESTART: docker compose command returned: %v (this may be expected if container restarted)", err)
+		}
+	}()
+
+	// Note: We don't mark as complete here - that happens on next startup via resumePendingSelfUpdates()
+	log.Printf("SELF-RESTART: Restart initiated, operation=%s will be completed on next startup", operationID)
+}
+
 // executeBatchUpdate executes batch update workflow.
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string) {
 	defer o.releaseStackLock(stackName)
@@ -2303,6 +2381,13 @@ func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID str
 		o.storage.SaveUpdateOperation(ctx, op)
 	}
 
+	// Check if this is a self-restart (docksmith restarting itself)
+	if selfupdate.IsSelfContainer(container.ID, container.Image, container.Name) {
+		log.Printf("SELF-RESTART: Detected self-restart for docksmith container %s", container.Name)
+		o.executeSelfRestart(ctx, operationID, container, stackName)
+		return
+	}
+
 	// Stage 3: Stopping container (20-40%)
 	o.publishProgress(operationID, container.Name, stackName, "stopping", 20, "Stopping container")
 
@@ -2315,9 +2400,9 @@ func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID str
 		hostComposeFilePath := o.getComposeFilePathForHost(container)
 		recreator := compose.NewRecreator(o.dockerClient)
 
-		// Use RecreateWithCompose which does a force-recreate
-		if err := recreator.RecreateWithCompose(ctx, container, hostComposeFilePath, composeFilePath); err != nil {
-			// Fall back to simple restart
+		// Use RestartWithCompose for simple restart (no config changes)
+		if err := recreator.RestartWithCompose(ctx, container, hostComposeFilePath, composeFilePath); err != nil {
+			// Fall back to Docker API
 			log.Printf("RESTART: Compose restart failed, falling back to Docker API: %v", err)
 			if restartErr := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerContainer.StopOptions{}); restartErr != nil {
 				o.failOperation(ctx, operationID, "starting", fmt.Sprintf("Failed to restart container: %v", restartErr))

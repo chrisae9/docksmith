@@ -90,7 +90,57 @@ test_resume_pending_selfupdate() {
     sqlite3 "$DB_PATH" "DELETE FROM update_operations WHERE operation_id='$test_op_id';"
 }
 
-# Test 2: Non-docksmith pending_restart should be marked as failed
+# Test 2: Resume pending self-restart operation (restart, not update)
+test_resume_pending_selfrestart() {
+    print_header "Test: Resume pending self-restart on startup"
+
+    local test_op_id="test-selfrestart-$(date +%s)"
+
+    # Insert a pending_restart operation for docksmith with operation_type='restart'
+    print_info "Inserting pending_restart RESTART operation: $test_op_id"
+    sqlite3 "$DB_PATH" "INSERT INTO update_operations (
+        operation_id, container_id, container_name, stack_name,
+        operation_type, status, started_at
+    ) VALUES (
+        '$test_op_id', 'test789', 'docksmith', 'docksmith',
+        'restart', 'pending_restart', datetime('now')
+    );"
+
+    # Restart docksmith
+    print_info "Restarting docksmith..."
+    docker compose restart docksmith
+    sleep 3
+
+    wait_for_container docksmith 30 || return 1
+
+    # Check if operation was completed with correct message
+    local status_after=$(sqlite3 "$DB_PATH" "SELECT status FROM update_operations WHERE operation_id='$test_op_id';")
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$status_after" = "complete" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Restart operation was resumed and marked complete"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Restart operation was not completed (got: $status_after)"
+    fi
+
+    # Verify the message is self-restart specific
+    local error_msg=$(sqlite3 "$DB_PATH" "SELECT error_message FROM update_operations WHERE operation_id='$test_op_id';")
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if echo "$error_msg" | grep -qi "restart"; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Completion message is restart-specific: $error_msg"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Unexpected completion message: $error_msg"
+    fi
+
+    # Cleanup
+    print_info "Cleaning up test operation..."
+    sqlite3 "$DB_PATH" "DELETE FROM update_operations WHERE operation_id='$test_op_id';"
+}
+
+# Test 3: Non-docksmith pending_restart should be marked as failed
 test_invalid_pending_restart() {
     print_header "Test: Non-self pending_restart marked as failed"
 
@@ -147,6 +197,7 @@ test_self_detection() {
 # Run all tests
 test_self_detection
 test_resume_pending_selfupdate
+test_resume_pending_selfrestart
 test_invalid_pending_restart
 
 # Print summary

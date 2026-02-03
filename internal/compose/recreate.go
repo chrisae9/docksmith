@@ -77,6 +77,115 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	return nil
 }
 
+// RestartWithCompose restarts a container using docker compose restart
+// This is simpler and faster than RecreateWithCompose when no config changes are needed.
+// It stops and starts the same container without creating a new one.
+func (r *Recreator) RestartWithCompose(ctx context.Context, container *docker.Container, hostComposeFilePath, containerComposeFilePath string) error {
+	if hostComposeFilePath == "" || containerComposeFilePath == "" {
+		return fmt.Errorf("no compose file path available for container %s", container.Name)
+	}
+
+	// Get service name from compose labels
+	serviceName, ok := container.Labels["com.docker.compose.service"]
+	if !ok || serviceName == "" {
+		return fmt.Errorf("container %s has no com.docker.compose.service label", container.Name)
+	}
+
+	hostComposeDir := filepath.Dir(hostComposeFilePath)
+	log.Printf("COMPOSE: Restarting service %s using compose file (host: %s, container: %s)",
+		serviceName, hostComposeFilePath, containerComposeFilePath)
+
+	// Build the docker compose restart command
+	args := []string{
+		"compose",
+		"--project-directory", hostComposeDir,
+		"-f", containerComposeFilePath,
+		"restart",
+		serviceName,
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	log.Printf("COMPOSE: Executing: docker %s", strings.Join(args, " "))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose restart failed: %w\nOutput: %s", err, output)
+	}
+
+	log.Printf("COMPOSE: Output: %s", output)
+	log.Printf("COMPOSE: Successfully restarted service %s", serviceName)
+
+	return nil
+}
+
+// StopWithCompose stops a container using docker compose stop
+func (r *Recreator) StopWithCompose(ctx context.Context, container *docker.Container, hostComposeFilePath, containerComposeFilePath string) error {
+	if hostComposeFilePath == "" || containerComposeFilePath == "" {
+		return fmt.Errorf("no compose file path available for container %s", container.Name)
+	}
+
+	serviceName, ok := container.Labels["com.docker.compose.service"]
+	if !ok || serviceName == "" {
+		return fmt.Errorf("container %s has no com.docker.compose.service label", container.Name)
+	}
+
+	hostComposeDir := filepath.Dir(hostComposeFilePath)
+	log.Printf("COMPOSE: Stopping service %s", serviceName)
+
+	args := []string{
+		"compose",
+		"--project-directory", hostComposeDir,
+		"-f", containerComposeFilePath,
+		"stop",
+		serviceName,
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	log.Printf("COMPOSE: Executing: docker %s", strings.Join(args, " "))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose stop failed: %w\nOutput: %s", err, output)
+	}
+
+	log.Printf("COMPOSE: Successfully stopped service %s", serviceName)
+	return nil
+}
+
+// StartWithCompose starts a container using docker compose start
+func (r *Recreator) StartWithCompose(ctx context.Context, container *docker.Container, hostComposeFilePath, containerComposeFilePath string) error {
+	if hostComposeFilePath == "" || containerComposeFilePath == "" {
+		return fmt.Errorf("no compose file path available for container %s", container.Name)
+	}
+
+	serviceName, ok := container.Labels["com.docker.compose.service"]
+	if !ok || serviceName == "" {
+		return fmt.Errorf("container %s has no com.docker.compose.service label", container.Name)
+	}
+
+	hostComposeDir := filepath.Dir(hostComposeFilePath)
+	log.Printf("COMPOSE: Starting service %s", serviceName)
+
+	args := []string{
+		"compose",
+		"--project-directory", hostComposeDir,
+		"-f", containerComposeFilePath,
+		"start",
+		serviceName,
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	log.Printf("COMPOSE: Executing: docker %s", strings.Join(args, " "))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose start failed: %w\nOutput: %s", err, output)
+	}
+
+	log.Printf("COMPOSE: Successfully started service %s", serviceName)
+	return nil
+}
+
 // RecreateMultipleServices recreates multiple services from the same stack
 // Used when updating multiple containers or when dependencies need to be restarted
 // hostComposeFilePath: Path on the HOST for --project-directory (resolves relative volume mounts)
