@@ -37,21 +37,18 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           fi
 
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ghcr.io/chrisae9/docksmith
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
+      - name: Generate tags
+        id: tags
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          echo "tags=ghcr.io/chrisae9/docksmith:${VERSION},ghcr.io/chrisae9/docksmith:latest" >> $GITHUB_OUTPUT
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
