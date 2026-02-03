@@ -77,19 +77,11 @@ A few specific problems I kept running into:
 
 - **Wanted VS Code Docker on mobile** - I love the VS Code Docker extension for managing containers, but wanted that same control from my phone. The Explorer tab is basically that.
 
-<p align="center">
-  <img src="press-kit/docksmith_explorer_ipad.png" alt="Explorer on iPad" width="600">
-</p>
-
 ---
 
 ## What It Does
 
 **Updates** - Checks Docker Hub, GHCR, and [private registries](docs/registries.md) for newer image versions. Update containers individually or in batches. Rollback if something breaks.
-
-<p align="center">
-  <img src="press-kit/docksmith_update_button.png" alt="Batch Update Selection" width="800">
-</p>
 
 **Version Control** - [Pin to major/minor versions](docs/labels.md#version-constraint-labels), filter tags with regex, or set version bounds. Useful for databases and other apps where you don't want surprise major upgrades.
 
@@ -97,31 +89,13 @@ A few specific problems I kept running into:
 
 **Explorer** - Browse and manage containers, images, networks, and volumes. Stop, start, restart, remove containers. Prune unused resources.
 
-<p align="center">
-  <img src="press-kit/docksmith_explorer.png" alt="Explorer View" width="800">
-</p>
-
-**Container Details** - View container info, logs, environment variables, and labels. Quick actions for stop, restart, and remove.
-
-<p align="center">
-  <img src="press-kit/docksmith_container_view.png" alt="Container Detail View" width="800">
-</p>
-
 **Dependency Handling** - Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
 **History** - Track all updates, rollbacks, and operations. See what changed and when.
 
-<p align="center">
-  <img src="press-kit/docksmith_history.png" alt="History View" width="800">
-</p>
-
 ---
 
 ## Configuration
-
-<p align="center">
-  <img src="press-kit/docksmith_settings.png" alt="Settings View" width="800">
-</p>
 
 | Variable | Default | Description |
 |----------|---------|-------------|
