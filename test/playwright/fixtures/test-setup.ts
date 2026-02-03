@@ -3,29 +3,27 @@ import { test as base, expect, type Page, type APIRequestContext } from '@playwr
 // API base URL (same as what we're testing against)
 export const API_BASE = process.env.DOCKSMITH_URL || 'http://localhost:8080';
 
-// Test container names - these are real containers from the production environment
-// Use containers that exist and are safe for testing
+// Test container names from test/integration/environments/
+// These are created by docker compose in the test environment
 export const TEST_CONTAINERS = {
-  // Primary test containers
-  NGINX_BASIC: 'frigate',      // Used as primary container for navigation tests (UP_TO_DATE)
-  REDIS_BASIC: 'bazarr',       // Used as secondary container for dependency tests (UP_TO_DATE)
+  // From basic-compose/docker-compose.yml
+  NGINX_BASIC: 'test-nginx-basic',
+  REDIS_BASIC: 'test-redis-basic',
+  POSTGRES_BASIC: 'test-postgres-basic',
 
-  // Container with UPDATE_AVAILABLE for update tests
-  UPDATE_AVAILABLE: 'recyclarr', // Has UPDATE_AVAILABLE status
-
-  // Containers with specific statuses for testing
-  LABELS_IGNORED: 'factorio',       // IGNORED status
-  LABELS_LATEST: 'mosquitto',       // UP_TO_DATE
-  LABELS_PRE_PASS: 'plex',          // Has pre-update script (pass)
-  LABELS_PRE_FAIL: 'prowlarr',
-  LABELS_RESTART_DEPS: 'gluetun',   // Has restart dependencies (torrent depends on it)
-  LABELS_DEPENDENT_1: 'sonarr',
-  LABELS_DEPENDENT_2: 'torrent',
-  LABELS_NGINX: 'plex',
-  LABELS_ALPINE: 'tautulli',
-  LABELS_POSTGRES: 'calibre',
-  LABELS_REDIS: 'kavita',
-  LABELS_NODE: 'whoami',
+  // From labels/docker-compose.yml (containers with various label configs)
+  LABELS_IGNORED: 'test-labels-ignored',
+  LABELS_LATEST: 'test-labels-latest',
+  LABELS_PRE_PASS: 'test-labels-pre-pass',
+  LABELS_PRE_FAIL: 'test-labels-pre-fail',
+  LABELS_RESTART_DEPS: 'test-labels-restart-deps',
+  LABELS_DEPENDENT_1: 'test-labels-dependent-1',
+  LABELS_DEPENDENT_2: 'test-labels-dependent-2',
+  LABELS_NGINX: 'test-labels-nginx',
+  LABELS_ALPINE: 'test-labels-alpine',
+  LABELS_POSTGRES: 'test-labels-postgres',
+  LABELS_REDIS: 'test-labels-redis',
+  LABELS_NODE: 'test-labels-node',
 };
 
 // Extend Playwright test with custom fixtures
