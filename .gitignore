@@ -21,6 +21,7 @@ data/
 *.png
 *.jpg
 *.jpeg
+!press-kit/*.png
 
 # IDE and editor files
 .claude/
@@ -41,4 +42,3 @@ test/playwright/node_modules/
 # OS files
 .DS_Store
 Thumbs.db
-\!docs/screenshot.png
