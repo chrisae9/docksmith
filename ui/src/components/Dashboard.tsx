@@ -270,6 +270,29 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     setSelectedContainers(new Set());
   };
 
+  const toggleStackSelection = (containers: ContainerInfo[]) => {
+    const updatableInStack = containers
+      .filter(c => isUpdatable(c.status))
+      .map(c => c.container_name);
+
+    if (updatableInStack.length === 0) return;
+
+    // Check if all updatable containers in this stack are already selected
+    const allSelected = updatableInStack.every(name => selectedContainers.has(name));
+
+    setSelectedContainers(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        // Deselect all in this stack
+        updatableInStack.forEach(name => next.delete(name));
+      } else {
+        // Select all updatable in this stack
+        updatableInStack.forEach(name => next.add(name));
+      }
+      return next;
+    });
+  };
+
   const filterContainer = (container: ContainerInfo) => {
     // Apply search filter first
     if (searchQuery) {
@@ -573,12 +596,26 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 const filteredContainers = stack.containers.filter(filterContainer);
                 if (filteredContainers.length === 0) return null;
 
+                const updatableInStack = filteredContainers.filter(c => isUpdatable(c.status));
+                const allStackSelected = updatableInStack.length > 0 &&
+                  updatableInStack.every(c => selectedContainers.has(c.container_name));
+
                 return (
                   <StackGroup
                     key={stack.name}
                     name={stack.name}
                     isCollapsed={collapsedStacks.has(stack.name)}
                     onToggle={() => toggleStack(stack.name)}
+                    actions={updatableInStack.length > 0 && (
+                      <button
+                        className="stack-select-btn"
+                        onClick={() => toggleStackSelection(filteredContainers)}
+                        title={allStackSelected ? 'Deselect all in stack' : 'Select all in stack'}
+                        aria-label={allStackSelected ? 'Deselect all in stack' : 'Select all in stack'}
+                      >
+                        <i className={`fa-solid ${allStackSelected ? 'fa-square-minus' : 'fa-square-check'}`} aria-hidden="true"></i>
+                      </button>
+                    )}
                   >
                     {filteredContainers.map((container) => (
                       <ContainerRow
@@ -594,25 +631,44 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 );
               })}
 
-              {result.standalone_containers.filter(filterContainer).length > 0 && (
-                <StackGroup
-                  name="Standalone"
-                  isCollapsed={collapsedStacks.has('__standalone__')}
-                  onToggle={() => toggleStack('__standalone__')}
-                  isStandalone
-                >
-                  {result.standalone_containers.filter(filterContainer).map((container) => (
-                    <ContainerRow
-                      key={container.container_name}
-                      container={container}
-                      selected={selectedContainers.has(container.container_name)}
-                      onToggle={() => toggleContainer(container.container_name)}
-                      onContainerClick={() => navigate(`/container/${container.container_name}`)}
-                      allContainers={result.containers}
-                    />
-                  ))}
-                </StackGroup>
-              )}
+              {(() => {
+                const standaloneFiltered = result.standalone_containers.filter(filterContainer);
+                if (standaloneFiltered.length === 0) return null;
+
+                const updatableStandalone = standaloneFiltered.filter(c => isUpdatable(c.status));
+                const allStandaloneSelected = updatableStandalone.length > 0 &&
+                  updatableStandalone.every(c => selectedContainers.has(c.container_name));
+
+                return (
+                  <StackGroup
+                    name="Standalone"
+                    isCollapsed={collapsedStacks.has('__standalone__')}
+                    onToggle={() => toggleStack('__standalone__')}
+                    isStandalone
+                    actions={updatableStandalone.length > 0 && (
+                      <button
+                        className="stack-select-btn"
+                        onClick={() => toggleStackSelection(standaloneFiltered)}
+                        title={allStandaloneSelected ? 'Deselect all standalone' : 'Select all standalone'}
+                        aria-label={allStandaloneSelected ? 'Deselect all standalone' : 'Select all standalone'}
+                      >
+                        <i className={`fa-solid ${allStandaloneSelected ? 'fa-square-minus' : 'fa-square-check'}`} aria-hidden="true"></i>
+                      </button>
+                    )}
+                  >
+                    {standaloneFiltered.map((container) => (
+                      <ContainerRow
+                        key={container.container_name}
+                        container={container}
+                        selected={selectedContainers.has(container.container_name)}
+                        onToggle={() => toggleContainer(container.container_name)}
+                        onContainerClick={() => navigate(`/container/${container.container_name}`)}
+                        allContainers={result.containers}
+                      />
+                    ))}
+                  </StackGroup>
+                );
+              })()}
             </div>
           ) : (
             <div className="stack-group">

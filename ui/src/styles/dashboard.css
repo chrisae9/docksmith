@@ -170,13 +170,14 @@
   box-shadow: var(--shadow-focus);
 }
 
-/* Select All button uses icon-btn class */
+/* Select All button - matches stack select button style */
 .select-all-btn.icon-btn {
-  color: var(--color-accent);
+  color: var(--color-text-secondary);
 }
 
 .select-all-btn.icon-btn:hover {
-  color: var(--color-accent-bright);
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
 }
 
 /* Stats Bar */
@@ -357,6 +358,33 @@
 
 .stack-restart-btn i.fa-spin {
   animation: fa-spin 1s infinite linear;
+}
+
+/* Stack Select All Button */
+.stack-select-btn {
+  width: var(--size-button-sm);
+  height: var(--size-button-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stack-select-btn:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.stack-select-btn:active {
+  transform: scale(0.95);
 }
 
 /* Container List - Unified with Explorer styling */
