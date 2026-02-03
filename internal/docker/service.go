@@ -4,9 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 )
 
@@ -59,7 +65,7 @@ func (s *Service) ListContainers(ctx context.Context) ([]Container, error) {
 // Images pulled from a registry will have RepoDigests populated with the registry digest.
 // Locally built images will have empty RepoDigests.
 func (s *Service) IsLocalImage(ctx context.Context, imageName string) (bool, error) {
-	imageInfo, _, err := s.cli.ImageInspectWithRaw(ctx, imageName)
+	imageInfo, err := s.cli.ImageInspect(ctx, imageName)
 	if err != nil {
 		return false, fmt.Errorf("failed to inspect image %s: %w", imageName, err)
 	}
@@ -71,7 +77,7 @@ func (s *Service) IsLocalImage(ctx context.Context, imageName string) (bool, err
 // GetImageVersion extracts the version from image labels.
 // It checks common version labels used by container images.
 func (s *Service) GetImageVersion(ctx context.Context, imageName string) (string, error) {
-	imageInfo, _, err := s.cli.ImageInspectWithRaw(ctx, imageName)
+	imageInfo, err := s.cli.ImageInspect(ctx, imageName)
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect image %s: %w", imageName, err)
 	}
@@ -109,7 +115,7 @@ func (s *Service) GetImageVersion(ctx context.Context, imageName string) (string
 // GetImageDigest gets the SHA256 digest for an image.
 // Returns the digest from RepoDigests if available (format: registry/repo@sha256:...)
 func (s *Service) GetImageDigest(ctx context.Context, imageName string) (string, error) {
-	imageInfo, _, err := s.cli.ImageInspectWithRaw(ctx, imageName)
+	imageInfo, err := s.cli.ImageInspect(ctx, imageName)
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect image %s: %w", imageName, err)
 	}
@@ -137,7 +143,7 @@ func (s *Service) Close() error {
 }
 
 // convertContainer transforms the Docker SDK container type into our domain model.
-func (s *Service) convertContainer(c types.Container) Container {
+func (s *Service) convertContainer(c container.Summary) Container {
 	// Container names start with '/', so we trim it
 	name := ""
 	if len(c.Names) > 0 {
@@ -155,6 +161,12 @@ func (s *Service) convertContainer(c types.Container) Container {
 		healthStatus = "starting"
 	}
 
+	// Extract stack name from compose labels
+	stack := ""
+	if project, ok := c.Labels["com.docker.compose.project"]; ok && project != "" {
+		stack = project
+	}
+
 	return Container{
 		ID:           c.ID,
 		Name:         name,
@@ -163,6 +175,7 @@ func (s *Service) convertContainer(c types.Container) Container {
 		HealthStatus: healthStatus,
 		Labels:       c.Labels,
 		Created:      c.Created,
+		Stack:        stack,
 	}
 }
 
@@ -215,19 +228,438 @@ func CreateContainerMap(containers []Container) map[string]*Container {
 	return containerMap
 }
 
-// GetContainerByName finds a container by name.
+// GetContainerByName finds a container by name using Docker's filter API.
+// This is more efficient than listing all containers and searching.
 // Returns the container if found, or an error if not found.
 func (s *Service) GetContainerByName(ctx context.Context, containerName string) (*Container, error) {
-	containers, err := s.ListContainers(ctx)
+	// Use Docker's filter API for O(1) lookup on the daemon side
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("name", "^/"+containerName+"$") // Exact match with regex anchors
+
+	containers, err := s.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filterArgs,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
+		return nil, fmt.Errorf("failed to find container: %w", err)
 	}
 
-	for i := range containers {
-		if containers[i].Name == containerName {
-			return &containers[i], nil
+	// The name filter can return partial matches, so verify exact match
+	for _, c := range containers {
+		for _, name := range c.Names {
+			if strings.TrimPrefix(name, "/") == containerName {
+				result := s.convertContainer(c)
+				return &result, nil
+			}
 		}
 	}
 
 	return nil, fmt.Errorf("container not found: %s", containerName)
+}
+
+// ListImages returns all Docker images with usage information.
+// This is a convenience wrapper that fetches containers internally.
+func (s *Service) ListImages(ctx context.Context) ([]ImageInfo, error) {
+	containers, err := s.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+	return s.ListImagesWithContainers(ctx, containers)
+}
+
+// ListImagesWithContainers returns all Docker images using pre-fetched containers.
+// This avoids redundant container listing when called from handleExplorer.
+func (s *Service) ListImagesWithContainers(ctx context.Context, containers []container.Summary) ([]ImageInfo, error) {
+	// Get all images
+	images, err := s.cli.ImageList(ctx, image.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list images: %w", err)
+	}
+
+	// Build set of image IDs in use
+	imagesInUse := make(map[string]bool)
+	for _, c := range containers {
+		imagesInUse[c.ImageID] = true
+	}
+
+	result := make([]ImageInfo, 0, len(images))
+	for _, img := range images {
+		// Filter out intermediate images (those with no tags and no repository)
+		tags := img.RepoTags
+		if tags == nil {
+			tags = []string{}
+		}
+
+		// Check if dangling (no tags or only <none>:<none>)
+		dangling := len(tags) == 0 || (len(tags) == 1 && tags[0] == "<none>:<none>")
+		if dangling {
+			tags = []string{} // Clean up the tags list
+		}
+
+		result = append(result, ImageInfo{
+			ID:       img.ID,
+			Tags:     tags,
+			Size:     img.Size,
+			Created:  img.Created,
+			InUse:    imagesInUse[img.ID],
+			Dangling: dangling,
+		})
+	}
+
+	return result, nil
+}
+
+// ListNetworks returns all Docker networks with container associations.
+// Network inspections are parallelized for better performance.
+func (s *Service) ListNetworks(ctx context.Context) ([]NetworkInfo, error) {
+	networks, err := s.cli.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	// Default networks that come with Docker
+	defaultNetworks := map[string]bool{
+		"bridge": true,
+		"host":   true,
+		"none":   true,
+	}
+
+	// Pre-allocate result slice with exact size
+	result := make([]NetworkInfo, len(networks))
+
+	// Use WaitGroup for parallel network inspection
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	var failCount int
+
+	for i, net := range networks {
+		wg.Add(1)
+		go func(idx int, n network.Summary) {
+			defer wg.Done()
+
+			containerNames := make([]string, 0)
+
+			// Inspect network to get container details
+			netInspect, err := s.cli.NetworkInspect(ctx, n.ID, network.InspectOptions{})
+			if err != nil {
+				// Record first error and count failures
+				mu.Lock()
+				failCount++
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			} else {
+				for _, endpoint := range netInspect.Containers {
+					name := strings.TrimPrefix(endpoint.Name, "/")
+					if name != "" {
+						containerNames = append(containerNames, name)
+					}
+				}
+			}
+
+			result[idx] = NetworkInfo{
+				ID:         n.ID,
+				Name:       n.Name,
+				Driver:     n.Driver,
+				Scope:      n.Scope,
+				Containers: containerNames,
+				IsDefault:  defaultNetworks[n.Name],
+				Created:    n.Created.Unix(),
+			}
+		}(i, net)
+	}
+
+	wg.Wait()
+
+	// If all inspections failed, return error; otherwise return partial results
+	if firstErr != nil && failCount == len(networks) {
+		return nil, fmt.Errorf("failed to inspect networks: %w", firstErr)
+	}
+
+	return result, nil
+}
+
+// ListVolumes returns all Docker volumes with container associations.
+// This is a convenience wrapper that fetches containers internally.
+func (s *Service) ListVolumes(ctx context.Context) ([]VolumeInfo, error) {
+	containers, err := s.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+	return s.ListVolumesWithContainers(ctx, containers)
+}
+
+// ListVolumesWithContainers returns all Docker volumes using pre-fetched containers.
+// This avoids redundant container listing when called from handleExplorer.
+func (s *Service) ListVolumesWithContainers(ctx context.Context, containers []container.Summary) ([]VolumeInfo, error) {
+	volumeList, err := s.cli.VolumeList(ctx, volume.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumes: %w", err)
+	}
+
+	// Build map of volume name -> container names using it
+	volumeUsers := make(map[string][]string)
+	for _, c := range containers {
+		containerName := ""
+		if len(c.Names) > 0 {
+			containerName = strings.TrimPrefix(c.Names[0], "/")
+		}
+		for _, mount := range c.Mounts {
+			if mount.Type == "volume" && mount.Name != "" {
+				volumeUsers[mount.Name] = append(volumeUsers[mount.Name], containerName)
+			}
+		}
+	}
+
+	// Get volume sizes via disk usage API (call once, not per volume)
+	volumeSizes := make(map[string]int64)
+	du, err := s.cli.DiskUsage(ctx, types.DiskUsageOptions{
+		Types: []types.DiskUsageObject{types.VolumeObject},
+	})
+	if err == nil && du.Volumes != nil {
+		for _, v := range du.Volumes {
+			volumeSizes[v.Name] = v.UsageData.Size
+		}
+	}
+
+	result := make([]VolumeInfo, 0, len(volumeList.Volumes))
+	for _, vol := range volumeList.Volumes {
+		size, found := volumeSizes[vol.Name]
+		if !found {
+			size = -1 // -1 indicates unknown
+		}
+
+		// Ensure containerList is never nil (always return empty array in JSON)
+		containerList := volumeUsers[vol.Name]
+		if containerList == nil {
+			containerList = []string{}
+		}
+
+		// Parse volume creation time (format: RFC3339)
+		var created int64
+		if vol.CreatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, vol.CreatedAt); err == nil {
+				created = t.Unix()
+			}
+		}
+
+		result = append(result, VolumeInfo{
+			Name:       vol.Name,
+			Driver:     vol.Driver,
+			MountPoint: vol.Mountpoint,
+			Containers: containerList,
+			Size:       size,
+			Created:    created,
+		})
+	}
+
+	return result, nil
+}
+
+// ContainerExplorerItem represents a container for the explorer view
+type ContainerExplorerItem struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Image        string   `json:"image"`
+	State        string   `json:"state"`
+	HealthStatus string   `json:"health_status"`
+	Stack        string   `json:"stack,omitempty"`
+	Created      int64    `json:"created"`
+	Networks     []string `json:"networks"` // Network names this container is connected to
+}
+
+// ListContainersForExplorer returns containers formatted for the explorer view.
+func (s *Service) ListContainersForExplorer(ctx context.Context) ([]ContainerExplorerItem, error) {
+	rawContainers, err := s.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	result := make([]ContainerExplorerItem, 0, len(rawContainers))
+	for _, c := range rawContainers {
+		// Extract container name (trim leading /)
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+
+		// Extract stack name from Docker Compose labels
+		stack := ""
+		if project, ok := c.Labels["com.docker.compose.project"]; ok && project != "" {
+			stack = project
+		}
+
+		// Extract health status from Status field
+		healthStatus := "none"
+		if strings.Contains(c.Status, "(healthy)") {
+			healthStatus = "healthy"
+		} else if strings.Contains(c.Status, "(unhealthy)") {
+			healthStatus = "unhealthy"
+		} else if strings.Contains(c.Status, "(health: starting)") {
+			healthStatus = "starting"
+		}
+
+		// Extract network names
+		networks := make([]string, 0)
+		if c.NetworkSettings != nil && c.NetworkSettings.Networks != nil {
+			for networkName := range c.NetworkSettings.Networks {
+				networks = append(networks, networkName)
+			}
+		}
+
+		result = append(result, ContainerExplorerItem{
+			ID:           c.ID,
+			Name:         name,
+			Image:        c.Image,
+			State:        c.State,
+			HealthStatus: healthStatus,
+			Stack:        stack,
+			Created:      c.Created,
+			Networks:     networks,
+		})
+	}
+
+	return result, nil
+}
+
+// RemoveNetwork removes a Docker network by ID or name.
+func (s *Service) RemoveNetwork(ctx context.Context, networkID string) error {
+	return s.cli.NetworkRemove(ctx, networkID)
+}
+
+// RemoveVolume removes a Docker volume by name.
+func (s *Service) RemoveVolume(ctx context.Context, volumeName string, force bool) error {
+	return s.cli.VolumeRemove(ctx, volumeName, force)
+}
+
+// RemoveImage removes a Docker image by ID.
+func (s *Service) RemoveImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {
+	return s.cli.ImageRemove(ctx, imageID, image.RemoveOptions{
+		Force:         force,
+		PruneChildren: true,
+	})
+}
+
+// PruneReport represents the result of a prune operation.
+type PruneReport struct {
+	ItemsDeleted []string `json:"items_deleted"`
+	SpaceReclaimed int64  `json:"space_reclaimed"`
+}
+
+// PruneContainers removes all stopped containers.
+func (s *Service) PruneContainers(ctx context.Context) (*PruneReport, error) {
+	report, err := s.cli.ContainersPrune(ctx, filters.NewArgs())
+	if err != nil {
+		return nil, fmt.Errorf("failed to prune containers: %w", err)
+	}
+
+	return &PruneReport{
+		ItemsDeleted:   report.ContainersDeleted,
+		SpaceReclaimed: int64(report.SpaceReclaimed),
+	}, nil
+}
+
+// PruneImages removes unused (dangling) images.
+func (s *Service) PruneImages(ctx context.Context, all bool) (*PruneReport, error) {
+	args := filters.NewArgs()
+	if !all {
+		// Only prune dangling images by default
+		args.Add("dangling", "true")
+	}
+
+	report, err := s.cli.ImagesPrune(ctx, args)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prune images: %w", err)
+	}
+
+	deleted := make([]string, 0, len(report.ImagesDeleted))
+	for _, img := range report.ImagesDeleted {
+		if img.Deleted != "" {
+			deleted = append(deleted, img.Deleted)
+		} else if img.Untagged != "" {
+			deleted = append(deleted, img.Untagged)
+		}
+	}
+
+	return &PruneReport{
+		ItemsDeleted:   deleted,
+		SpaceReclaimed: int64(report.SpaceReclaimed),
+	}, nil
+}
+
+// PruneNetworks removes unused networks.
+func (s *Service) PruneNetworks(ctx context.Context) (*PruneReport, error) {
+	report, err := s.cli.NetworksPrune(ctx, filters.NewArgs())
+	if err != nil {
+		return nil, fmt.Errorf("failed to prune networks: %w", err)
+	}
+
+	return &PruneReport{
+		ItemsDeleted:   report.NetworksDeleted,
+		SpaceReclaimed: 0, // Networks don't report space reclaimed
+	}, nil
+}
+
+// PruneVolumes removes unused volumes.
+func (s *Service) PruneVolumes(ctx context.Context) (*PruneReport, error) {
+	report, err := s.cli.VolumesPrune(ctx, filters.NewArgs())
+	if err != nil {
+		return nil, fmt.Errorf("failed to prune volumes: %w", err)
+	}
+
+	return &PruneReport{
+		ItemsDeleted:   report.VolumesDeleted,
+		SpaceReclaimed: int64(report.SpaceReclaimed),
+	}, nil
+}
+
+// SystemPruneReport represents the combined result of a system prune.
+type SystemPruneReport struct {
+	ContainersDeleted []string `json:"containers_deleted"`
+	ImagesDeleted     []string `json:"images_deleted"`
+	NetworksDeleted   []string `json:"networks_deleted"`
+	VolumesDeleted    []string `json:"volumes_deleted"`
+	SpaceReclaimed    int64    `json:"space_reclaimed"`
+}
+
+// SystemPrune removes all unused Docker resources.
+func (s *Service) SystemPrune(ctx context.Context, pruneVolumes bool) (*SystemPruneReport, error) {
+	result := &SystemPruneReport{}
+
+	// Prune containers
+	containerReport, err := s.PruneContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("container prune failed: %w", err)
+	}
+	result.ContainersDeleted = containerReport.ItemsDeleted
+	result.SpaceReclaimed += containerReport.SpaceReclaimed
+
+	// Prune images
+	imageReport, err := s.PruneImages(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("image prune failed: %w", err)
+	}
+	result.ImagesDeleted = imageReport.ItemsDeleted
+	result.SpaceReclaimed += imageReport.SpaceReclaimed
+
+	// Prune networks
+	networkReport, err := s.PruneNetworks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("network prune failed: %w", err)
+	}
+	result.NetworksDeleted = networkReport.ItemsDeleted
+
+	// Optionally prune volumes
+	if pruneVolumes {
+		volumeReport, err := s.PruneVolumes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("volume prune failed: %w", err)
+		}
+		result.VolumesDeleted = volumeReport.ItemsDeleted
+		result.SpaceReclaimed += volumeReport.SpaceReclaimed
+	}
+
+	return result, nil
 }

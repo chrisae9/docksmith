@@ -31,6 +31,7 @@ export function TagFilterPage() {
   const [originalPattern, setOriginalPattern] = useState('');
   const [isValid, setIsValid] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const [copied, setCopied] = useState(false);
 
   // Get current tag regex from location state (passed from detail page)
   const currentTagRegex = (location.state as any)?.currentTagRegex || '';
@@ -116,6 +117,28 @@ export function TagFilterPage() {
     setPattern(presetPattern);
   };
 
+  // Copy tags and context for AI regex generation
+  const handleCopyForAI = async () => {
+    const tagsList = tags.slice(0, 100).join('\n'); // Limit to first 100 tags for clipboard
+    const prompt = `I need a regex pattern to filter Docker image tags for "${imageRef}".
+
+Current tag: ${currentTag}
+${pattern ? `Current regex pattern: ${pattern}` : 'No regex pattern set yet.'}
+
+Available tags (sample):
+${tagsList}${tags.length > 100 ? `\n... and ${tags.length - 100} more tags` : ''}
+
+Please provide a regex pattern that matches the tags I want. The pattern should be compatible with JavaScript's RegExp.`;
+
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   // Get other pending changes from location state (to preserve them)
   const pendingScript = (location.state as any)?.pendingScript;
   const pendingRestartAfter = (location.state as any)?.pendingRestartAfter;
@@ -126,6 +149,7 @@ export function TagFilterPage() {
     // Navigate back to detail page with the new pattern and any other pending changes
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         tagRegex: pattern,
         selectedScript: pendingScript,
         restartAfter: pendingRestartAfter,
@@ -139,6 +163,7 @@ export function TagFilterPage() {
     // Navigate back, preserving other pending changes but not the tag regex change
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         tagRegex: originalPattern, // Restore original
         selectedScript: pendingScript,
         restartAfter: pendingRestartAfter,
@@ -172,7 +197,7 @@ export function TagFilterPage() {
   return (
     <div className="page tag-filter-page">
       <header className="page-header">
-        <button className="back-button" onClick={() => navigate(-1)}>
+        <button className="back-button" onClick={() => navigate(`/container/${containerName}`, { state: { tab: 'config' } })}>
           ← Back
         </button>
         <h1>Tag Filter</h1>
@@ -245,9 +270,21 @@ export function TagFilterPage() {
             <section className="tags-section">
               <div className="section-header">
                 <h2>Available Tags</h2>
-                <span className="match-counter">
-                  {matchCount} of {tags.length} tags match
-                </span>
+                <div className="tags-header-actions">
+                  <span className="match-counter">
+                    {matchCount} of {tags.length} tags match
+                  </span>
+                  {tags.length > 0 && (
+                    <button
+                      className="copy-for-ai-btn"
+                      onClick={handleCopyForAI}
+                      title="Copy tags for AI regex generation"
+                    >
+                      <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
+                      {copied ? 'Copied!' : 'Copy for AI'}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {loading && (

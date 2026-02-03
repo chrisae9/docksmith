@@ -142,7 +142,7 @@ export function ScriptManager({ containers, onClose }: ScriptManagerProps) {
           </div>
         )}
 
-        <div className="modal-tabs">
+        <div className="tabs-underline modal-tabs">
           <button
             className={activeTab === 'assign' ? 'active' : ''}
             onClick={() => setActiveTab('assign')}
@@ -195,7 +195,7 @@ export function ScriptManager({ containers, onClose }: ScriptManagerProps) {
                 </div>
 
                 <button
-                  className="btn-primary"
+                  className="button button-primary button-inline"
                   onClick={handleAssign}
                   disabled={!selectedContainer || !selectedScript || saving}
                 >
@@ -226,7 +226,7 @@ export function ScriptManager({ containers, onClose }: ScriptManagerProps) {
                           </div>
                         </div>
                         <button
-                          className="btn-danger-small"
+                          className="button button-ghost button-danger button-icon button-sm"
                           onClick={() => handleUnassign(assignment.container_name)}
                           disabled={saving}
                         >
@@ -284,7 +284,7 @@ export function ScriptManager({ containers, onClose }: ScriptManagerProps) {
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>Close</button>
+          <button className="button button-secondary button-inline" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>

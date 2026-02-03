@@ -464,14 +464,35 @@
   box-shadow: var(--shadow-focus);
 }
 
+/* Selection zone - larger left-side area to prevent accidental navigation */
+/* Clicking this zone either toggles checkbox (if updatable) or does nothing */
+.selection-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: var(--space-4) var(--space-4);
+  margin: calc(var(--space-4) * -1) 0;
+  margin-left: calc(var(--space-4) * -1);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* Checkbox click area - larger hit target to prevent accidental navigation */
 .checkbox-area {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-3);
-  margin: calc(var(--space-3) * -1);
+  padding: var(--space-5) var(--space-6);
+  margin: calc(var(--space-5) * -1) calc(var(--space-6) * -1);
+  margin-right: var(--space-2);
   cursor: pointer;
+  border-radius: var(--radius-md);
+  transition: background-color var(--transition-fast);
+}
+
+.checkbox-area:hover {
+  background-color: var(--color-bg-hover-faint);
 }
 
 /* Container Info */
@@ -641,13 +662,39 @@
   border-radius: var(--radius-2xl);
   padding: var(--space-6) var(--space-8);
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: var(--space-4);
   z-index: var(--z-dropdown);
   box-shadow: var(--shadow-floating), var(--shadow-glow-amber);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   animation: selection-bar-enter var(--duration-slow) var(--ease-spring);
+}
+
+.selection-bar .selection-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+/* Self-update warning in selection bar */
+.self-update-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.self-update-warning i {
+  font-size: var(--text-base);
+  flex-shrink: 0;
 }
 
 @keyframes selection-bar-enter {

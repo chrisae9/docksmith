@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getOperations } from '../api/client';
 import type { UpdateOperation } from '../types/api';
 import { formatTimeWithDate } from '../utils/time';
+import { SearchBar } from './shared';
+import { SkeletonHistory } from './Skeleton/Skeleton';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface HistoryProps {
   onBack: () => void;
@@ -21,7 +24,7 @@ const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack'];
 
 // Filter options for operation types
 // Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
-type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change';
+type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change' | 'stop' | 'remove';
 
 export function History({ onBack: _onBack }: HistoryProps) {
   const navigate = useNavigate();
@@ -29,10 +32,14 @@ export function History({ onBack: _onBack }: HistoryProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'failed'>('all');
-  const [typeFilter, setTypeFilter] = useState<OperationType>('updates');
+  const [typeFilter, setTypeFilter] = useState<OperationType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
+  const cancelRollback = useCallback(() => setRollbackConfirm(null), []);
+
+  // Focus trap for rollback confirmation dialog
+  const dialogRef = useFocusTrap(!!rollbackConfirm, cancelRollback);
 
   useEffect(() => {
     fetchOperations();
@@ -67,10 +74,6 @@ export function History({ onBack: _onBack }: HistoryProps) {
       oldVersion: op.old_version,
       newVersion: op.new_version,
     });
-  };
-
-  const cancelRollback = () => {
-    setRollbackConfirm(null);
   };
 
   const executeRollback = (force = false) => {
@@ -168,11 +171,29 @@ export function History({ onBack: _onBack }: HistoryProps) {
       <div className="history-page">
         <header>
           <div className="header-top">
+            <h1>History</h1>
+          </div>
+          <SearchBar
+            value=""
+            onChange={() => {}}
+            placeholder="Search operations..."
+            disabled
+            className="search-bar-loading"
+          />
+          <div className="filter-toolbar">
+            <div className="segmented-control">
+              <button disabled className="active">All</button>
+              <button disabled>Success</button>
+              <button disabled>Failed</button>
+            </div>
+            <select disabled className="type-filter-select">
+              <option>All Types</option>
+            </select>
           </div>
         </header>
-        <div className="loading">
-          <div className="spinner"></div>
-        </div>
+        <main className="history-list">
+          <SkeletonHistory count={5} />
+        </main>
       </div>
     );
   }
@@ -198,21 +219,11 @@ export function History({ onBack: _onBack }: HistoryProps) {
         <div className="header-top">
           <h1>History</h1>
         </div>
-        <div className="search-bar">
-          <i className="fa-solid fa-search"></i>
-          <input
-            type="text"
-            placeholder="Search operations..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="search-input"
-          />
-          {searchQuery && (
-            <button className="clear-search" onClick={() => setSearchQuery('')}>
-              <i className="fa-solid fa-times"></i>
-            </button>
-          )}
-        </div>
+        <SearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search operations..."
+        />
         <div className="filter-toolbar">
           <div className="segmented-control">
             <button
@@ -244,6 +255,8 @@ export function History({ onBack: _onBack }: HistoryProps) {
             <option value="updates">Updates</option>
             <option value="rollback">Rollbacks</option>
             <option value="restart">Restarts</option>
+            <option value="stop">Stops</option>
+            <option value="remove">Removals</option>
             <option value="label_change">Labels</option>
           </select>
         </div>
@@ -290,6 +303,12 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   {op.operation_type === 'label_change' && (
                     <span className="op-type-badge labels">LABELS</span>
                   )}
+                  {op.operation_type === 'stop' && (
+                    <span className="op-type-badge stop">STOP</span>
+                  )}
+                  {op.operation_type === 'remove' && (
+                    <span className="op-type-badge remove">REMOVE</span>
+                  )}
                   {op.rollback_occurred && (
                     <span className="op-type-badge rolled-back">ROLLED BACK</span>
                   )}
@@ -301,7 +320,13 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   {op.operation_type === 'label_change' && (
                     <span className="op-label-info">Label configuration changed</span>
                   )}
-                  {op.operation_type !== 'batch' && op.operation_type !== 'label_change' && op.operation_type !== 'restart' && op.new_version && (
+                  {op.operation_type === 'stop' && (
+                    <span className="op-label-info">Container stopped</span>
+                  )}
+                  {op.operation_type === 'remove' && (
+                    <span className="op-label-info">Container removed</span>
+                  )}
+                  {op.operation_type !== 'batch' && op.operation_type !== 'label_change' && op.operation_type !== 'restart' && op.operation_type !== 'stop' && op.operation_type !== 'remove' && op.new_version && (
                     <span className="op-version">
                       {op.old_version && op.old_version !== op.new_version ? (
                         <>{op.old_version} → {op.new_version}</>
@@ -410,9 +435,15 @@ export function History({ onBack: _onBack }: HistoryProps) {
       {/* Rollback Confirmation Dialog */}
       {rollbackConfirm && (
         <div className="confirm-dialog-overlay">
-          <div className="confirm-dialog">
+          <div
+            className="confirm-dialog"
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rollback-dialog-title"
+          >
             <div className="confirm-dialog-header">
-              <h3>Confirm Rollback</h3>
+              <h3 id="rollback-dialog-title">Confirm Rollback</h3>
             </div>
             <div className="confirm-dialog-body">
               <p>Roll back <strong>{rollbackConfirm.containerName}</strong> to its previous version?</p>

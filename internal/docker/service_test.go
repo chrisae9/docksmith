@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 )
 
 func TestConvertContainer(t *testing.T) {
@@ -12,12 +12,12 @@ func TestConvertContainer(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		input    types.Container
+		input    container.Summary
 		expected Container
 	}{
 		{
 			name: "basic container conversion",
-			input: types.Container{
+			input: container.Summary{
 				ID:      "abc123",
 				Names:   []string{"/my-container"},
 				Image:   "nginx:latest",
@@ -36,7 +36,7 @@ func TestConvertContainer(t *testing.T) {
 		},
 		{
 			name: "container with no leading slash",
-			input: types.Container{
+			input: container.Summary{
 				ID:      "def456",
 				Names:   []string{"another-container"},
 				Image:   "postgres:14",

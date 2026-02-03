@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { Dashboard } from './components/Dashboard'
+import { Explorer } from './components/Explorer'
 import { History } from './components/History'
 import { Settings } from './components/Settings'
 import { TagFilterPage } from './pages/TagFilterPage'
-import { ContainerDetailPage } from './pages/ContainerDetailPage'
+import { ContainerPage } from './pages/ContainerPage'
 import { ScriptSelectionPage } from './pages/ScriptSelectionPage'
 import { RestartDependenciesPage } from './pages/RestartDependenciesPage'
 import { OperationProgressPage } from './pages/OperationProgressPage'
@@ -29,7 +30,22 @@ function AppContent() {
   // Determine if we're on a sub-page (hide tab bar)
   const isSubPage = location.pathname.startsWith('/container/') ||
                     location.pathname.startsWith('/tag-filter/') ||
-                    location.pathname.startsWith('/operation');
+                    location.pathname.startsWith('/operation') ||
+                    location.pathname.startsWith('/explorer/container/');
+
+  // Sync activeTab state with URL for tab highlighting
+  useEffect(() => {
+    const path = location.pathname;
+    if (path === '/' || path === '/updates') {
+      setActiveTab('updates');
+    } else if (path === '/explorer') {
+      setActiveTab('explorer');
+    } else if (path === '/history') {
+      setActiveTab('history');
+    } else if (path === '/settings') {
+      setActiveTab('settings');
+    }
+  }, [location.pathname]);
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
@@ -78,6 +94,8 @@ function AppContent() {
     switch (activeTab) {
       case 'updates':
         return <Dashboard onNavigateToHistory={() => setActiveTab('history')} />;
+      case 'explorer':
+        return <Explorer />;
       case 'history':
         return <History onBack={() => setActiveTab('updates')} />;
       case 'settings':
@@ -92,11 +110,16 @@ function AppContent() {
       <div className="tab-content">
         <Routes>
           <Route path="/" element={renderTabContent()} />
-          <Route path="/container/:containerName" element={<ContainerDetailPage />} />
+          <Route path="/updates" element={<Dashboard onNavigateToHistory={() => setActiveTab('history')} />} />
+          <Route path="/explorer" element={<Explorer />} />
+          <Route path="/history" element={<History onBack={() => setActiveTab('updates')} />} />
+          <Route path="/settings" element={<Settings onBack={() => setActiveTab('updates')} />} />
+          <Route path="/container/:containerName" element={<ContainerPage />} />
           <Route path="/container/:containerName/tag-filter" element={<TagFilterPage />} />
           <Route path="/container/:containerName/script-selection" element={<ScriptSelectionPage />} />
           <Route path="/container/:containerName/restart-dependencies" element={<RestartDependenciesPage />} />
           <Route path="/operation" element={<OperationProgressPage />} />
+          <Route path="/explorer/container/:name" element={<ContainerPage />} />
         </Routes>
       </div>
       {!isSubPage && (

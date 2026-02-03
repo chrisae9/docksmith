@@ -1,15 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate } from '../api/client';
+import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, stopContainer, removeContainer } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
 import { STAGE_INFO, RESTART_STAGES, type LogEntry } from '../constants/progress';
+import { ContainerProgressRow, ProgressStats, ActivityLog, type ContainerProgress } from '../components/ProgressComponents';
 import '../styles/progress-common.css';
 import './OperationProgressPage.css';
 
 // Operation types
-type OperationType = 'restart' | 'update' | 'rollback';
+type OperationType = 'restart' | 'update' | 'rollback' | 'stop' | 'remove' | 'stackRestart' | 'stackStop';
 
 // Restart operation info (includes save settings)
 interface RestartOperation {
@@ -50,20 +51,35 @@ interface RollbackOperation {
   force?: boolean;
 }
 
-type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation;
-
-interface ContainerProgress {
-  name: string;
-  status: 'pending' | 'in_progress' | 'success' | 'failed';
-  stage?: string;
-  percent?: number;
-  message?: string;
-  error?: string;
-  operationId?: string;
-  badge?: string;
-  versionFrom?: string;
-  versionTo?: string;
+// Stop operation info
+interface StopOperation {
+  type: 'stop';
+  containerName: string;
 }
+
+// Remove operation info
+interface RemoveOperation {
+  type: 'remove';
+  containerName: string;
+  force?: boolean;
+}
+
+// Stack restart operation info (restart multiple containers in a stack)
+interface StackRestartOperation {
+  type: 'stackRestart';
+  stackName: string;
+  containers: string[];
+  force?: boolean;
+}
+
+// Stack stop operation info (stop multiple containers in a stack)
+interface StackStopOperation {
+  type: 'stackStop';
+  stackName: string;
+  containers: string[];
+}
+
+type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation;
 
 export function OperationProgressPage() {
   const navigate = useNavigate();
@@ -82,6 +98,18 @@ export function OperationProgressPage() {
     }
     if (state.rollback) {
       return { type: 'rollback', ...state.rollback };
+    }
+    if (state.stop) {
+      return { type: 'stop', ...state.stop };
+    }
+    if (state.remove) {
+      return { type: 'remove', ...state.remove };
+    }
+    if (state.stackRestart) {
+      return { type: 'stackRestart', ...state.stackRestart };
+    }
+    if (state.stackStop) {
+      return { type: 'stackStop', ...state.stackStop };
     }
     return null;
   };
@@ -241,6 +269,22 @@ export function OperationProgressPage() {
     setCurrentStage(event.stage);
     setCurrentPercent(prev => Math.max(prev, effectivePercent));
 
+    // Handle pending_restart stage (self-update)
+    if (event.stage === 'pending_restart') {
+      // Docksmith is about to restart - show special UI
+      if (targetContainer) {
+        updateContainer(targetContainer, {
+          status: 'in_progress',
+          stage: 'pending_restart',
+          percent: 90,
+          message: 'Restarting to apply update...',
+        });
+      }
+      addLog('Docksmith is restarting to apply the update...', 'info', 'fa-rotate');
+      addLog('This page will reconnect automatically when docksmith restarts.', 'info', 'fa-wifi');
+      return;
+    }
+
     // Update container progress
     if (targetContainer) {
       const stageInfo = STAGE_INFO[event.stage] || RESTART_STAGES[event.stage];
@@ -251,6 +295,8 @@ export function OperationProgressPage() {
         message = isPreCheckFailure(event.message || '') ? 'Pre-update check failed' : event.message;
       } else if (event.stage === 'complete') {
         message = event.message;
+      } else if (event.stage === 'pending_restart') {
+        message = 'Restarting to apply update...';
       } else {
         message = stageInfo?.description || event.message;
       }
@@ -379,6 +425,18 @@ export function OperationProgressPage() {
         break;
       case 'rollback':
         runRollback(operationInfo);
+        break;
+      case 'stop':
+        runStop(operationInfo);
+        break;
+      case 'remove':
+        runRemove(operationInfo);
+        break;
+      case 'stackRestart':
+        runStackRestart(operationInfo);
+        break;
+      case 'stackStop':
+        runStackStop(operationInfo);
         break;
     }
 
@@ -768,6 +826,260 @@ export function OperationProgressPage() {
     }
   };
 
+  // Run stop operation
+  const runStop = async (info: StopOperation) => {
+    const { containerName } = info;
+
+    setContainers([{
+      name: containerName,
+      status: 'in_progress',
+      message: 'Stopping container...',
+    }]);
+
+    addLog(`Stopping ${containerName}...`, 'info', 'fa-stop');
+
+    try {
+      const response = await stopContainer(containerName);
+
+      if (response.success) {
+        setStatus('success');
+        updateContainer(containerName, { status: 'success', message: 'Container stopped successfully' });
+        addLog('Container stopped successfully', 'success', 'fa-circle-check');
+      } else {
+        setStatus('failed');
+        updateContainer(containerName, { status: 'failed', message: response.error, error: response.error });
+        addLog(response.error || 'Failed to stop container', 'error', 'fa-circle-xmark');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to stop container';
+      setStatus('failed');
+      updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+    }
+  };
+
+  // Run remove operation
+  const runRemove = async (info: RemoveOperation) => {
+    const { containerName, force } = info;
+
+    setContainers([{
+      name: containerName,
+      status: 'in_progress',
+      message: 'Removing container...',
+    }]);
+
+    addLog(`Removing ${containerName}${force ? ' (force)' : ''}...`, 'info', 'fa-trash');
+
+    try {
+      const response = await removeContainer(containerName, { force });
+
+      if (response.success) {
+        setStatus('success');
+        updateContainer(containerName, { status: 'success', message: 'Container removed successfully' });
+        addLog('Container removed successfully', 'success', 'fa-circle-check');
+      } else {
+        setStatus('failed');
+        updateContainer(containerName, { status: 'failed', message: response.error, error: response.error });
+        addLog(response.error || 'Failed to remove container', 'error', 'fa-circle-xmark');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to remove container';
+      setStatus('failed');
+      updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+    }
+  };
+
+  // Run stack restart operation (restart multiple containers in a stack)
+  const runStackRestart = async (info: StackRestartOperation) => {
+    const { stackName, containers: containerNames, force } = info;
+
+    // Initialize container list
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'pending' as const,
+      percent: 0,
+      badge: force ? 'Force' : undefined,
+    })));
+
+    addLog(`Restarting ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
+    if (force) {
+      addLog('Force mode enabled - pre-update checks will be skipped', 'info', 'fa-forward');
+    }
+
+    let hasAnyFailure = false;
+    let successCount = 0;
+    let failedCount = 0;
+
+    // Restart each container sequentially using the orchestrator
+    for (const containerName of containerNames) {
+      updateContainer(containerName, { status: 'in_progress', message: 'Starting restart...' });
+      addLog(`Restarting ${containerName}...`, 'stage', 'fa-rotate');
+
+      try {
+        const response = await startRestart(containerName, force);
+
+        if (!response.success || !response.data?.operation_id) {
+          const errorMsg = response.error || 'Failed to start restart operation';
+          updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+          addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+          hasAnyFailure = true;
+          failedCount++;
+
+          // Check if it's a precheck failure
+          if (isPreCheckFailure(errorMsg)) {
+            setCanForceRetry(true);
+            setForceRetryMessage('You can force restart to bypass pre-update checks');
+          }
+          continue;
+        }
+
+        const opId = response.data.operation_id;
+        containerToOpIdRef.current.set(containerName, opId);
+        addLog(`${containerName}: Operation started`, 'info', 'fa-play');
+
+        // Poll for completion of this individual container's restart
+        let completed = false;
+        let pollCount = 0;
+        const maxPolls = 90; // 3 minutes max per container
+
+        while (!completed && pollCount < maxPolls) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          pollCount++;
+
+          try {
+            const opResponse = await fetch(`/api/operations/${opId}`);
+            const opData = await opResponse.json();
+
+            if (opData.success && opData.data) {
+              const op = opData.data;
+
+              // Update progress from operation status
+              if (op.current_stage) {
+                const stageInfo = RESTART_STAGES[op.current_stage];
+                if (stageInfo) {
+                  updateContainer(containerName, {
+                    stage: op.current_stage,
+                    message: stageInfo.description,
+                  });
+                }
+              }
+
+              if (op.status === 'complete') {
+                completed = true;
+                updateContainer(containerName, { status: 'success', message: 'Restarted successfully', percent: 100 });
+                addLog(`${containerName}: Restarted successfully`, 'success', 'fa-circle-check');
+                successCount++;
+              } else if (op.status === 'failed') {
+                completed = true;
+                const errorMsg = op.error_message || 'Restart failed';
+                const briefMsg = isPreCheckFailure(errorMsg) ? 'Pre-update check failed' : errorMsg;
+                updateContainer(containerName, { status: 'failed', message: briefMsg, error: errorMsg });
+                addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+                hasAnyFailure = true;
+                failedCount++;
+
+                if (isPreCheckFailure(errorMsg)) {
+                  setCanForceRetry(true);
+                  setForceRetryMessage('You can force restart to bypass pre-update checks');
+                }
+              }
+            }
+          } catch {
+            // Continue polling on error
+          }
+        }
+
+        if (!completed) {
+          updateContainer(containerName, { status: 'failed', message: 'Timed out waiting for completion' });
+          addLog(`${containerName}: Timed out`, 'error', 'fa-clock');
+          hasAnyFailure = true;
+          failedCount++;
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+        addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+        hasAnyFailure = true;
+        failedCount++;
+      }
+    }
+
+    // Final summary
+    if (hasAnyFailure) {
+      if (successCount > 0) {
+        addLog(`Stack restart completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success'); // Partial success still shows as success with individual failures visible
+      } else {
+        addLog(`Stack restart failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      }
+    } else {
+      addLog(`Stack restart completed: ${successCount} container(s) restarted successfully`, 'success', 'fa-circle-check');
+      setStatus('success');
+    }
+  };
+
+  // Run stack stop operation (stop multiple containers in a stack)
+  const runStackStop = async (info: StackStopOperation) => {
+    const { stackName, containers: containerNames } = info;
+
+    // Initialize container list
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'pending' as const,
+      percent: 0,
+    })));
+
+    addLog(`Stopping ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
+
+    let hasAnyFailure = false;
+    let successCount = 0;
+    let failedCount = 0;
+
+    // Stop each container sequentially
+    for (const containerName of containerNames) {
+      updateContainer(containerName, { status: 'in_progress', message: 'Stopping...' });
+      addLog(`Stopping ${containerName}...`, 'stage', 'fa-stop');
+
+      try {
+        const response = await stopContainer(containerName);
+
+        if (response.success) {
+          updateContainer(containerName, { status: 'success', message: 'Stopped successfully', percent: 100 });
+          addLog(`${containerName}: Stopped successfully`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          const errorMsg = response.error || 'Failed to stop container';
+          updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+          addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+          hasAnyFailure = true;
+          failedCount++;
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+        addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+        hasAnyFailure = true;
+        failedCount++;
+      }
+    }
+
+    // Final summary
+    if (hasAnyFailure) {
+      if (successCount > 0) {
+        addLog(`Stack stop completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success'); // Partial success
+      } else {
+        addLog(`Stack stop failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      }
+    } else {
+      addLog(`Stack stop completed: ${successCount} container(s) stopped successfully`, 'success', 'fa-circle-check');
+      setStatus('success');
+    }
+  };
+
   // Handle force retry
   const handleForceRetry = () => {
     if (!operationInfo) return;
@@ -864,6 +1176,10 @@ export function OperationProgressPage() {
       case 'restart': return 'Restarting Container';
       case 'update': return 'Updating Containers';
       case 'rollback': return 'Rolling Back';
+      case 'stop': return 'Stopping Container';
+      case 'remove': return 'Removing Container';
+      case 'stackRestart': return 'Restarting Stack';
+      case 'stackStop': return 'Stopping Stack';
       default: return 'Progress';
     }
   };
@@ -893,6 +1209,10 @@ export function OperationProgressPage() {
         case 'restart': return 'Container restarted successfully!';
         case 'update': return 'All updates completed successfully!';
         case 'rollback': return 'Rollback completed successfully!';
+        case 'stop': return 'Container stopped successfully!';
+        case 'remove': return 'Container removed successfully!';
+        case 'stackRestart': return 'Stack restarted successfully!';
+        case 'stackStop': return 'Stack stopped successfully!';
         default: return 'Completed successfully!';
       }
     }
@@ -909,6 +1229,10 @@ export function OperationProgressPage() {
       case 'restart': return `Restarting ${(operationInfo as RestartOperation).containerName}...`;
       case 'update': return `Updating ${containers.length} container(s)...`;
       case 'rollback': return `Rolling back ${(operationInfo as RollbackOperation).containerName}...`;
+      case 'stop': return `Stopping ${(operationInfo as StopOperation).containerName}...`;
+      case 'remove': return `Removing ${(operationInfo as RemoveOperation).containerName}...`;
+      case 'stackRestart': return `Restarting ${(operationInfo as StackRestartOperation).containers.length} container(s) in "${(operationInfo as StackRestartOperation).stackName}"...`;
+      case 'stackStop': return `Stopping ${(operationInfo as StackStopOperation).containers.length} container(s) in "${(operationInfo as StackStopOperation).stackName}"...`;
       default: return 'Processing...';
     }
   };
@@ -927,6 +1251,7 @@ export function OperationProgressPage() {
     switch (operationType) {
       case 'restart': return 'Force Restart';
       case 'rollback': return 'Force Rollback';
+      case 'stackRestart': return 'Force Restart Stack';
       default: return 'Force Retry';
     }
   };
@@ -971,64 +1296,20 @@ export function OperationProgressPage() {
         )}
 
         {/* Stats Cards */}
-        <div className="progress-stats">
-          <div className="stat-card">
-            <span className="stat-label">Progress</span>
-            <span className="stat-value">{isComplete ? containers.length : successCount + failedCount}/{containers.length}</span>
-          </div>
-          <div className={`stat-card ${successCount > 0 ? 'success' : ''}`}>
-            <span className="stat-label">Successful</span>
-            <span className="stat-value">{successCount}</span>
-          </div>
-          <div className={`stat-card ${failedCount > 0 ? 'error' : ''}`}>
-            <span className="stat-label">Failed</span>
-            <span className="stat-value">{failedCount}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">Elapsed</span>
-            <span className="stat-value">{elapsedTime}s</span>
-          </div>
-        </div>
+        <ProgressStats
+          total={containers.length}
+          successCount={successCount}
+          failedCount={failedCount}
+          elapsedTime={elapsedTime}
+          isComplete={isComplete}
+        />
 
         {/* Container List */}
         <section className="containers-section">
           <h2><i className="fa-solid fa-cube"></i> Containers</h2>
           <div className="container-list">
             {containers.map((container) => (
-              <div key={container.name} className={`container-item status-${container.status}`}>
-                <div className="container-main-row">
-                  <span className="status-icon">
-                    {container.status === 'pending' && <i className="fa-regular fa-circle"></i>}
-                    {container.status === 'in_progress' && (
-                      container.stage && (STAGE_INFO[container.stage] || RESTART_STAGES[container.stage])
-                        ? <i className={`fa-solid ${(STAGE_INFO[container.stage] || RESTART_STAGES[container.stage]).icon}`}></i>
-                        : <i className="fa-solid fa-spinner fa-spin"></i>
-                    )}
-                    {container.status === 'success' && <i className="fa-solid fa-circle-check"></i>}
-                    {container.status === 'failed' && <i className="fa-solid fa-circle-xmark"></i>}
-                  </span>
-                  <span className="container-name">{container.name}</span>
-                  {container.badge && <span className={`container-badge ${container.badge.toLowerCase()}`}>{container.badge}</span>}
-                  {container.status === 'in_progress' && container.percent !== undefined && container.percent > 0 && (
-                    <span className="container-percent">{container.percent}%</span>
-                  )}
-                </div>
-                {container.message && (
-                  <div className="container-message">{container.message}</div>
-                )}
-                {container.versionFrom && container.versionTo && (
-                  <div className="container-version">
-                    <span className="version-current">{container.versionFrom}</span>
-                    <span className="version-arrow">→</span>
-                    <span className="version-target">{container.versionTo}</span>
-                  </div>
-                )}
-                {container.status === 'in_progress' && container.percent !== undefined && container.percent > 0 && (
-                  <div className="container-progress-bar">
-                    <div className="container-progress-fill" style={{ width: `${container.percent}%` }} />
-                  </div>
-                )}
-              </div>
+              <ContainerProgressRow key={container.name} container={container} />
             ))}
 
             {/* Dependent Containers Section */}
@@ -1082,24 +1363,7 @@ export function OperationProgressPage() {
         </section>
 
         {/* Activity Log */}
-        <section className="activity-section">
-          <h2><i className="fa-solid fa-list-check"></i> Activity Log</h2>
-          <div className="activity-log" ref={logEntriesRef}>
-            {logs.map((log, i) => (
-              <div key={i} className={`log-entry log-${log.type}`}>
-                <span className="log-time">
-                  [{new Date(log.time).toLocaleTimeString('en-US', { hour12: false })}]
-                </span>
-                {log.icon && (
-                  <span className="log-icon">
-                    <i className={`fa-solid ${log.icon}`}></i>
-                  </span>
-                )}
-                <span className="log-message">{log.message}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+        <ActivityLog logs={logs} logRef={logEntriesRef} />
       </main>
 
       <footer className="page-footer">

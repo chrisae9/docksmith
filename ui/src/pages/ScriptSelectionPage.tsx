@@ -62,6 +62,7 @@ export function ScriptSelectionPage() {
     // Navigate back to detail page with the selected script and any other pending changes
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         selectedScript: selectedScript,
         tagRegex: pendingTagRegex,
         restartAfter: pendingRestartAfter,
@@ -75,6 +76,7 @@ export function ScriptSelectionPage() {
     // Navigate back, preserving other pending changes but not the script change
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         selectedScript: originalScript, // Restore original
         tagRegex: pendingTagRegex,
         restartAfter: pendingRestartAfter,
@@ -96,7 +98,7 @@ export function ScriptSelectionPage() {
   return (
     <div className="page script-selection-page">
       <header className="page-header">
-        <button className="back-button" onClick={() => navigate(`/container/${containerName}`)}>
+        <button className="back-button" onClick={() => navigate(`/container/${containerName}`, { state: { tab: 'config' } })}>
           ← Back
         </button>
         <h1>Select Script</h1>

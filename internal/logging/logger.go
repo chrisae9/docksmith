@@ -273,22 +273,22 @@ func (l *Logger) log(ctx context.Context, level Level, format string, args ...in
 
 // Debug logs a debug message.
 func (l *Logger) Debug(format string, args ...interface{}) {
-	l.log(nil, LevelDebug, format, args...)
+	l.log(context.Background(), LevelDebug, format, args...)
 }
 
 // Info logs an info message.
 func (l *Logger) Info(format string, args ...interface{}) {
-	l.log(nil, LevelInfo, format, args...)
+	l.log(context.Background(), LevelInfo, format, args...)
 }
 
 // Warn logs a warning message.
 func (l *Logger) Warn(format string, args ...interface{}) {
-	l.log(nil, LevelWarn, format, args...)
+	l.log(context.Background(), LevelWarn, format, args...)
 }
 
 // Error logs an error message.
 func (l *Logger) Error(format string, args ...interface{}) {
-	l.log(nil, LevelError, format, args...)
+	l.log(context.Background(), LevelError, format, args...)
 }
 
 // DebugContext logs a debug message with context.
@@ -313,12 +313,12 @@ func (l *Logger) ErrorContext(ctx context.Context, format string, args ...interf
 
 // Printf provides compatibility with standard log package.
 func (l *Logger) Printf(format string, args ...interface{}) {
-	l.log(nil, LevelInfo, format, args...)
+	l.log(context.Background(), LevelInfo, format, args...)
 }
 
 // Println provides compatibility with standard log package.
 func (l *Logger) Println(args ...interface{}) {
-	l.log(nil, LevelInfo, "%s", fmt.Sprint(args...))
+	l.log(context.Background(), LevelInfo, "%s", fmt.Sprint(args...))
 }
 
 // --- Context helpers ---
@@ -364,22 +364,22 @@ func SetDefault(l *Logger) {
 
 // Debug logs a debug message using the default logger.
 func Debug(format string, args ...interface{}) {
-	defaultLogger.log(nil, LevelDebug, format, args...)
+	defaultLogger.log(context.Background(), LevelDebug, format, args...)
 }
 
 // Info logs an info message using the default logger.
 func Info(format string, args ...interface{}) {
-	defaultLogger.log(nil, LevelInfo, format, args...)
+	defaultLogger.log(context.Background(), LevelInfo, format, args...)
 }
 
 // Warn logs a warning message using the default logger.
 func Warn(format string, args ...interface{}) {
-	defaultLogger.log(nil, LevelWarn, format, args...)
+	defaultLogger.log(context.Background(), LevelWarn, format, args...)
 }
 
 // Error(format string, args ...interface{}) logs an error message using the default logger.
 func Error(format string, args ...interface{}) {
-	defaultLogger.log(nil, LevelError, format, args...)
+	defaultLogger.log(context.Background(), LevelError, format, args...)
 }
 
 // DebugContext logs a debug message with context using the default logger.
@@ -404,10 +404,10 @@ func ErrorContext(ctx context.Context, format string, args ...interface{}) {
 
 // Printf provides compatibility with standard log package using the default logger.
 func Printf(format string, args ...interface{}) {
-	defaultLogger.log(nil, LevelInfo, format, args...)
+	defaultLogger.log(context.Background(), LevelInfo, format, args...)
 }
 
 // Println provides compatibility with standard log package using the default logger.
 func Println(args ...interface{}) {
-	defaultLogger.log(nil, LevelInfo, "%s", fmt.Sprint(args...))
+	defaultLogger.log(context.Background(), LevelInfo, "%s", fmt.Sprint(args...))
 }

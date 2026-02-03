@@ -10,6 +10,8 @@ import type {
   RegistryTagsAPIResponse,
   SetLabelsRequest,
   SetLabelsResponse,
+  ExplorerResponse,
+  ContainerInfo,
 } from '../types/api';
 
 const API_BASE = '/api';
@@ -61,6 +63,11 @@ export async function checkContainers(): Promise<CheckResponse> {
 // Get cached container status (from background checker)
 export async function getContainerStatus(): Promise<CheckResponse> {
   return fetchAPI('/status');
+}
+
+// Recheck a single container (synchronous, bypasses cache)
+export async function recheckContainer(containerName: string): Promise<APIResponse<ContainerInfo>> {
+  return fetchAPI(`/container/${encodeURIComponent(containerName)}/recheck`);
 }
 
 // Operations history
@@ -325,4 +332,161 @@ export async function triggerBackgroundCheck(): Promise<CheckResponse> {
   return fetchAPI('/trigger-check', {
     method: 'POST',
   });
+}
+
+// Explorer data (containers, images, networks, volumes)
+export async function getExplorerData(): Promise<ExplorerResponse> {
+  return fetchAPI('/explorer');
+}
+
+// Container operations
+
+// Get container logs
+export async function getContainerLogs(
+  name: string,
+  options?: { tail?: number; timestamps?: boolean }
+): Promise<APIResponse<{ container: string; logs: string; tail: string }>> {
+  const params = new URLSearchParams();
+  if (options?.tail) params.set('tail', options.tail.toString());
+  if (options?.timestamps) params.set('timestamps', 'true');
+  const query = params.toString();
+  return fetchAPI(`/containers/${encodeURIComponent(name)}/logs${query ? `?${query}` : ''}`);
+}
+
+// Inspect container (detailed info)
+export async function inspectContainer(
+  name: string
+): Promise<APIResponse<import('../types/api').ContainerInspect>> {
+  return fetchAPI(`/containers/${encodeURIComponent(name)}/inspect`);
+}
+
+// Stop a running container
+export async function stopContainer(
+  name: string,
+  timeout?: number
+): Promise<APIResponse<{ container: string; status: string; message: string }>> {
+  const params = timeout ? `?timeout=${timeout}` : '';
+  return fetchAPI(`/containers/${encodeURIComponent(name)}/stop${params}`, {
+    method: 'POST',
+  });
+}
+
+// Start a stopped container
+export async function startContainer(
+  name: string
+): Promise<APIResponse<{ container: string; status: string; message: string }>> {
+  return fetchAPI(`/containers/${encodeURIComponent(name)}/start`, {
+    method: 'POST',
+  });
+}
+
+// Restart a container (explorer quick action)
+export async function restartContainerQuick(
+  name: string,
+  timeout?: number
+): Promise<APIResponse<{ container: string; status: string; message: string }>> {
+  const params = timeout ? `?timeout=${timeout}` : '';
+  return fetchAPI(`/containers/${encodeURIComponent(name)}/restart${params}`, {
+    method: 'POST',
+  });
+}
+
+// Remove a container
+export async function removeContainer(
+  name: string,
+  options?: { force?: boolean; volumes?: boolean }
+): Promise<APIResponse<{ container: string; status: string; message: string; force: boolean; volumes: boolean }>> {
+  const params = new URLSearchParams();
+  if (options?.force) params.set('force', 'true');
+  if (options?.volumes) params.set('volumes', 'true');
+  const query = params.toString();
+  return fetchAPI(`/containers/${encodeURIComponent(name)}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  });
+}
+
+// Remove a network
+export async function removeNetwork(
+  id: string
+): Promise<APIResponse<{ message: string }>> {
+  return fetchAPI(`/networks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+// Remove a volume
+export async function removeVolume(
+  name: string,
+  options?: { force?: boolean }
+): Promise<APIResponse<{ message: string }>> {
+  const params = new URLSearchParams();
+  if (options?.force) params.set('force', 'true');
+  const query = params.toString();
+  return fetchAPI(`/volumes/${encodeURIComponent(name)}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  });
+}
+
+// Remove an image
+export async function removeImage(
+  id: string,
+  options?: { force?: boolean }
+): Promise<APIResponse<{ message: string; deleted: unknown[] }>> {
+  const params = new URLSearchParams();
+  if (options?.force) params.set('force', 'true');
+  const query = params.toString();
+  return fetchAPI(`/images/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  });
+}
+
+// Prune response types
+export interface PruneResponse {
+  message: string;
+  items_deleted: string[];
+  space_reclaimed?: number;
+}
+
+export interface SystemPruneResponse {
+  message: string;
+  containers_deleted: string[];
+  images_deleted: string[];
+  networks_deleted: string[];
+  volumes_deleted: string[];
+  space_reclaimed: number;
+}
+
+// Prune stopped containers
+export async function pruneContainers(): Promise<APIResponse<PruneResponse>> {
+  return fetchAPI('/prune/containers', { method: 'POST' });
+}
+
+// Prune unused images
+export async function pruneImages(
+  options?: { all?: boolean }
+): Promise<APIResponse<PruneResponse>> {
+  const params = new URLSearchParams();
+  if (options?.all) params.set('all', 'true');
+  const query = params.toString();
+  return fetchAPI(`/prune/images${query ? `?${query}` : ''}`, { method: 'POST' });
+}
+
+// Prune unused networks
+export async function pruneNetworks(): Promise<APIResponse<PruneResponse>> {
+  return fetchAPI('/prune/networks', { method: 'POST' });
+}
+
+// Prune unused volumes
+export async function pruneVolumes(): Promise<APIResponse<PruneResponse>> {
+  return fetchAPI('/prune/volumes', { method: 'POST' });
+}
+
+// System prune - remove all unused resources
+export async function systemPrune(
+  options?: { volumes?: boolean }
+): Promise<APIResponse<SystemPruneResponse>> {
+  const params = new URLSearchParams();
+  if (options?.volumes) params.set('volumes', 'true');
+  const query = params.toString();
+  return fetchAPI(`/prune/system${query ? `?${query}` : ''}`, { method: 'POST' });
 }

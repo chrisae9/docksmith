@@ -1,15 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { checkContainers, getContainerStatus, restartStack } from '../api/client';
+import { checkContainers, getContainerStatus } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
-import { ChangeType } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
 import { isUpdatable } from '../utils/status';
 import { useToast } from './Toast';
+import { SearchBar, StackGroup } from './shared';
+import { ContainerRow } from './Dashboard/ContainerRow';
+import { SkeletonDashboard } from './Skeleton/Skeleton';
+import {
+  DashboardSettingsMenu,
+  DEFAULT_DASHBOARD_SETTINGS,
+  type DashboardSettings,
+} from './Dashboard/DashboardSettings';
 
-type FilterType = 'all' | 'updates' | 'local';
-type SortType = 'stack' | 'name' | 'status';
+const STORAGE_KEY_DASHBOARD_SETTINGS = 'dashboard_settings';
 
 interface DashboardProps {
   onNavigateToHistory?: () => void;
@@ -23,12 +29,31 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<FilterType>('updates');
-  const [sort, setSort] = useState<SortType>('stack');
-  const [showLocalImages, setShowLocalImages] = useState(false);
-  const [showIgnored, setShowIgnored] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [restartingStack, setRestartingStack] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<DashboardSettings>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_DASHBOARD_SETTINGS);
+    if (saved) {
+      try {
+        return { ...DEFAULT_DASHBOARD_SETTINGS, ...JSON.parse(saved) };
+      } catch {
+        return DEFAULT_DASHBOARD_SETTINGS;
+      }
+    }
+    return DEFAULT_DASHBOARD_SETTINGS;
+  });
+
+  // Destructure settings for convenience
+  const { filter, sort, showIgnored, showLocalImages } = settings;
+
+  // Update settings and persist to localStorage
+  const updateSettings = (updates: Partial<DashboardSettings>) => {
+    setSettings(prev => {
+      const newSettings = { ...prev, ...updates };
+      localStorage.setItem(STORAGE_KEY_DASHBOARD_SETTINGS, JSON.stringify(newSettings));
+      return newSettings;
+    });
+  };
 
   // Pull-to-refresh state
   const [pullDistance, setPullDistance] = useState(0);
@@ -129,34 +154,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     // Clear selection and navigate to progress page
     setSelectedContainers(new Set());
     navigate('/operation', { state: { update: { containers: containersToUpdate } } });
-  };
-
-  const handleStackRestart = async (stackName: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // Don't trigger stack collapse/expand
-
-    setRestartingStack(stackName);
-    setError(null);
-
-    try {
-      const response = await restartStack(stackName);
-
-      if (response.success && response.data) {
-        // Success - wait a moment then refresh
-        setTimeout(() => {
-          setRestartingStack(null);
-          backgroundRefresh();
-          toast.success(`Stack "${stackName}" restarted successfully`);
-        }, 1000);
-      } else {
-        const errorMsg = response.error || 'Failed to restart stack';
-        setRestartingStack(null);
-        toast.error(errorMsg);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to restart stack';
-      setRestartingStack(null);
-      toast.error(errorMsg);
-    }
   };
 
   const toggleAllStacks = () => {
@@ -285,8 +282,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
         return false;
       }
     }
-    // Hide local images unless explicitly showing them or filtering for them
-    if (container.status === 'LOCAL_IMAGE' && !showLocalImages && filter !== 'local') {
+    // Hide local images unless explicitly showing them
+    if (container.status === 'LOCAL_IMAGE' && !showLocalImages) {
       return false;
     }
     // Hide ignored containers unless explicitly showing them
@@ -296,8 +293,6 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     switch (filter) {
       case 'updates':
         return isUpdatable(container.status);
-      case 'local':
-        return container.status === 'LOCAL_IMAGE';
       default:
         return true;
     }
@@ -310,15 +305,13 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           <div className="header-top">
             <h1>Docksmith</h1>
           </div>
-          <div className="search-bar search-bar-skeleton">
-            <i className="fa-solid fa-search"></i>
-            <input
-              type="text"
-              placeholder="Search containers..."
-              disabled
-              className="search-input"
-            />
-          </div>
+          <SearchBar
+            value=""
+            onChange={() => {}}
+            placeholder="Search containers..."
+            disabled
+            className="search-bar-skeleton"
+          />
           <div className="filter-toolbar">
             <div className="segmented-control">
               <button disabled>All</button>
@@ -332,8 +325,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </div>
           </div>
         </header>
-        <main className="main-loading">
-          {checkProgress && (
+        <main>
+          {checkProgress ? (
             <div className="check-progress-overlay">
               <div className="check-progress">
                 <div className="check-progress-bar">
@@ -350,6 +343,8 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 </div>
               </div>
             </div>
+          ) : (
+            <SkeletonDashboard />
           )}
         </main>
       </div>
@@ -474,47 +469,38 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
               <span>Reconnecting...</span>
             </div>
           )}
-          {result && result.containers.some(c => isUpdatable(c.status)) && (
-            <button
-              onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
-              className="select-all-btn"
-            >
-              {selectedContainers.size > 0 ? 'Deselect All' : 'Select All'}
-            </button>
-          )}
         </div>
-        <div className="search-bar">
-          <i className="fa-solid fa-search" aria-hidden="true"></i>
-          <input
-            type="text"
-            placeholder="Search containers..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="search-input"
-            aria-label="Search containers"
-          />
-          {searchQuery && (
-            <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="Clear search">
-              <i className="fa-solid fa-times" aria-hidden="true"></i>
-            </button>
-          )}
-        </div>
+        <SearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search containers..."
+        />
         <div className="filter-toolbar">
           <div className="segmented-control">
             <button
               className={filter === 'all' ? 'active' : ''}
-              onClick={() => setFilter('all')}
+              onClick={() => updateSettings({ filter: 'all' })}
             >
               All
             </button>
             <button
               className={filter === 'updates' ? 'active' : ''}
-              onClick={() => setFilter('updates')}
+              onClick={() => updateSettings({ filter: 'updates' })}
             >
               Updates
             </button>
           </div>
           <div className="toolbar-options">
+            {result && result.containers.some(c => isUpdatable(c.status)) && (
+              <button
+                onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
+                className="icon-btn select-all-btn"
+                title={selectedContainers.size > 0 ? 'Deselect all' : 'Select all'}
+                aria-label={selectedContainers.size > 0 ? 'Deselect all' : 'Select all'}
+              >
+                <i className={`fa-solid ${selectedContainers.size > 0 ? 'fa-square-minus' : 'fa-square-check'}`} aria-hidden="true"></i>
+              </button>
+            )}
             {sort === 'stack' && (
               <button
                 className="icon-btn"
@@ -525,32 +511,24 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`} aria-hidden="true"></i>
               </button>
             )}
-            <button
-              className={`icon-btn ${showIgnored ? 'active' : ''}`}
-              onClick={() => setShowIgnored(!showIgnored)}
-              title="Show ignored containers"
-              aria-label={showIgnored ? 'Hide ignored containers' : 'Show ignored containers'}
-              aria-pressed={showIgnored}
-            >
-              <i className={`fa-solid fa-eye${showIgnored ? '' : '-slash'}`} aria-hidden="true"></i>
-            </button>
-            <button
-              className={`icon-btn ${showLocalImages ? 'active' : ''}`}
-              onClick={() => setShowLocalImages(!showLocalImages)}
-              title="Show local images"
-              aria-label={showLocalImages ? 'Hide local images' : 'Show local images'}
-              aria-pressed={showLocalImages}
-            >
-              {showLocalImages ? '◉' : '○'}
-            </button>
-            <button
-              className={`icon-btn ${sort === 'stack' ? 'active' : ''}`}
-              onClick={() => setSort(sort === 'stack' ? 'name' : 'stack')}
-              title={sort === 'stack' ? 'Group by stack' : 'List view'}
-              aria-label={sort === 'stack' ? 'Switch to list view' : 'Group by stack'}
-            >
-              {sort === 'stack' ? '▤' : '≡'}
-            </button>
+            <div className="settings-menu-wrapper">
+              <button
+                className={`icon-btn dashboard-settings-btn ${showSettings ? 'active' : ''}`}
+                onClick={() => setShowSettings(!showSettings)}
+                title="View Options"
+                aria-label="View Options"
+                aria-expanded={showSettings}
+              >
+                <i className="fa-solid fa-sliders" aria-hidden="true"></i>
+              </button>
+              {showSettings && (
+                <DashboardSettingsMenu
+                  settings={settings}
+                  onSettingsChange={updateSettings}
+                  onClose={() => setShowSettings(false)}
+                />
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -590,83 +568,55 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           }
 
           return sort === 'stack' ? (
-            <>
+            <div className="stack-list">
               {Object.values(result.stacks).map((stack: Stack) => {
                 const filteredContainers = stack.containers.filter(filterContainer);
                 if (filteredContainers.length === 0) return null;
 
                 return (
-                  <section key={stack.name} className="stack">
-                    <h2
-                      onClick={() => toggleStack(stack.name)}
-                      role="button"
-                      tabIndex={0}
-                      aria-expanded={!collapsedStacks.has(stack.name)}
-                      onKeyDown={(e) => e.key === 'Enter' && toggleStack(stack.name)}
-                    >
-                      <span className="toggle" aria-hidden="true">{collapsedStacks.has(stack.name) ? '▸' : '▾'}</span>
-                      {stack.name}
-                      {stack.has_updates && <span className="badge-dot" aria-label="Has updates"></span>}
-                      <button
-                        className="stack-restart-btn"
-                        onClick={(e) => handleStackRestart(stack.name, e)}
-                        disabled={restartingStack === stack.name}
-                        title={`Restart all containers in ${stack.name}`}
-                        aria-label={`Restart all containers in ${stack.name}`}
-                      >
-                        <i className={`fa-solid fa-rotate-right ${restartingStack === stack.name ? 'fa-spin' : ''}`} aria-hidden="true"></i>
-                      </button>
-                    </h2>
-                    <div className={`stack-content ${collapsedStacks.has(stack.name) ? 'collapsed' : ''}`}>
-                      <ul>
-                        {filteredContainers.map((container) => (
-                          <ContainerRow
-                            key={container.container_name}
-                            container={container}
-                            selected={selectedContainers.has(container.container_name)}
-                            onToggle={() => toggleContainer(container.container_name)}
-                            onContainerClick={() => navigate(`/container/${container.container_name}`)}
-                            allContainers={result.containers}
-                          />
-                        ))}
-                      </ul>
-                    </div>
-                  </section>
+                  <StackGroup
+                    key={stack.name}
+                    name={stack.name}
+                    isCollapsed={collapsedStacks.has(stack.name)}
+                    onToggle={() => toggleStack(stack.name)}
+                  >
+                    {filteredContainers.map((container) => (
+                      <ContainerRow
+                        key={container.container_name}
+                        container={container}
+                        selected={selectedContainers.has(container.container_name)}
+                        onToggle={() => toggleContainer(container.container_name)}
+                        onContainerClick={() => navigate(`/container/${container.container_name}`)}
+                        allContainers={result.containers}
+                      />
+                    ))}
+                  </StackGroup>
                 );
               })}
 
               {result.standalone_containers.filter(filterContainer).length > 0 && (
-                <section className="stack">
-                  <h2
-                    onClick={() => toggleStack('__standalone__')}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={!collapsedStacks.has('__standalone__')}
-                    onKeyDown={(e) => e.key === 'Enter' && toggleStack('__standalone__')}
-                  >
-                    <span className="toggle" aria-hidden="true">{collapsedStacks.has('__standalone__') ? '▸' : '▾'}</span>
-                    Standalone
-                  </h2>
-                  <div className={`stack-content ${collapsedStacks.has('__standalone__') ? 'collapsed' : ''}`}>
-                    <ul>
-                      {result.standalone_containers.filter(filterContainer).map((container) => (
-                        <ContainerRow
-                          key={container.container_name}
-                          container={container}
-                          selected={selectedContainers.has(container.container_name)}
-                          onToggle={() => toggleContainer(container.container_name)}
-                          onContainerClick={() => navigate(`/container/${container.container_name}`)}
-                          allContainers={result.containers}
-                        />
-                      ))}
-                    </ul>
-                  </div>
-                </section>
+                <StackGroup
+                  name="Standalone"
+                  isCollapsed={collapsedStacks.has('__standalone__')}
+                  onToggle={() => toggleStack('__standalone__')}
+                  isStandalone
+                >
+                  {result.standalone_containers.filter(filterContainer).map((container) => (
+                    <ContainerRow
+                      key={container.container_name}
+                      container={container}
+                      selected={selectedContainers.has(container.container_name)}
+                      onToggle={() => toggleContainer(container.container_name)}
+                      onContainerClick={() => navigate(`/container/${container.container_name}`)}
+                      allContainers={result.containers}
+                    />
+                  ))}
+                </StackGroup>
               )}
-            </>
+            </div>
           ) : (
-            <section className="stack">
-              <ul>
+            <div className="stack-group">
+              <ul className="stack-container-list">
                 {result.containers
                   .filter(filterContainer)
                   .sort((a, b) => {
@@ -684,199 +634,41 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     />
                   ))}
               </ul>
-            </section>
+            </div>
           );
         })()}
       </main>
 
-      {selectedContainers.size > 0 && (
-        <div className="selection-bar">
-          <span>{selectedContainers.size} selected</span>
-          <button
-            className="update-btn"
-            onClick={handleUpdate}
-          >
-            Update
-          </button>
-        </div>
-      )}
+      {selectedContainers.size > 0 && (() => {
+        // Check if docksmith is in the selected containers
+        const hasSelfUpdate = result?.containers.some(c =>
+          selectedContainers.has(c.container_name) &&
+          (c.container_name.toLowerCase().includes('docksmith') ||
+           c.image.toLowerCase().includes('docksmith'))
+        );
+
+        return (
+          <div className="selection-bar">
+            {hasSelfUpdate && (
+              <div className="self-update-warning">
+                <i className="fa-solid fa-triangle-exclamation"></i>
+                <span>Docksmith will restart to apply the update</span>
+              </div>
+            )}
+            <div className="selection-actions">
+              <span>{selectedContainers.size} selected</span>
+              <button
+                className="update-btn"
+                onClick={handleUpdate}
+              >
+                Update
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );
 }
 
-interface ContainerRowProps {
-  container: ContainerInfo;
-  selected: boolean;
-  onToggle: () => void;
-  onContainerClick: () => void;
-  allContainers: ContainerInfo[];
-}
-
-function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
-  const hasUpdate = isUpdatable(container.status);
-  const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
-
-  // Check restart dependencies
-  const restartAfter = container.labels?.['docksmith.restart-after'] || '';
-  const restartDeps = restartAfter ? restartAfter.split(',').map(d => d.trim()) : [];
-
-  // Find containers that depend on this one
-  const dependents = allContainers.filter(c => {
-    const deps = c.labels?.['docksmith.restart-after'] || '';
-    if (!deps) return false;
-    const depList = deps.split(',').map(d => d.trim());
-    return depList.includes(container.container_name);
-  }).map(c => c.container_name);
-
-  const getStatusIndicator = () => {
-    switch (container.status) {
-      case 'UPDATE_AVAILABLE':
-        if (container.change_type === ChangeType.MajorChange) return <span className="dot major" title="Major update"></span>;
-        if (container.change_type === ChangeType.MinorChange) return <span className="dot minor" title="Minor update"></span>;
-        if (container.change_type === ChangeType.PatchChange) return <span className="dot patch" title="Patch update"></span>;
-        return <span className="dot update" title="Update available"></span>;
-      case 'UPDATE_AVAILABLE_BLOCKED':
-        return <span className="dot blocked" title="Update blocked"></span>;
-      case 'UP_TO_DATE':
-        return <span className="dot current" title="Up to date"></span>;
-      case 'UP_TO_DATE_PINNABLE':
-        const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
-        return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
-      case 'LOCAL_IMAGE':
-        return <span className="dot local" title="Local image"></span>;
-      case 'COMPOSE_MISMATCH':
-        return <span className="dot error" title="Container image doesn't match compose file"></span>;
-      case 'IGNORED':
-        return <span className="dot ignored" title="Ignored"></span>;
-      default:
-        return <span className="dot" title={container.status}></span>;
-    }
-  };
-
-  const getChangeTypeBadge = () => {
-    // Show PIN badge for pinnable containers (migrating from :latest to semver)
-    if (container.status === 'UP_TO_DATE_PINNABLE') {
-      return <span className="change-badge pin">PIN</span>;
-    }
-
-    if (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED') return null;
-
-    switch (container.change_type) {
-      case ChangeType.MajorChange:
-        return <span className="change-badge major">MAJOR</span>;
-      case ChangeType.MinorChange:
-        return <span className="change-badge minor">MINOR</span>;
-      case ChangeType.PatchChange:
-        return <span className="change-badge patch">PATCH</span>;
-      case ChangeType.UnknownChange:
-        // For :latest tag updates or when version parsing fails
-        return <span className="change-badge rebuild">REBUILD</span>;
-      default:
-        return null;
-    }
-  };
-
-  const getVersion = () => {
-    // For pinnable containers, show the tag migration path (check this FIRST)
-    if (container.status === 'UP_TO_DATE_PINNABLE' && container.recommended_tag) {
-      const currentTag = container.using_latest_tag ? 'latest' : (container.current_tag || 'untagged');
-      return `${currentTag} → ${container.recommended_tag}`;
-    }
-    if (hasUpdate && container.latest_version) {
-      // Use current_tag for consistency with latest_version (both are tag format)
-      const currentDisplay = container.current_tag || container.current_version || 'current';
-      return `${currentDisplay} → ${container.latest_version}`;
-    }
-    if (container.status === 'LOCAL_IMAGE') {
-      return 'Local image';
-    }
-    if (container.status === 'COMPOSE_MISMATCH') {
-      return 'Mismatch detected';
-    }
-    if (container.status === 'IGNORED') {
-      return 'Ignored';
-    }
-    // Prefer current_version (full version from container labels) over current_tag
-    // to match Detail page and show complete version info (e.g., "4.0.16.2944-ls299" not just "4.0.16")
-    return container.current_version || container.current_tag || '';
-  };
-
-  const handleRowClick = (e: React.MouseEvent) => {
-    // Don't open detail modal if clicking checkbox
-    const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox') return;
-    onContainerClick();
-  };
-
-  // Get docksmith label settings
-  const hasTagRegex = !!container.labels?.['docksmith.tag-regex'];
-  const hasPreUpdateScript = !!container.labels?.['docksmith.pre-update-check'];
-  const allowsLatest = container.labels?.['docksmith.allow-latest'] === 'true';
-  const versionPinMajor = container.labels?.['docksmith.version-pin-major'] === 'true';
-  const versionPinMinor = container.labels?.['docksmith.version-pin-minor'] === 'true';
-  const versionPinPatch = container.labels?.['docksmith.version-pin-patch'] === 'true';
-  const versionPin = versionPinMajor ? 'major' : versionPinMinor ? 'minor' : versionPinPatch ? 'patch' : null;
-
-  return (
-    <li
-      className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
-      onClick={handleRowClick}
-    >
-      {hasUpdate && (
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggle}
-          aria-label={`Select ${container.container_name} for update`}
-        />
-      )}
-      <div className="container-info">
-        <span className="name">{container.container_name}</span>
-        <span className="version">{getVersion()} {getChangeTypeBadge()}</span>
-      </div>
-      {getStatusIndicator()}
-      {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
-      {container.pre_update_check_fail && (
-        <span className="warn" title={container.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>
-      )}
-      {container.health_status === 'unhealthy' && (
-        <span className="warn" title="Container is currently unhealthy"><i className="fa-solid fa-heart-crack"></i></span>
-      )}
-      {container.health_status === 'starting' && (
-        <span className="info" title="Container health check is starting"><i className="fa-solid fa-heartbeat"></i></span>
-      )}
-      {restartDeps.length > 0 && (
-        <span className="info restart-dep" title={`Restarts when ${restartDeps.join(', ')} restart${restartDeps.length > 1 ? '' : 's'}`}>
-          <i className="fa-solid fa-link"></i> {restartDeps.length}
-        </span>
-      )}
-      {dependents.length > 0 && (
-        <span className="warn restart-dep-by" title={`${dependents.length} container${dependents.length > 1 ? 's' : ''} will restart: ${dependents.join(', ')}`}>
-          <i className="fa-solid fa-link"></i> {dependents.length}
-        </span>
-      )}
-      {/* Docksmith label indicators */}
-      {versionPin && (
-        <span className={`label-icon pin-${versionPin}`} title={`Version pinned to ${versionPin}`}>
-          <i className="fa-solid fa-thumbtack"></i>
-        </span>
-      )}
-      {hasTagRegex && (
-        <span className="label-icon regex" title="Tag regex filter applied">
-          <i className="fa-solid fa-filter"></i>
-        </span>
-      )}
-      {hasPreUpdateScript && !container.pre_update_check_pass && !container.pre_update_check_fail && (
-        <span className="label-icon script" title="Pre-update script configured">
-          <i className="fa-solid fa-terminal"></i>
-        </span>
-      )}
-      {allowsLatest && (
-        <span className="label-icon latest" title="Allows :latest tag">
-          <i className="fa-solid fa-tag"></i>
-        </span>
-      )}
-    </li>
-  );
-}

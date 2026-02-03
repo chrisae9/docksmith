@@ -14,6 +14,7 @@ import (
 	"github.com/chis/docksmith/internal/api"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/registry"
+	"github.com/chis/docksmith/internal/selfupdate"
 	"github.com/chis/docksmith/internal/storage"
 )
 
@@ -94,6 +95,9 @@ func (c *APICommand) validateStartup(ctx context.Context) error {
 
 // Run starts the API server
 func (c *APICommand) Run(ctx context.Context) error {
+	// Initialize self-detection early (captures container ID from hostname)
+	selfupdate.Init()
+
 	// Run startup validation first
 	if err := c.validateStartup(ctx); err != nil {
 		return err
@@ -132,7 +136,7 @@ func (c *APICommand) Run(ctx context.Context) error {
 		log.Println("This usually means permission issues with the Docker socket.")
 		log.Println("Check that the container has access to /var/run/docker.sock")
 		log.Println("")
-		return fmt.Errorf("Docker connection test failed: %w", err)
+		return fmt.Errorf("docker connection test failed: %w", err)
 	}
 	log.Println("Docker service connected")
 
@@ -147,6 +151,9 @@ func (c *APICommand) Run(ctx context.Context) error {
 		defer store.Close()
 		storageService = store
 		log.Println("Storage service initialized")
+
+		// Resume any pending self-updates from previous restart
+		resumePendingSelfUpdates(ctx, store)
 	}
 
 	// Initialize registry manager
@@ -203,4 +210,50 @@ func (c *APICommand) Run(ctx context.Context) error {
 
 	log.Println("API server stopped")
 	return nil
+}
+
+// resumePendingSelfUpdates checks for and completes any pending self-update operations.
+// This is called on startup to finalize self-updates that triggered a restart.
+func resumePendingSelfUpdates(ctx context.Context, store storage.Storage) {
+	log.Println("Checking for pending self-update operations...")
+
+	// Find any operations with pending_restart status
+	ops, err := store.GetUpdateOperationsByStatus(ctx, "pending_restart", 0)
+	if err != nil {
+		log.Printf("Warning: Failed to check for pending self-updates: %v", err)
+		return
+	}
+
+	if len(ops) == 0 {
+		log.Println("No pending self-update operations found")
+		return
+	}
+
+	log.Printf("Found %d pending self-update operation(s) to complete", len(ops))
+
+	for _, op := range ops {
+		// Verify this was a self-update operation
+		if !selfupdate.IsSelfByImage(op.ContainerName) && !selfupdate.IsSelfByName(op.ContainerName) {
+			// Not a self-update, but has pending_restart status - this shouldn't happen
+			// Mark as failed to clean up the stuck state
+			log.Printf("Warning: Operation %s has pending_restart status but is not a self-update (container: %s). Marking as failed.", op.OperationID, op.ContainerName)
+			if err := store.UpdateOperationStatus(ctx, op.OperationID, "failed", "Invalid pending_restart status for non-self-update operation"); err != nil {
+				log.Printf("Warning: Failed to update operation %s status: %v", op.OperationID, err)
+			}
+			continue
+		}
+
+		// Complete the self-update operation
+		now := time.Now()
+		op.Status = "complete"
+		op.CompletedAt = &now
+		op.ErrorMessage = "Self-update completed successfully after restart"
+
+		if err := store.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("Warning: Failed to complete self-update operation %s: %v", op.OperationID, err)
+			continue
+		}
+
+		log.Printf("Completed self-update operation %s: %s -> %s", op.OperationID, op.OldVersion, op.NewVersion)
+	}
 }

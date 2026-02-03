@@ -83,6 +83,7 @@ export function RestartDependenciesPage() {
     // Navigate back to detail page with the selected dependencies and any other pending changes
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         restartAfter: dependenciesString,
         tagRegex: pendingTagRegex,
         selectedScript: pendingScript,
@@ -98,6 +99,7 @@ export function RestartDependenciesPage() {
     // Navigate back, preserving other pending changes but not the dependencies change
     navigate(`/container/${containerName}`, {
       state: {
+        tab: 'config',
         restartAfter: originalDepsString, // Restore original
         tagRegex: pendingTagRegex,
         selectedScript: pendingScript,
@@ -127,7 +129,7 @@ export function RestartDependenciesPage() {
   return (
     <div className="page restart-dependencies-page">
       <header className="page-header">
-        <button className="back-button" onClick={() => navigate(`/container/${containerName}`)}>
+        <button className="back-button" onClick={() => navigate(`/container/${containerName}`, { state: { tab: 'config' } })}>
           ← Back
         </button>
         <h1>Restart Dependencies</h1>

@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Playwright E2E tests for Docksmith",
   "scripts": {
-    "test": "playwright test",
+    "test": "docker compose run --rm playwright npx playwright test",
+    "test:local": "playwright test",
     "test:ui": "playwright test --ui",
     "test:debug": "playwright test --debug",
     "test:headed": "playwright test --headed",

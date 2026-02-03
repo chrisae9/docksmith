@@ -18,6 +18,7 @@ show_help() {
     echo "  advanced     Run advanced API tests (scripts, policies, SSE, etc.)"
     echo "  labels       Run label tests only"
     echo "  constraints  Run constraint tests only"
+    echo "  selfupdate   Run self-update resume tests only"
     echo "  all          Run all tests (default)"
     echo ""
     echo "Examples:"
@@ -34,6 +35,7 @@ RUN_API=false
 RUN_ADVANCED=false
 RUN_LABELS=false
 RUN_CONSTRAINTS=false
+RUN_SELFUPDATE=false
 
 if [ $# -eq 0 ]; then
     # No args = run all
@@ -41,6 +43,7 @@ if [ $# -eq 0 ]; then
     RUN_ADVANCED=true
     RUN_LABELS=true
     RUN_CONSTRAINTS=true
+    RUN_SELFUPDATE=true
 else
     for arg in "$@"; do
         case $arg in
@@ -56,11 +59,15 @@ else
             constraints)
                 RUN_CONSTRAINTS=true
                 ;;
+            selfupdate)
+                RUN_SELFUPDATE=true
+                ;;
             all)
                 RUN_API=true
                 RUN_ADVANCED=true
                 RUN_LABELS=true
                 RUN_CONSTRAINTS=true
+                RUN_SELFUPDATE=true
                 ;;
             --help|-h|help)
                 show_help
@@ -127,6 +134,17 @@ main() {
         total_suites=$((total_suites + 1))
         echo ""
         if "$SCRIPT_DIR/test-constraints.sh"; then
+            passed_suites=$((passed_suites + 1))
+        else
+            failed_suites=$((failed_suites + 1))
+        fi
+    fi
+
+    # Run self-update tests
+    if [ "$RUN_SELFUPDATE" = true ]; then
+        total_suites=$((total_suites + 1))
+        echo ""
+        if "$SCRIPT_DIR/test-selfupdate.sh"; then
             passed_suites=$((passed_suites + 1))
         else
             failed_suites=$((failed_suites + 1))

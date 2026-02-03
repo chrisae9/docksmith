@@ -73,6 +73,32 @@ func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleContainerRecheck performs a synchronous recheck for a single container
+// This runs the pre-update check script fresh and returns the updated status
+func (s *Server) handleContainerRecheck(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	containerName := r.PathValue("name")
+
+	if containerName == "" {
+		RespondBadRequest(w, fmt.Errorf("container name is required"))
+		return
+	}
+
+	// Get the container info synchronously using the orchestrator
+	result, err := s.discoveryOrchestrator.DiscoverAndCheckSingle(ctx, containerName)
+	if err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+
+	if result == nil {
+		RespondNotFound(w, fmt.Errorf("container '%s' not found", containerName))
+		return
+	}
+
+	RespondSuccess(w, result)
+}
+
 // handleOperations returns update operations history
 // This is the EXACT same logic as: docksmith operations --json
 func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {

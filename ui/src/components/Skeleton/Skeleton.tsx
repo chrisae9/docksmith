@@ -136,3 +136,32 @@ export function SkeletonDetailSection() {
     </div>
   );
 }
+
+/**
+ * Skeleton for a history operation card
+ */
+export function SkeletonOperationCard() {
+  return (
+    <div className="skeleton-operation-card">
+      <Skeleton variant="circular" width={24} height={24} />
+      <div className="skeleton-operation-info">
+        <Skeleton variant="text" width="50%" height={16} />
+        <Skeleton variant="text" width="30%" height={12} />
+      </div>
+      <Skeleton variant="text" width={60} height={12} />
+    </div>
+  );
+}
+
+/**
+ * Skeleton for the history list
+ */
+export function SkeletonHistory({ count = 5 }: { count?: number }) {
+  return (
+    <div className="skeleton-history">
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonOperationCard key={i} />
+      ))}
+    </div>
+  );
+}

@@ -124,16 +124,18 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tags: %w", err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, handleHTTPError(resp, "docker hub tags request")
 		}
 
 		var tagsResp dockerHubTagsResponse
 		if err := json.NewDecoder(resp.Body).Decode(&tagsResp); err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
+		resp.Body.Close()
 
 		for _, tag := range tagsResp.Results {
 			tags = append(tags, tag.Name)
@@ -275,16 +277,18 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch tags: %w", err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, handleHTTPError(resp, "docker hub tags request")
 		}
 
 		var tagsResp dockerHubTagsResponse
 		if err := json.NewDecoder(resp.Body).Decode(&tagsResp); err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
+		resp.Body.Close()
 
 		for _, tag := range tagsResp.Results {
 			// Collect digests from all architectures for this tag

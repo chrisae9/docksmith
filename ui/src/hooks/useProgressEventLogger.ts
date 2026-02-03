@@ -8,7 +8,12 @@ export interface LogEntry {
 
 export interface ProgressStateWithLogs {
   logs: LogEntry[];
-  [key: string]: any;
+  status?: string;
+  stage?: string;
+  percent?: number;
+  message?: string;
+  containerName?: string;
+  operationId?: string;
 }
 
 /**

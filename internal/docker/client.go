@@ -256,6 +256,37 @@ func CompareVersionGroups(group string, v1, v2 string) int {
 	return 0
 }
 
+// ImageInfo represents Docker image information for the explorer
+type ImageInfo struct {
+	ID       string   `json:"id"`
+	Tags     []string `json:"tags"`
+	Size     int64    `json:"size"`
+	Created  int64    `json:"created"`
+	InUse    bool     `json:"in_use"`    // Used by containers
+	Dangling bool     `json:"dangling"`  // No tags
+}
+
+// NetworkInfo represents Docker network information for the explorer
+type NetworkInfo struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Driver     string   `json:"driver"`
+	Scope      string   `json:"scope"`
+	Containers []string `json:"containers"` // Container names using this network
+	IsDefault  bool     `json:"is_default"` // Built-in networks (bridge, host, none)
+	Created    int64    `json:"created"`    // Unix timestamp when network was created
+}
+
+// VolumeInfo represents Docker volume information for the explorer
+type VolumeInfo struct {
+	Name       string   `json:"name"`
+	Driver     string   `json:"driver"`
+	MountPoint string   `json:"mount_point"`
+	Containers []string `json:"containers"` // Container names using this volume
+	Size       int64    `json:"size"`       // -1 if unknown
+	Created    int64    `json:"created"`    // Unix timestamp when volume was created
+}
+
 // GHCRTokenCache provides token caching for GHCR authentication
 type GHCRTokenCache struct {
 	token     string

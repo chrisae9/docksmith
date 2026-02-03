@@ -245,6 +245,165 @@ export interface RegistryTagsResponse {
   count: number;
 }
 
+// Explorer Types
+
+// Container item for explorer view (simplified from ContainerInfo)
+export interface ContainerExplorerItem {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  health_status: string;
+  stack?: string;
+  created: number;
+  networks: string[]; // Network names this container is connected to
+}
+
+// Docker image info for explorer
+export interface ImageInfo {
+  id: string;
+  tags: string[];
+  size: number;
+  created: number;
+  in_use: boolean;
+  dangling: boolean;
+}
+
+// Docker network info for explorer
+export interface NetworkInfo {
+  id: string;
+  name: string;
+  driver: string;
+  scope: string;
+  containers: string[];
+  is_default: boolean;
+  created: number; // Unix timestamp when network was created
+}
+
+// Docker volume info for explorer
+export interface VolumeInfo {
+  name: string;
+  driver: string;
+  mount_point: string;
+  containers: string[];
+  size: number; // -1 if unknown
+  created: number; // Unix timestamp when volume was created
+}
+
+// Combined explorer data with stack grouping
+export interface ExplorerData {
+  container_stacks: Record<string, ContainerExplorerItem[]>;
+  standalone_containers: ContainerExplorerItem[];
+  images: ImageInfo[];
+  networks: NetworkInfo[];
+  volumes: VolumeInfo[];
+}
+
+// Container inspection result
+export interface ContainerInspect {
+  id: string;
+  name: string;
+  image: string;
+  created: string;
+  state: ContainerState;
+  config: ContainerConfig;
+  network_settings: ContainerNetworkSettings;
+  mounts: ContainerMount[];
+  host_config: ContainerHostConfig;
+  labels: Record<string, string>;
+}
+
+export interface ContainerState {
+  status: string;
+  running: boolean;
+  paused: boolean;
+  restarting: boolean;
+  oom_killed: boolean;
+  dead: boolean;
+  pid: number;
+  exit_code: number;
+  error: string;
+  started_at: string;
+  finished_at: string;
+  health?: string;
+}
+
+export interface ContainerConfig {
+  hostname: string;
+  user: string;
+  env: string[];
+  cmd: string[];
+  entrypoint: string[];
+  working_dir: string;
+  exposed_ports: Record<string, boolean>;
+  labels: Record<string, string>;
+}
+
+export interface ContainerNetworkSettings {
+  ip_address: string;
+  gateway: string;
+  mac_address: string;
+  ports: Record<string, PortBinding[]>;
+  networks: Record<string, ContainerNetwork>;
+}
+
+export interface PortBinding {
+  host_ip: string;
+  host_port: string;
+}
+
+export interface ContainerNetwork {
+  network_id: string;
+  endpoint_id: string;
+  gateway: string;
+  ip_address: string;
+  mac_address: string;
+  aliases: string[];
+}
+
+export interface ContainerMount {
+  type: string;
+  source: string;
+  destination: string;
+  mode: string;
+  rw: boolean;
+}
+
+export interface ContainerHostConfig {
+  binds: string[];
+  network_mode: string;
+  restart_policy: RestartPolicy;
+  port_bindings: Record<string, PortBinding[]>;
+  memory: number;
+  memory_swap: number;
+  cpu_shares: number;
+  cpu_period: number;
+  cpu_quota: number;
+  privileged: boolean;
+  readonly_rootfs: boolean;
+}
+
+export interface RestartPolicy {
+  name: string;
+  maximum_retry_count: number;
+}
+
+// Container logs response
+export interface ContainerLogsResponse {
+  container: string;
+  logs: string;
+  tail: string;
+}
+
+// Container operation response
+export interface ContainerOperationResponse {
+  container: string;
+  status: string;
+  message: string;
+  force?: boolean;
+  volumes?: boolean;
+}
+
 // API Response types
 export type CheckResponse = APIResponse<DiscoveryResult>;
 export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number }>;
@@ -253,3 +412,4 @@ export type HealthCheckResponse = APIResponse<HealthResponse>;
 export type DockerConfigResponse = APIResponse<DockerRegistryInfo>;
 export type SetLabelsResponse = APIResponse<LabelOperationResult>;
 export type RegistryTagsAPIResponse = APIResponse<RegistryTagsResponse>;
+export type ExplorerResponse = APIResponse<ExplorerData>;

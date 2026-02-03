@@ -366,3 +366,240 @@ func TestDequeueUpdateWithNoQueue(t *testing.T) {
 		t.Error("Expected not to find update in empty queue")
 	}
 }
+
+// TestStopOperationType tests that 'stop' operation type is accepted by the schema
+func TestStopOperationType(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Create a stop operation
+	op := UpdateOperation{
+		OperationID:   "test-stop-001",
+		ContainerID:   "container-123",
+		ContainerName: "test-container",
+		StackName:     "test-stack",
+		OperationType: "stop",
+		Status:        "complete",
+		StartedAt:     &now,
+		CompletedAt:   &now,
+	}
+
+	// Save should succeed with the new 'stop' operation type
+	err = storage.SaveUpdateOperation(ctx, op)
+	if err != nil {
+		t.Fatalf("Failed to save stop operation: %v", err)
+	}
+
+	// Retrieve and verify
+	retrieved, found, err := storage.GetUpdateOperation(ctx, "test-stop-001")
+	if err != nil {
+		t.Fatalf("Failed to get stop operation: %v", err)
+	}
+	if !found {
+		t.Fatal("Expected to find saved stop operation")
+	}
+	if retrieved.OperationType != "stop" {
+		t.Errorf("Expected operation type 'stop', got %s", retrieved.OperationType)
+	}
+	if retrieved.ContainerName != "test-container" {
+		t.Errorf("Expected container name 'test-container', got %s", retrieved.ContainerName)
+	}
+	if retrieved.Status != "complete" {
+		t.Errorf("Expected status 'complete', got %s", retrieved.Status)
+	}
+}
+
+// TestRemoveOperationType tests that 'remove' operation type is accepted by the schema
+func TestRemoveOperationType(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Create a remove operation
+	op := UpdateOperation{
+		OperationID:   "test-remove-001",
+		ContainerID:   "container-456",
+		ContainerName: "removed-container",
+		StackName:     "test-stack",
+		OperationType: "remove",
+		Status:        "complete",
+		StartedAt:     &now,
+		CompletedAt:   &now,
+	}
+
+	// Save should succeed with the new 'remove' operation type
+	err = storage.SaveUpdateOperation(ctx, op)
+	if err != nil {
+		t.Fatalf("Failed to save remove operation: %v", err)
+	}
+
+	// Retrieve and verify
+	retrieved, found, err := storage.GetUpdateOperation(ctx, "test-remove-001")
+	if err != nil {
+		t.Fatalf("Failed to get remove operation: %v", err)
+	}
+	if !found {
+		t.Fatal("Expected to find saved remove operation")
+	}
+	if retrieved.OperationType != "remove" {
+		t.Errorf("Expected operation type 'remove', got %s", retrieved.OperationType)
+	}
+	if retrieved.ContainerName != "removed-container" {
+		t.Errorf("Expected container name 'removed-container', got %s", retrieved.ContainerName)
+	}
+}
+
+// TestStopAndRemoveOperationsInHistory tests that stop and remove operations appear in history queries
+func TestStopAndRemoveOperationsInHistory(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Create operations of different types
+	operations := []UpdateOperation{
+		{
+			OperationID:   "op-single-001",
+			ContainerName: "container-1",
+			OperationType: "single",
+			Status:        "complete",
+			StartedAt:     &now,
+			CompletedAt:   &now,
+		},
+		{
+			OperationID:   "op-stop-001",
+			ContainerName: "container-2",
+			OperationType: "stop",
+			Status:        "complete",
+			StartedAt:     &now,
+			CompletedAt:   &now,
+		},
+		{
+			OperationID:   "op-remove-001",
+			ContainerName: "container-3",
+			OperationType: "remove",
+			Status:        "complete",
+			StartedAt:     &now,
+			CompletedAt:   &now,
+		},
+		{
+			OperationID:   "op-restart-001",
+			ContainerName: "container-4",
+			OperationType: "restart",
+			Status:        "complete",
+			StartedAt:     &now,
+			CompletedAt:   &now,
+		},
+	}
+
+	for _, op := range operations {
+		err = storage.SaveUpdateOperation(ctx, op)
+		if err != nil {
+			t.Fatalf("Failed to save operation %s: %v", op.OperationID, err)
+		}
+	}
+
+	// Query all completed operations
+	completed, err := storage.GetUpdateOperations(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get update operations: %v", err)
+	}
+
+	if len(completed) != 4 {
+		t.Errorf("Expected 4 operations in history, got %d", len(completed))
+	}
+
+	// Verify all operation types are present
+	typeCount := make(map[string]int)
+	for _, op := range completed {
+		typeCount[op.OperationType]++
+	}
+
+	if typeCount["single"] != 1 {
+		t.Errorf("Expected 1 'single' operation, got %d", typeCount["single"])
+	}
+	if typeCount["stop"] != 1 {
+		t.Errorf("Expected 1 'stop' operation, got %d", typeCount["stop"])
+	}
+	if typeCount["remove"] != 1 {
+		t.Errorf("Expected 1 'remove' operation, got %d", typeCount["remove"])
+	}
+	if typeCount["restart"] != 1 {
+		t.Errorf("Expected 1 'restart' operation, got %d", typeCount["restart"])
+	}
+}
+
+// TestStopOperationFailure tests recording a failed stop operation
+func TestStopOperationFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Create a stop operation in progress
+	op := UpdateOperation{
+		OperationID:   "test-stop-fail-001",
+		ContainerID:   "container-789",
+		ContainerName: "failing-container",
+		OperationType: "stop",
+		Status:        "in_progress",
+		StartedAt:     &now,
+	}
+
+	err = storage.SaveUpdateOperation(ctx, op)
+	if err != nil {
+		t.Fatalf("Failed to save stop operation: %v", err)
+	}
+
+	// Update status to failed with error message
+	err = storage.UpdateOperationStatus(ctx, "test-stop-fail-001", "failed", "container not running")
+	if err != nil {
+		t.Fatalf("Failed to update operation status: %v", err)
+	}
+
+	// Verify the failure was recorded
+	retrieved, found, err := storage.GetUpdateOperation(ctx, "test-stop-fail-001")
+	if err != nil {
+		t.Fatalf("Failed to get stop operation: %v", err)
+	}
+	if !found {
+		t.Fatal("Expected to find stop operation")
+	}
+	if retrieved.Status != "failed" {
+		t.Errorf("Expected status 'failed', got %s", retrieved.Status)
+	}
+	if retrieved.ErrorMessage != "container not running" {
+		t.Errorf("Expected error message 'container not running', got %s", retrieved.ErrorMessage)
+	}
+}

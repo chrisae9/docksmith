@@ -8,10 +8,44 @@
   margin-bottom: var(--space-12);
 }
 
+.tags-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .match-counter {
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   color: var(--color-accent);
   font-weight: var(--font-medium);
+}
+
+.copy-for-ai-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-separator);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.copy-for-ai-btn:hover {
+  background: var(--color-bg-quaternary);
+  color: var(--color-text-primary);
+}
+
+.copy-for-ai-btn i {
+  font-size: 12px;
+}
+
+.copy-for-ai-btn i.fa-check {
+  color: var(--color-success);
 }
 
 /* Input Group */
@@ -58,12 +92,12 @@
 
 .regex-input {
   width: 100%;
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-4) var(--space-6);
   background: var(--color-bg-secondary);
   border: 2px solid var(--color-separator);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-xl);
   color: var(--color-text-primary);
-  font-size: var(--text-xl);
+  font-size: var(--text-base);
   font-family: var(--font-mono);
   outline: none;
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
@@ -120,12 +154,12 @@
 }
 
 .preset-button {
-  padding: var(--space-5) var(--space-8);
+  padding: var(--space-3) var(--space-5);
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-separator);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   color: var(--color-accent);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--font-medium);
   cursor: pointer;
   transition: all var(--transition-normal);
@@ -159,9 +193,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--color-separator);
   transition: background-color var(--transition-normal);
+  min-height: 44px;
 }
 
 .tag-item:last-child {
@@ -183,7 +218,7 @@
 
 .tag-name {
   font-family: var(--font-mono);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
 }
 

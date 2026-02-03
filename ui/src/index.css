@@ -31,6 +31,12 @@
 @import './styles/progress-update.css';
 @import './styles/progress-common.css';
 
+/* Explorer page styles */
+@import './styles/explorer.css';
+
+/* Container detail page styles */
+@import './styles/container-page.css';
+
 /* Base resets and defaults */
 :root {
   color-scheme: dark;

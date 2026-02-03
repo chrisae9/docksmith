@@ -125,8 +125,7 @@ func NewServer(cfg Config) *Server {
 	}
 
 	// Create background checker using the discovery orchestrator
-	var backgroundChecker *update.BackgroundChecker
-	backgroundChecker = update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
+	backgroundChecker := update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
 
 	// Create rate limiter with path-specific limits
 	rateLimiter := NewPathRateLimiter(DefaultRateLimitConfig())
@@ -200,6 +199,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("GET /api/check", s.handleCheck)
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("POST /api/trigger-check", s.handleTriggerCheck)
+	mux.HandleFunc("GET /api/container/{name}/recheck", s.handleContainerRecheck)
 
 	// Operations history
 	mux.HandleFunc("GET /api/operations", s.handleOperations)
@@ -242,6 +242,31 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 
 	// Server-Sent Events for real-time updates
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+
+	// Explorer endpoints
+	mux.HandleFunc("GET /api/explorer", s.handleExplorer)
+	mux.HandleFunc("GET /api/images", s.handleImages)
+	mux.HandleFunc("GET /api/networks", s.handleNetworks)
+	mux.HandleFunc("GET /api/volumes", s.handleVolumes)
+	mux.HandleFunc("DELETE /api/images/{id}", s.handleRemoveImage)
+	mux.HandleFunc("DELETE /api/networks/{id}", s.handleRemoveNetwork)
+	mux.HandleFunc("DELETE /api/volumes/{name}", s.handleRemoveVolume)
+
+	// Prune endpoints
+	mux.HandleFunc("POST /api/prune/containers", s.handlePruneContainers)
+	mux.HandleFunc("POST /api/prune/images", s.handlePruneImages)
+	mux.HandleFunc("POST /api/prune/networks", s.handlePruneNetworks)
+	mux.HandleFunc("POST /api/prune/volumes", s.handlePruneVolumes)
+	mux.HandleFunc("POST /api/prune/system", s.handleSystemPrune)
+
+	// Container operations
+	mux.HandleFunc("GET /api/containers/{name}/logs", s.handleContainerLogs)
+	mux.HandleFunc("GET /api/containers/{name}/inspect", s.handleContainerInspect)
+	mux.HandleFunc("GET /api/containers/{name}/stats", s.handleContainerStats)
+	mux.HandleFunc("POST /api/containers/{name}/stop", s.handleContainerStop)
+	mux.HandleFunc("POST /api/containers/{name}/start", s.handleContainerStart)
+	mux.HandleFunc("POST /api/containers/{name}/restart", s.handleContainerRestart)
+	mux.HandleFunc("DELETE /api/containers/{name}", s.handleContainerRemove)
 
 	// Serve static UI files if directory is configured
 	if staticDir != "" {

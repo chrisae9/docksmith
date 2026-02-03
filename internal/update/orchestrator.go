@@ -277,6 +277,42 @@ func (o *Orchestrator) DiscoverAndCheck(ctx context.Context) (*DiscoveryResult, 
 	return result, nil
 }
 
+// DiscoverAndCheckSingle performs a synchronous check for a single container by name.
+// This bypasses the cache and always runs fresh checks including pre-update scripts.
+func (o *Orchestrator) DiscoverAndCheckSingle(ctx context.Context, containerName string) (*ContainerInfo, error) {
+	// List all containers to find the one we want
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Find the container by name
+	var targetContainer *docker.Container
+	for i := range containers {
+		if containers[i].Name == containerName {
+			targetContainer = &containers[i]
+			break
+		}
+	}
+
+	if targetContainer == nil {
+		return nil, nil // Not found
+	}
+
+	// Check the container directly (bypass cache for fresh precheck)
+	update := o.checker.checkContainer(ctx, *targetContainer)
+
+	// Build ContainerInfo with full metadata
+	info := ContainerInfo{
+		ContainerUpdate: update,
+		ID:              targetContainer.ID,
+		Stack:           targetContainer.Stack,
+		Labels:          targetContainer.Labels,
+	}
+
+	return &info, nil
+}
+
 // publishCheckProgress publishes check progress events to the event bus
 func (o *Orchestrator) publishCheckProgress(stage string, total, checked int, containerName, message string) {
 	if o.eventBus == nil {

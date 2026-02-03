@@ -505,10 +505,14 @@ func (c *GHCRClient) getRegistryToken(ctx context.Context, repository string) (s
 			}
 		}
 
-		// For anonymous access to public repos, a 401 might still work
+		// For anonymous access, a 401 means we need authentication
 		if !attempt.useAuth && resp.StatusCode == http.StatusUnauthorized {
 			resp.Body.Close()
-			// Return empty token - the API might work without auth
+			// If we have credentials, continue to try authenticated access
+			if c.githubPAT != "" {
+				continue
+			}
+			// No credentials available, return empty token - some public APIs work without auth
 			return "", nil
 		}
 

@@ -1,9 +1,19 @@
 import { useEffect, useRef } from 'react';
 
 export interface OperationStatus {
-  status: 'pending' | 'in_progress' | 'complete' | 'failed';
+  status: 'pending' | 'in_progress' | 'complete' | 'failed' | 'pending_restart';
   error_message?: string;
-  [key: string]: any;
+  operation_id?: string;
+  container_name?: string;
+  stack_name?: string;
+  operation_type?: string;
+  old_version?: string;
+  new_version?: string;
+  current_stage?: string;
+  started_at?: string;
+  completed_at?: string;
+  dependents_affected?: string[];
+  rollback_occurred?: boolean;
 }
 
 export interface PollerOptions {

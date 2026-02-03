@@ -46,20 +46,20 @@
 .selected-script-display {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
+  gap: 10px;
   background: var(--color-accent);
   color: var(--color-bg-primary);
-  padding: var(--space-5) var(--space-6);
+  padding: 10px 14px;
   border-radius: var(--radius-lg);
 }
 
 .selected-script-display i {
-  font-size: var(--text-xl);
+  font-size: 16px;
 }
 
 .script-name-display {
   font-family: var(--font-mono);
-  font-size: var(--text-md);
+  font-size: 14px;
   font-weight: var(--font-semibold);
 }
 
@@ -77,11 +77,12 @@
 .script-item {
   display: flex;
   align-items: center;
-  padding: var(--space-7) var(--space-8);
+  padding: 12px 16px;
   border-bottom: 1px solid var(--color-separator);
   cursor: pointer;
   transition: background-color var(--transition-medium);
-  gap: var(--space-6);
+  gap: 12px;
+  min-height: 44px;
 }
 
 .script-item:last-child {
@@ -114,7 +115,7 @@
 }
 
 .radio-icon {
-  font-size: var(--text-5xl);
+  font-size: 22px;
   color: var(--color-text-tertiary);
   flex-shrink: 0;
   transition: color var(--transition-fast);
@@ -138,14 +139,14 @@
 }
 
 .script-name {
-  font-size: var(--text-xl);
+  font-size: 15px;
   font-weight: var(--font-medium);
   color: var(--color-text-primary);
 }
 
 .script-path {
   font-family: var(--font-mono);
-  font-size: var(--text-base);
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
 
@@ -196,34 +197,34 @@
 /* Mobile Responsive - Page-specific overrides */
 @media (max-width: 480px) {
   .selection-summary {
-    padding: var(--space-4);
-    margin-bottom: var(--space-8);
+    padding: 10px;
+    margin-bottom: 16px;
   }
 
   .selected-script-display {
-    padding: var(--space-4) var(--space-5);
-    gap: var(--space-3);
+    padding: 8px 12px;
+    gap: 8px;
   }
 
   .script-name-display {
-    font-size: var(--text-sm);
+    font-size: 13px;
   }
 
   .script-item {
-    padding: var(--space-5) var(--space-6);
-    gap: var(--space-4);
+    padding: 10px 12px;
+    gap: 10px;
   }
 
   .radio-icon {
-    font-size: var(--text-4xl);
+    font-size: 20px;
   }
 
   .script-name {
-    font-size: var(--text-lg);
+    font-size: 14px;
   }
 
   .script-path {
-    font-size: var(--text-sm);
+    font-size: 11px;
     word-break: break-all;
   }
 }

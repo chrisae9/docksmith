@@ -1,0 +1,216 @@
+import type { ContainerInfo } from '../../types/api';
+import { ChangeType } from '../../types/api';
+import { isUpdatable } from '../../utils/status';
+
+interface ContainerRowProps {
+  container: ContainerInfo;
+  selected: boolean;
+  onToggle: () => void;
+  onContainerClick: () => void;
+  allContainers: ContainerInfo[];
+}
+
+export function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
+  const hasUpdate = isUpdatable(container.status);
+  const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
+
+  // Check restart dependencies
+  const restartAfter = container.labels?.['docksmith.restart-after'] || '';
+  const restartDeps = restartAfter ? restartAfter.split(',').map(d => d.trim()) : [];
+
+  // Find containers that depend on this one
+  const dependents = allContainers.filter(c => {
+    const deps = c.labels?.['docksmith.restart-after'] || '';
+    if (!deps) return false;
+    const depList = deps.split(',').map(d => d.trim());
+    return depList.includes(container.container_name);
+  }).map(c => c.container_name);
+
+  const getStatusIndicator = () => {
+    switch (container.status) {
+      case 'UPDATE_AVAILABLE':
+        if (container.change_type === ChangeType.MajorChange) return <span className="dot major" title="Major update"></span>;
+        if (container.change_type === ChangeType.MinorChange) return <span className="dot minor" title="Minor update"></span>;
+        if (container.change_type === ChangeType.PatchChange) return <span className="dot patch" title="Patch update"></span>;
+        return <span className="dot update" title="Update available"></span>;
+      case 'UPDATE_AVAILABLE_BLOCKED':
+        return <span className="dot blocked" title="Update blocked"></span>;
+      case 'UP_TO_DATE':
+        return <span className="dot current" title="Up to date"></span>;
+      case 'UP_TO_DATE_PINNABLE':
+        const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
+        return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
+      case 'LOCAL_IMAGE':
+        return <span className="dot local" title="Local image"></span>;
+      case 'COMPOSE_MISMATCH':
+        return <span className="dot error" title="Container image doesn't match compose file"></span>;
+      case 'IGNORED':
+        return <span className="dot ignored" title="Ignored"></span>;
+      default:
+        return <span className="dot" title={container.status}></span>;
+    }
+  };
+
+  const getChangeTypeBadge = () => {
+    // Show PIN badge for pinnable containers (migrating from :latest to semver)
+    if (container.status === 'UP_TO_DATE_PINNABLE') {
+      return <span className="change-badge pin">PIN</span>;
+    }
+
+    if (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED') return null;
+
+    switch (container.change_type) {
+      case ChangeType.MajorChange:
+        return <span className="change-badge major">MAJOR</span>;
+      case ChangeType.MinorChange:
+        return <span className="change-badge minor">MINOR</span>;
+      case ChangeType.PatchChange:
+        return <span className="change-badge patch">PATCH</span>;
+      case ChangeType.UnknownChange:
+        // For :latest tag updates or when version parsing fails
+        return <span className="change-badge rebuild">REBUILD</span>;
+      default:
+        return null;
+    }
+  };
+
+  const getVersion = () => {
+    // For pinnable containers, show the tag migration path (check this FIRST)
+    if (container.status === 'UP_TO_DATE_PINNABLE' && container.recommended_tag) {
+      const currentTag = container.using_latest_tag ? 'latest' : (container.current_tag || 'untagged');
+      return `${currentTag} → ${container.recommended_tag}`;
+    }
+    if (hasUpdate && container.latest_version) {
+      // Use current_tag for consistency with latest_version (both are tag format)
+      const currentDisplay = container.current_tag || container.current_version || 'current';
+      return `${currentDisplay} → ${container.latest_version}`;
+    }
+    if (container.status === 'LOCAL_IMAGE') {
+      return 'Local image';
+    }
+    if (container.status === 'COMPOSE_MISMATCH') {
+      return 'Mismatch detected';
+    }
+    if (container.status === 'IGNORED') {
+      return 'Ignored';
+    }
+    // Prefer current_version (full version from container labels) over current_tag
+    // to match Detail page and show complete version info (e.g., "4.0.16.2944-ls299" not just "4.0.16")
+    return container.current_version || container.current_tag || '';
+  };
+
+  const handleRowClick = (e: React.MouseEvent) => {
+    // Don't open detail modal if clicking checkbox area or left safe zone
+    const target = e.target as HTMLElement;
+    if (target.closest('.checkbox-area')) return;
+    if (target.closest('.selection-zone')) return;
+    onContainerClick();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Don't trigger if focus is on checkbox
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT') return;
+
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onContainerClick();
+    }
+  };
+
+  // Get docksmith label settings
+  const hasTagRegex = !!container.labels?.['docksmith.tag-regex'];
+  const hasPreUpdateScript = !!container.labels?.['docksmith.pre-update-check'];
+  const allowsLatest = container.labels?.['docksmith.allow-latest'] === 'true';
+  const versionPinMajor = container.labels?.['docksmith.version-pin-major'] === 'true';
+  const versionPinMinor = container.labels?.['docksmith.version-pin-minor'] === 'true';
+  const versionPinPatch = container.labels?.['docksmith.version-pin-patch'] === 'true';
+  const versionPin = versionPinMajor ? 'major' : versionPinMinor ? 'minor' : versionPinPatch ? 'patch' : null;
+
+  // Build accessible description
+  const statusLabel = hasUpdate
+    ? `Update available: ${container.current_version || container.current_tag} to ${container.latest_version}`
+    : container.status.toLowerCase().replace(/_/g, ' ');
+
+  return (
+    <li
+      className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
+      onClick={handleRowClick}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
+      role="button"
+      aria-label={`${container.container_name}, ${statusLabel}. Press Enter to view details.`}
+    >
+      <div
+        className="selection-zone"
+        onClick={(e) => {
+          e.stopPropagation();
+          // If container has update, toggle selection when clicking the zone
+          if (hasUpdate) {
+            if ((e.target as HTMLElement).tagName !== 'INPUT') {
+              onToggle();
+            }
+          }
+          // Otherwise just absorb the click (don't navigate)
+        }}
+      >
+        {hasUpdate && (
+          <div className="checkbox-area">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggle}
+              aria-label={`Select ${container.container_name} for update`}
+            />
+          </div>
+        )}
+      </div>
+      <div className="container-info">
+        <span className="name">{container.container_name}</span>
+        <span className="version">{getVersion()} {getChangeTypeBadge()}</span>
+      </div>
+      {getStatusIndicator()}
+      {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
+      {container.pre_update_check_fail && (
+        <span className="warn" title={container.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>
+      )}
+      {container.health_status === 'unhealthy' && (
+        <span className="warn" title="Container is currently unhealthy"><i className="fa-solid fa-heart-crack"></i></span>
+      )}
+      {container.health_status === 'starting' && (
+        <span className="info" title="Container health check is starting"><i className="fa-solid fa-heartbeat"></i></span>
+      )}
+      {restartDeps.length > 0 && (
+        <span className="info restart-dep" title={`Restarts when ${restartDeps.join(', ')} restart${restartDeps.length > 1 ? '' : 's'}`}>
+          <i className="fa-solid fa-link"></i> {restartDeps.length}
+        </span>
+      )}
+      {dependents.length > 0 && (
+        <span className="warn restart-dep-by" title={`${dependents.length} container${dependents.length > 1 ? 's' : ''} will restart: ${dependents.join(', ')}`}>
+          <i className="fa-solid fa-link"></i> {dependents.length}
+        </span>
+      )}
+      {/* Docksmith label indicators */}
+      {versionPin && (
+        <span className={`label-icon pin-${versionPin}`} title={`Version pinned to ${versionPin}`}>
+          <i className="fa-solid fa-thumbtack"></i>
+        </span>
+      )}
+      {hasTagRegex && (
+        <span className="label-icon regex" title="Tag regex filter applied">
+          <i className="fa-solid fa-filter"></i>
+        </span>
+      )}
+      {hasPreUpdateScript && !container.pre_update_check_pass && !container.pre_update_check_fail && (
+        <span className="label-icon script" title="Pre-update script configured">
+          <i className="fa-solid fa-terminal"></i>
+        </span>
+      )}
+      {allowsLatest && (
+        <span className="label-icon latest" title="Allows :latest tag">
+          <i className="fa-solid fa-tag"></i>
+        </span>
+      )}
+    </li>
+  );
+}

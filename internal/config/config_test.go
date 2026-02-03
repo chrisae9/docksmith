@@ -196,13 +196,13 @@ func TestGetConfigReturnsEmptyForUnknownKey(t *testing.T) {
 
 // TestMergeConfigsPrioritizesDatabase tests that merge logic prioritizes database over YAML
 func TestMergeConfigsPrioritizesDatabase(t *testing.T) {
-	yamlConfig := Config{
+	yamlConfig := &Config{
 		ScanDirectories: []string{"/www", "/torrent"},
 		ExcludePatterns: []string{"node_modules"},
 		CacheTTLDays:    7,
 	}
 
-	dbConfig := Config{
+	dbConfig := &Config{
 		CacheTTLDays: 14, // Override YAML value
 	}
 

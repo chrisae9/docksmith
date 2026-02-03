@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
 	"github.com/chis/docksmith/internal/scripts"
+	"github.com/chis/docksmith/internal/selfupdate"
 	"github.com/chis/docksmith/internal/storage"
 	dockerContainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -390,6 +392,13 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 
 	log.Printf("UPDATE: Starting executeSingleUpdate for operation=%s container=%s target=%s", operationID, container.Name, targetVersion)
 
+	// Check if this is a self-update (docksmith updating itself)
+	if selfupdate.IsSelfContainer(container.ID, container.Image, container.Name) {
+		log.Printf("UPDATE: Detected self-update for docksmith container %s", container.Name)
+		o.executeSelfUpdate(ctx, operationID, container, targetVersion, stackName)
+		return
+	}
+
 	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Validating permissions")
 
 	if err := o.checkPermissions(ctx, container); err != nil {
@@ -529,6 +538,138 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	}
 }
 
+// executeSelfUpdate handles the special case of docksmith updating itself.
+// This follows a "prepare and restart" pattern:
+// 1. Pull the new image
+// 2. Update the compose file
+// 3. Mark operation as pending_restart
+// 4. Trigger docker compose up -d to restart with new image
+// 5. On next startup, the operation is marked complete by resumePendingSelfUpdates()
+func (o *UpdateOrchestrator) executeSelfUpdate(ctx context.Context, operationID string, container *docker.Container, targetVersion, stackName string) {
+	log.Printf("SELF-UPDATE: Starting self-update for operation=%s container=%s target=%s", operationID, container.Name, targetVersion)
+
+	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Preparing self-update")
+
+	// Validate permissions (compose file access)
+	if err := o.checkPermissions(ctx, container); err != nil {
+		o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Permission check failed: %v", err))
+		return
+	}
+
+	// Skip pre-update checks for self-updates since we can't reliably run scripts
+	// during our own update process
+	log.Printf("SELF-UPDATE: Skipping pre-update checks for self-update")
+
+	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
+
+	// Set started_at timestamp and old version
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		if op.OldVersion == "" {
+			op.OldVersion = currentVersion
+		}
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	// Step 1: Update compose file with new version
+	o.publishProgress(operationID, container.Name, stackName, "updating_compose", 20, "Updating compose file")
+
+	composeFilePath := o.getComposeFilePath(container)
+	if composeFilePath == "" {
+		o.failOperation(ctx, operationID, "updating_compose", "Cannot self-update: no compose file found for docksmith")
+		return
+	}
+
+	resolvedPath, err := o.resolveComposeFile(composeFilePath)
+	if err != nil {
+		o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Failed to resolve compose file: %v", err))
+		return
+	}
+
+	if err := o.updateComposeFile(ctx, resolvedPath, container, targetVersion); err != nil {
+		o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Compose update failed: %v", err))
+		return
+	}
+
+	// Step 2: Pull the new image
+	imageRef := o.buildImageRef(container.Image, targetVersion)
+	log.Printf("SELF-UPDATE: Pulling image %s", imageRef)
+	o.publishProgress(operationID, container.Name, stackName, "pulling_image", 30, "Pulling new image")
+
+	progressChan := make(chan PullProgress, 10)
+	go func() {
+		for progress := range progressChan {
+			percent := 30 + (progress.Percent * 40 / 100) // 30-70%
+			o.publishProgress(operationID, container.Name, stackName, "pulling_image", percent, progress.Status)
+		}
+	}()
+
+	if err := o.pullImage(ctx, imageRef, progressChan); err != nil {
+		close(progressChan)
+		o.failOperation(ctx, operationID, "pulling_image", fmt.Sprintf("Image pull failed: %v", err))
+		return
+	}
+	close(progressChan)
+
+	// Step 3: Mark operation as pending_restart
+	log.Printf("SELF-UPDATE: Image pulled, marking as pending_restart")
+	o.publishProgress(operationID, container.Name, stackName, "pending_restart", 80, "Docksmith is restarting to apply update...")
+
+	op, found, _ = o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.Status = "pending_restart"
+		op.ErrorMessage = "Self-update prepared. Restarting docksmith..."
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("SELF-UPDATE: Warning - failed to save pending_restart status: %v", err)
+		}
+	}
+
+	// Publish SSE event to notify UI that docksmith is restarting
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventUpdateProgress,
+			Payload: map[string]interface{}{
+				"operation_id":   operationID,
+				"container_name": container.Name,
+				"stage":          "pending_restart",
+				"percent":        90,
+				"message":        "Docksmith is restarting to complete the update. This page will reconnect automatically.",
+			},
+		})
+	}
+
+	// Step 4: Trigger restart using docker compose
+	// This is done in a goroutine with a small delay to allow the SSE event to be sent
+	log.Printf("SELF-UPDATE: Triggering docker compose up -d to restart docksmith")
+	go func() {
+		// Give the SSE event time to be sent
+		time.Sleep(1 * time.Second)
+
+		// Get the host path for compose file (needed for docker compose command)
+		hostComposePath := o.getComposeFilePathForHost(container)
+		if hostComposePath == "" {
+			hostComposePath = resolvedPath
+		}
+
+		// Run docker compose up -d to recreate with new image
+		// This will kill our process, which is expected
+		cmd := exec.Command("docker", "compose", "-f", hostComposePath, "up", "-d", "--force-recreate", container.Name)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		log.Printf("SELF-UPDATE: Executing: docker compose -f %s up -d --force-recreate %s", hostComposePath, container.Name)
+		if err := cmd.Run(); err != nil {
+			// We likely won't reach here because the container will restart
+			log.Printf("SELF-UPDATE: docker compose command returned: %v (this may be expected if container restarted)", err)
+		}
+	}()
+
+	// Note: We don't mark as complete here - that happens on next startup via resumePendingSelfUpdates()
+	log.Printf("SELF-UPDATE: Restart initiated, operation=%s will be completed on next startup", operationID)
+}
+
 // executeBatchUpdate executes batch update workflow.
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string) {
 	defer o.releaseStackLock(stackName)
@@ -552,6 +693,32 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	if len(updateContainers) == 0 {
 		o.publishProgress(operationID, "", stackName, "complete", 100, "No containers to update")
 		return
+	}
+
+	// Check if docksmith (self) is in the batch - if so, separate it and update last
+	var selfContainer *docker.Container
+	var otherContainers []*docker.Container
+	for _, container := range updateContainers {
+		if selfupdate.IsSelfContainer(container.ID, container.Image, container.Name) {
+			selfContainer = container
+			log.Printf("BATCH UPDATE: Detected docksmith in batch, will update last")
+		} else {
+			otherContainers = append(otherContainers, container)
+		}
+	}
+
+	// If only docksmith is in the batch, use self-update flow directly
+	if selfContainer != nil && len(otherContainers) == 0 {
+		log.Printf("BATCH UPDATE: Only docksmith in batch, using self-update flow")
+		o.executeSelfUpdate(ctx, operationID, selfContainer, targetVersions[selfContainer.Name], stackName)
+		return
+	}
+
+	// If docksmith is included with other containers, update others first
+	// then trigger self-update which will restart docksmith
+	if selfContainer != nil {
+		updateContainers = otherContainers
+		log.Printf("BATCH UPDATE: Will update %d containers first, then self-update docksmith", len(otherContainers))
 	}
 
 	// Set started_at timestamp before beginning actual update work
@@ -850,6 +1017,25 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	if len(allBlocked) > 0 {
 		log.Printf("BATCH UPDATE: Blocked dependents: %v", allBlocked)
 		o.publishProgress(operationID, "", stackName, "restarting_dependents", 98, fmt.Sprintf("Blocked dependents: %s", strings.Join(allBlocked, ", ")))
+	}
+
+	// Check if we need to trigger self-update for docksmith (deferred to end of batch)
+	if selfContainer != nil {
+		log.Printf("BATCH UPDATE: All other containers done, now triggering docksmith self-update")
+
+		// Update the operation status to indicate self-update is starting
+		batchOp, batchFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+		if batchFound {
+			batchOp.Status = "in_progress"
+			batchOp.ErrorMessage = fmt.Sprintf("Batch update: %d completed, now updating docksmith...", successCount)
+			o.storage.SaveUpdateOperation(ctx, batchOp)
+		}
+
+		// Trigger self-update - this will restart docksmith
+		// The operation will be marked complete on next startup
+		o.executeSelfUpdate(ctx, operationID, selfContainer, targetVersions[selfContainer.Name], stackName)
+		// We won't reach code below this as docksmith restarts
+		return
 	}
 
 	status := "complete"

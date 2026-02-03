@@ -50,7 +50,7 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 
 	for rows.Next() {
 		var op UpdateOperation
-		var dependentsJSON string
+		var dependentsJSON sql.NullString
 		var batchDetailsJSON sql.NullString
 		var startedAt, completedAt sql.NullTime
 		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
@@ -88,8 +88,8 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 		}
 
 		// Deserialize dependents affected from JSON
-		if dependentsJSON != "" {
-			err = json.Unmarshal([]byte(dependentsJSON), &op.DependentsAffected)
+		if dependentsJSON.Valid && dependentsJSON.String != "" {
+			err = json.Unmarshal([]byte(dependentsJSON.String), &op.DependentsAffected)
 			if err != nil {
 				log.Printf("Failed to deserialize dependents affected: %v", err)
 				return nil, fmt.Errorf("failed to deserialize dependents affected: %w", err)

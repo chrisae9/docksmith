@@ -43,6 +43,11 @@ export const STAGE_INFO: Record<string, StageInfo> = {
     label: 'Rolling Back',
     description: 'Reverting to previous version...'
   },
+  'pending_restart': {
+    icon: 'fa-rotate',
+    label: 'Restarting',
+    description: 'Docksmith is restarting to apply the update...'
+  },
   'complete': {
     icon: 'fa-circle-check',
     label: 'Complete',

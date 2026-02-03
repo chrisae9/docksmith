@@ -68,8 +68,8 @@ func (c *Config) Load(ctx context.Context, store storage.Storage, yamlPath strin
 }
 
 // loadFromDatabase loads configuration values from the database
-func (c *Config) loadFromDatabase(ctx context.Context, store storage.Storage) (Config, error) {
-	cfg := Config{
+func (c *Config) loadFromDatabase(ctx context.Context, store storage.Storage) (*Config, error) {
+	cfg := &Config{
 		values: make(map[string]string),
 	}
 
@@ -261,8 +261,16 @@ func (c *Config) toMap() map[string]string {
 
 // MergeConfigs merges two configurations with database config taking precedence.
 // YAML config provides defaults, database config overrides specific values.
-func MergeConfigs(yamlConfig, dbConfig Config) Config {
-	merged := yamlConfig // Start with YAML defaults
+// Uses pointers to avoid copying the sync.RWMutex embedded in Config.
+func MergeConfigs(yamlConfig, dbConfig *Config) *Config {
+	// Create fresh config (with new mutex) starting from YAML defaults
+	merged := &Config{
+		ScanDirectories:  yamlConfig.ScanDirectories,
+		ExcludePatterns:  yamlConfig.ExcludePatterns,
+		CacheTTLDays:     yamlConfig.CacheTTLDays,
+		ComposeFilePaths: yamlConfig.ComposeFilePaths,
+		values:           make(map[string]string),
+	}
 
 	// Database values override YAML values
 	if len(dbConfig.ScanDirectories) > 0 {

@@ -1,0 +1,76 @@
+import type { VolumeInfo } from '../../types/api';
+import {
+  ActionMenuButton,
+  ActionMenu,
+  ActionMenuItem,
+  ConfirmRemove,
+} from '../shared';
+import { formatSize } from './utils';
+
+// Type fix for RefObject
+type RefCallback = React.RefObject<HTMLDivElement | null>;
+
+interface VolumeItemProps {
+  volume: VolumeInfo;
+  isActive: boolean;
+  isLoading: boolean;
+  confirmRemove: boolean;
+  onMenuToggle: () => void;
+  onRemove: (force?: boolean) => void;
+  onConfirmRemove: () => void;
+  menuRef: RefCallback;
+}
+
+export function VolumeItem({
+  volume,
+  isActive,
+  isLoading,
+  confirmRemove,
+  onMenuToggle,
+  onRemove,
+  onConfirmRemove,
+  menuRef,
+}: VolumeItemProps) {
+  const containers = volume.containers || [];
+  const inUse = containers.length > 0;
+
+  return (
+    <li className="explorer-item">
+      <i className={`fa-solid fa-hard-drive item-icon ${inUse ? 'in-use' : ''} ${isLoading ? 'loading' : ''}`}></i>
+      <div className="item-content">
+        <span className="item-name">{volume.name}</span>
+        <span className="item-meta">
+          {volume.driver}
+          {volume.size >= 0 && ` \u2022 ${formatSize(volume.size)}`}
+          {inUse && ` \u2022 ${containers.length} container${containers.length !== 1 ? 's' : ''}`}
+        </span>
+      </div>
+      <div className="item-badges">
+        {!inUse && <span className="badge unused">Unused</span>}
+      </div>
+      <div className="item-actions" ref={isActive ? menuRef : undefined}>
+        <ActionMenuButton
+          isActive={isActive}
+          isLoading={isLoading}
+          onClick={onMenuToggle}
+        />
+        <ActionMenu isActive={isActive}>
+          {confirmRemove ? (
+            <ConfirmRemove
+              onConfirm={() => onRemove(inUse)}
+              onCancel={onMenuToggle}
+              label={`Remove${inUse ? ' (Force)' : ''}?`}
+            />
+          ) : (
+            <ActionMenuItem
+              icon="fa-trash"
+              label={`Remove${inUse ? ' (Force)' : ''}`}
+              onClick={onConfirmRemove}
+              danger
+            />
+          )}
+        </ActionMenu>
+      </div>
+    </li>
+  );
+}

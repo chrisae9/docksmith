@@ -31,6 +31,20 @@ func parseIntParam(r *http.Request, name string, defaultVal int) int {
 	return n
 }
 
+// parsePositiveIntParam parses a positive integer query parameter with a default value.
+// Returns defaultVal if the parameter is missing, invalid, or not positive.
+func parsePositiveIntParam(r *http.Request, name string, defaultVal int) int {
+	val := r.URL.Query().Get(name)
+	if val == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil || n <= 0 {
+		return defaultVal
+	}
+	return n
+}
+
 // parseBoolParam parses a boolean query parameter
 func parseBoolParam(r *http.Request, name string) bool {
 	return r.URL.Query().Get(name) == "true"

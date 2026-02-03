@@ -87,7 +87,7 @@ func ValidateTTL(ttl string) ValidationResult {
 	// Parse TTL as integer
 	ttlValue, err := strconv.Atoi(ttl)
 	if err != nil {
-		result.AddError(fmt.Sprintf("invalid TTL value: must be an integer between 1 and 365 days (default: 7 days)"))
+		result.AddError("invalid TTL value: must be an integer between 1 and 365 days (default: 7 days)")
 		return result
 	}
 
