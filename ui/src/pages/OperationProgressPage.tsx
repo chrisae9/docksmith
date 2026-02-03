@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, stopContainer, removeContainer } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
@@ -84,6 +84,10 @@ type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | St
 export function OperationProgressPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Check for operation ID in URL (for page refresh recovery)
+  const urlOperationId = searchParams.get('id');
 
   // Determine operation type from location state - capture once on mount
   const getOperationInfoFromState = (state: any): OperationInfo | null => {
@@ -118,6 +122,9 @@ export function OperationProgressPage() {
   const operationInfo = operationInfoRef.current;
   const operationType: OperationType | null = operationInfo?.type || null;
 
+  // Recovery mode: we have an operation ID in URL but no location state
+  const isRecoveryMode = !operationInfo && !!urlOperationId;
+
   // Common state
   const [status, setStatus] = useState<'in_progress' | 'success' | 'failed'>('in_progress');
   const [containers, setContainers] = useState<ContainerProgress[]>([]);
@@ -126,9 +133,10 @@ export function OperationProgressPage() {
   const [hasStarted, setHasStarted] = useState(false);
   const [currentStage, setCurrentStage] = useState<string | null>(null);
   const [currentPercent, setCurrentPercent] = useState<number>(0);
-  const [operationId, setOperationId] = useState<string | null>(null);
+  const [operationId, setOperationId] = useState<string | null>(urlOperationId);
   const [canForceRetry, setCanForceRetry] = useState(false);
   const [forceRetryMessage, setForceRetryMessage] = useState<string>('');
+  const [recoveredOperation, setRecoveredOperation] = useState<any>(null);
 
   // Dependent container tracking
   const [expectedDependents, setExpectedDependents] = useState<string[]>([]);
@@ -203,6 +211,109 @@ export function OperationProgressPage() {
            errorMessage.includes('pre_update_check') ||
            errorMessage.includes('Dependent container');
   };
+
+  // Recovery mode: fetch operation status when we have URL param but no location state
+  useEffect(() => {
+    if (!isRecoveryMode || !urlOperationId) return;
+
+    const fetchOperation = async () => {
+      try {
+        addLog('Recovering operation status...', 'info', 'fa-sync');
+        const response = await fetch(`/api/operations/${urlOperationId}`);
+        if (!response.ok) {
+          addLog(`Failed to fetch operation: ${response.status}`, 'error', 'fa-circle-xmark');
+          return;
+        }
+
+        const data = await response.json();
+        if (!data.success || !data.data) {
+          addLog('Operation not found', 'error', 'fa-circle-xmark');
+          return;
+        }
+
+        const op = data.data;
+        setRecoveredOperation(op);
+        setStartTime(op.started_at ? new Date(op.started_at).getTime() : Date.now());
+
+        // Initialize container list from recovered operation
+        const containerName = op.container_name || 'Unknown';
+        setContainers([{
+          name: containerName,
+          status: op.status === 'complete' ? 'success' : op.status === 'failed' ? 'failed' : 'in_progress',
+          message: op.error_message || op.status,
+          percent: op.status === 'complete' ? 100 : 50,
+        }]);
+
+        // Update status based on operation status
+        if (op.status === 'complete') {
+          setStatus('success');
+          addLog(op.error_message || 'Operation completed successfully', 'success', 'fa-circle-check');
+        } else if (op.status === 'failed') {
+          setStatus('failed');
+          addLog(op.error_message || 'Operation failed', 'error', 'fa-circle-xmark');
+        } else if (op.status === 'pending_restart') {
+          // Self-restart in progress - start polling
+          addLog('Self-restart in progress, waiting for completion...', 'info', 'fa-rotate');
+          sawPendingRestartRef.current = true;
+
+          // Start polling for completion
+          const pollForCompletion = async () => {
+            let attempts = 0;
+            const maxAttempts = 60;
+            const pollInterval = 2000;
+
+            while (attempts < maxAttempts) {
+              attempts++;
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+              try {
+                const pollResponse = await fetch(`/api/operations/${urlOperationId}`);
+                if (!pollResponse.ok) continue;
+
+                const pollData = await pollResponse.json();
+                if (!pollData.success || !pollData.data) continue;
+
+                const pollOp = pollData.data;
+                if (pollOp.status === 'complete') {
+                  setContainers(prev => prev.map(c => ({
+                    ...c,
+                    status: 'success',
+                    percent: 100,
+                    message: pollOp.error_message || 'Completed successfully'
+                  })));
+                  setStatus('success');
+                  addLog(pollOp.error_message || 'Self-restart completed successfully', 'success', 'fa-circle-check');
+                  return;
+                } else if (pollOp.status === 'failed') {
+                  setContainers(prev => prev.map(c => ({
+                    ...c,
+                    status: 'failed',
+                    message: pollOp.error_message || 'Failed'
+                  })));
+                  setStatus('failed');
+                  addLog(pollOp.error_message || 'Operation failed', 'error', 'fa-circle-xmark');
+                  return;
+                }
+              } catch {
+                // Network error - keep polling
+              }
+            }
+            addLog('Timed out waiting for completion', 'error', 'fa-clock');
+            setStatus('failed');
+          };
+          pollForCompletion();
+        } else {
+          // in_progress - just show current state
+          addLog(`Operation in progress: ${op.status}`, 'info', 'fa-spinner');
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        addLog(`Failed to recover operation: ${errMsg}`, 'error', 'fa-circle-xmark');
+      }
+    };
+
+    fetchOperation();
+  }, [isRecoveryMode, urlOperationId]);
 
   // Handle reconnection after self-restart: poll operation status to see if it completed
   useEffect(() => {
@@ -709,6 +820,8 @@ export function OperationProgressPage() {
       }
 
       setOperationId(response.data.operation_id);
+      // Add operation ID to URL for recovery after page refresh
+      setSearchParams({ id: response.data.operation_id }, { replace: true });
       addLog(`Operation started: ${response.data.operation_id.substring(0, 8)}...`, 'info', 'fa-play');
 
       // Fetch operation details to get expected dependents
@@ -913,6 +1026,10 @@ export function OperationProgressPage() {
       if (data.success) {
         const newOpId = data.data?.operation_id;
         setOperationId(newOpId);
+        if (newOpId) {
+          // Add operation ID to URL for recovery after page refresh
+          setSearchParams({ id: newOpId }, { replace: true });
+        }
         addLog(`Rollback operation started`, 'info', 'fa-play');
 
         if (newOpId) {
@@ -1299,8 +1416,8 @@ export function OperationProgressPage() {
     }
   }, [status, containers.length, operationType, logs.length]);
 
-  // Redirect if no operation info
-  if (!operationInfo) {
+  // Show error only if no operation info AND not in recovery mode
+  if (!operationInfo && !isRecoveryMode) {
     return (
       <div className="progress-page operation-progress-page">
         <header className="page-header">
@@ -1329,6 +1446,19 @@ export function OperationProgressPage() {
   const hasErrors = failedCount > 0 || status === 'failed';
 
   const getPageTitle = () => {
+    // Handle recovery mode
+    if (isRecoveryMode && recoveredOperation) {
+      const opType = recoveredOperation.operation_type;
+      switch (opType) {
+        case 'restart': return 'Restarting Container';
+        case 'single': return 'Updating Container';
+        case 'batch': return 'Updating Containers';
+        case 'rollback': return 'Rolling Back';
+        case 'stop': return 'Stopping Container';
+        case 'remove': return 'Removing Container';
+        default: return 'Operation Progress';
+      }
+    }
     switch (operationType) {
       case 'restart': return 'Restarting Container';
       case 'update': return 'Updating Containers';
@@ -1362,6 +1492,10 @@ export function OperationProgressPage() {
       if (hasErrors) {
         return 'Operation failed';
       }
+      // Handle recovery mode completion messages
+      if (isRecoveryMode && recoveredOperation) {
+        return recoveredOperation.error_message || 'Completed successfully!';
+      }
       switch (operationType) {
         case 'restart': return 'Container restarted successfully!';
         case 'update': return 'All updates completed successfully!';
@@ -1380,6 +1514,12 @@ export function OperationProgressPage() {
         const containerName = operationType === 'update' && containers.find(c => c.status === 'in_progress')?.name;
         return containerName ? `${containerName}: ${stageInfo.label}` : stageInfo.label;
       }
+    }
+
+    // Handle recovery mode in-progress messages
+    if (isRecoveryMode) {
+      const containerName = recoveredOperation?.container_name || containers[0]?.name || 'Container';
+      return `Recovering status for ${containerName}...`;
     }
 
     switch (operationType) {
