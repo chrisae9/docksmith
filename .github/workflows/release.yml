@@ -43,17 +43,27 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           echo "tags=ghcr.io/chrisae9/docksmith:${VERSION},ghcr.io/chrisae9/docksmith:latest" >> $GITHUB_OUTPUT
 
-      - name: Get tag message
+      - name: Get tag message and changelog
         id: tag_message
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           # Fetch tags to get annotations
           git fetch --tags --force
-          # Extract tag message (skip the first line which is the tag name)
-          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${GITHUB_REF#refs/tags/})
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          # Extract tag message
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' $CURRENT_TAG)
+          # Get previous tag for changelog link
+          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "^$CURRENT_TAG$" | tail -1)
+          if [ "$PREV_TAG" != "$CURRENT_TAG" ] && [ -n "$PREV_TAG" ]; then
+            CHANGELOG_LINK="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}"
+          else
+            CHANGELOG_LINK="**Full Changelog**: https://github.com/${{ github.repository }}/commits/${CURRENT_TAG}"
+          fi
           # Use delimiter for multiline output
           echo "message<<EOF" >> $GITHUB_OUTPUT
           echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG_LINK" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - uses: docker/build-push-action@v6
