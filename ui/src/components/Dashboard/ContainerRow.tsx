@@ -1,6 +1,6 @@
 import type { ContainerInfo } from '../../types/api';
 import { ChangeType } from '../../types/api';
-import { isUpdatable } from '../../utils/status';
+import { isActionable } from '../../utils/status';
 
 interface ContainerRowProps {
   container: ContainerInfo;
@@ -11,7 +11,9 @@ interface ContainerRowProps {
 }
 
 export function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
-  const hasUpdate = isUpdatable(container.status);
+  const hasAction = isActionable(container.status);
+  const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
+  const isMismatchStatus = container.status === 'COMPOSE_MISMATCH';
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 
   // Check restart dependencies
@@ -42,8 +44,11 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
         return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
       case 'LOCAL_IMAGE':
         return <span className="dot local" title="Local image"></span>;
-      case 'COMPOSE_MISMATCH':
-        return <span className="dot error" title="Container image doesn't match compose file"></span>;
+      case 'COMPOSE_MISMATCH': {
+        const runningImg = container.image || 'unknown';
+        const composeImg = container.compose_image || 'unknown';
+        return <span className="dot mismatch" title={`Running: ${runningImg}\nCompose: ${composeImg}`}></span>;
+      }
       case 'IGNORED':
         return <span className="dot ignored" title="Ignored"></span>;
       default:
@@ -89,7 +94,14 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
       return 'Local image';
     }
     if (container.status === 'COMPOSE_MISMATCH') {
-      return 'Mismatch detected';
+      // Show detailed mismatch info: running tag → compose tag
+      const runningTag = container.image.includes(':')
+        ? container.image.split(':').pop()
+        : container.current_tag || 'unknown';
+      const composeTag = container.compose_image?.includes(':')
+        ? container.compose_image.split(':').pop()
+        : container.compose_image || 'unknown';
+      return `${runningTag} → ${composeTag}`;
     }
     if (container.status === 'IGNORED') {
       return 'Ignored';
@@ -134,7 +146,7 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
 
   return (
     <li
-      className={`${hasUpdate ? 'has-update' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
+      className={`${hasUpdate ? 'has-update' : ''} ${isMismatchStatus ? 'has-mismatch' : ''} ${selected ? 'selected' : ''} ${isBlocked ? 'blocked' : ''} container-row-clickable`}
       onClick={handleRowClick}
       onKeyDown={handleKeyDown}
       tabIndex={0}
@@ -146,7 +158,7 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
         onClick={(e) => {
           e.stopPropagation();
           // If container has update, toggle selection when clicking the zone
-          if (hasUpdate) {
+          if (hasAction) {
             if ((e.target as HTMLElement).tagName !== 'INPUT') {
               onToggle();
             }
@@ -154,13 +166,13 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
           // Otherwise just absorb the click (don't navigate)
         }}
       >
-        {hasUpdate && (
+        {hasAction && (
           <div className="checkbox-area">
             <input
               type="checkbox"
               checked={selected}
               onChange={onToggle}
-              aria-label={`Select ${container.container_name} for update`}
+              aria-label={`Select ${container.container_name} for ${isMismatchStatus ? 'fix' : 'update'}`}
             />
           </div>
         )}

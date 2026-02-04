@@ -43,6 +43,18 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	log.Printf("COMPOSE: Recreating service %s using compose file (host: %s, container: %s)",
 		serviceName, hostComposeFilePath, containerComposeFilePath)
 
+	// First, stop and remove the existing container
+	// This is necessary because docker compose up --force-recreate doesn't work when
+	// the container was created via docker run instead of docker compose
+	log.Printf("COMPOSE: Stopping and removing existing container %s", container.Name)
+	stopCmd := exec.CommandContext(ctx, "docker", "stop", container.Name)
+	stopOutput, _ := stopCmd.CombinedOutput() // Ignore errors if already stopped
+	log.Printf("COMPOSE: Stop output: %s", stopOutput)
+
+	rmCmd := exec.CommandContext(ctx, "docker", "rm", container.Name)
+	rmOutput, _ := rmCmd.CombinedOutput() // Ignore errors if doesn't exist
+	log.Printf("COMPOSE: Remove output: %s", rmOutput)
+
 	// Build the docker compose up command
 	// Use -d for detached mode
 	// Use --project-directory with HOST path so volume mounts resolve correctly for Docker daemon

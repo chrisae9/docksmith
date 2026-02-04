@@ -490,3 +490,15 @@ export async function systemPrune(
   const query = params.toString();
   return fetchAPI(`/prune/system${query ? `?${query}` : ''}`, { method: 'POST' });
 }
+
+// Fix compose mismatch - sync container to compose file specification
+export async function fixComposeMismatch(containerName: string): Promise<APIResponse<{
+  operation_id: string;
+  container_name: string;
+  status: string;
+  message: string;
+}>> {
+  return fetchAPI(`/fix-compose-mismatch/${encodeURIComponent(containerName)}`, {
+    method: 'POST',
+  });
+}

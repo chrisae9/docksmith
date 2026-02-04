@@ -202,6 +202,11 @@
   color: var(--color-op-remove);
 }
 
+.op-type-badge.fix {
+  background: var(--color-warning-dim);
+  color: var(--color-warning);
+}
+
 .op-label-info {
   font-size: var(--text-sm);
   color: var(--color-text-secondary);

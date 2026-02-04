@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, stopContainer, removeContainer } from '../api/client';
+import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, stopContainer, removeContainer, fixComposeMismatch } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -10,7 +10,7 @@ import '../styles/progress-common.css';
 import './OperationProgressPage.css';
 
 // Operation types
-type OperationType = 'restart' | 'update' | 'rollback' | 'stop' | 'remove' | 'stackRestart' | 'stackStop';
+type OperationType = 'restart' | 'update' | 'rollback' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed';
 
 // Restart operation info (includes save settings)
 interface RestartOperation {
@@ -79,7 +79,31 @@ interface StackStopOperation {
   containers: string[];
 }
 
-type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation;
+// Fix mismatch operation info (sync container to compose file)
+interface FixMismatchOperation {
+  type: 'fixMismatch';
+  containerName: string;
+}
+
+// Batch fix mismatch operation info (sync multiple containers to compose files)
+interface BatchFixMismatchOperation {
+  type: 'batchFixMismatch';
+  containerNames: string[];
+}
+
+// Mixed operation info (both updates and mismatches selected together)
+interface MixedOperation {
+  type: 'mixed';
+  updates: Array<{
+    name: string;
+    target_version: string;
+    stack: string;
+    force?: boolean;
+  }>;
+  mismatches: string[];
+}
+
+type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation;
 
 export function OperationProgressPage() {
   const navigate = useNavigate();
@@ -113,6 +137,15 @@ export function OperationProgressPage() {
     }
     if (state.stackStop) {
       return { type: 'stackStop', ...state.stackStop };
+    }
+    if (state.fixMismatch) {
+      return { type: 'fixMismatch', ...state.fixMismatch };
+    }
+    if (state.batchFixMismatch) {
+      return { type: 'batchFixMismatch', ...state.batchFixMismatch };
+    }
+    if (state.mixed) {
+      return { type: 'mixed', ...state.mixed };
     }
     return null;
   };
@@ -705,6 +738,15 @@ export function OperationProgressPage() {
         break;
       case 'stackStop':
         runStackStop(operationInfo);
+        break;
+      case 'fixMismatch':
+        runFixMismatch(operationInfo);
+        break;
+      case 'batchFixMismatch':
+        runBatchFixMismatch(operationInfo as BatchFixMismatchOperation);
+        break;
+      case 'mixed':
+        runMixed(operationInfo as MixedOperation);
         break;
     }
 
@@ -1354,6 +1396,350 @@ export function OperationProgressPage() {
     }
   };
 
+  // Run fix mismatch operation
+  const runFixMismatch = async (info: FixMismatchOperation) => {
+    const { containerName } = info;
+
+    setContainers([{
+      name: containerName,
+      status: 'in_progress',
+      message: 'Syncing container to compose file...',
+    }]);
+
+    addLog(`Fixing compose mismatch for ${containerName}...`, 'info', 'fa-rotate');
+
+    try {
+      const response = await fixComposeMismatch(containerName);
+
+      if (!response.success || !response.data?.operation_id) {
+        throw new Error(response.error || 'Failed to start fix mismatch operation');
+      }
+
+      setOperationId(response.data.operation_id);
+      // Add operation ID to URL for recovery after page refresh
+      setSearchParams({ id: response.data.operation_id }, { replace: true });
+      addLog(`Operation started: ${response.data.operation_id.substring(0, 8)}...`, 'info', 'fa-play');
+
+      // Poll for completion
+      let completed = false;
+      let pollCount = 0;
+      const maxPolls = 120;
+
+      while (!completed && pollCount < maxPolls) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        pollCount++;
+
+        if (status !== 'in_progress') {
+          completed = true;
+          break;
+        }
+
+        try {
+          const opResponse = await fetch(`/api/operations/${response.data.operation_id}`);
+          const opData = await opResponse.json();
+
+          if (opData.success && opData.data) {
+            const op = opData.data;
+
+            if (op.status === 'complete') {
+              completed = true;
+              setStatus('success');
+              updateContainer(containerName, { status: 'success', message: 'Fixed successfully', percent: 100 });
+              addLog('Compose mismatch fixed successfully', 'success', 'fa-circle-check');
+            } else if (op.status === 'failed') {
+              completed = true;
+              setStatus('failed');
+              updateContainer(containerName, { status: 'failed', message: op.error_message, error: op.error_message });
+              addLog(op.error_message || 'Fix mismatch failed', 'error', 'fa-circle-xmark');
+            }
+          }
+        } catch {
+          // Continue polling on error
+        }
+      }
+
+      if (!completed) {
+        setStatus('failed');
+        updateContainer(containerName, { status: 'failed', message: 'Timed out waiting for completion' });
+        addLog('Timed out waiting for completion', 'error', 'fa-clock');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to fix compose mismatch';
+      setStatus('failed');
+      updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+    }
+  };
+
+  // Run batch fix mismatch operation (sequential)
+  const runBatchFixMismatch = async (info: BatchFixMismatchOperation) => {
+    const { containerNames } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'pending' as const,
+      message: 'Waiting...',
+    })));
+
+    addLog(`Fixing ${containerNames.length} compose mismatch(es)...`, 'info', 'fa-rotate');
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const containerName of containerNames) {
+      updateContainer(containerName, { status: 'in_progress', message: 'Syncing container to compose file...' });
+      addLog(`Fixing ${containerName}...`, 'info', 'fa-rotate');
+
+      try {
+        const response = await fixComposeMismatch(containerName);
+
+        if (!response.success || !response.data?.operation_id) {
+          throw new Error(response.error || 'Failed to start fix mismatch operation');
+        }
+
+        // Poll for completion
+        let completed = false;
+        let pollCount = 0;
+        const maxPolls = 60;
+
+        while (!completed && pollCount < maxPolls) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          pollCount++;
+
+          try {
+            const opResponse = await fetch(`/api/operations/${response.data.operation_id}`);
+            const opData = await opResponse.json();
+
+            if (opData.success && opData.data) {
+              const op = opData.data;
+
+              if (op.status === 'complete') {
+                completed = true;
+                successCount++;
+                updateContainer(containerName, { status: 'success', message: 'Fixed successfully', percent: 100 });
+                addLog(`${containerName} fixed successfully`, 'success', 'fa-circle-check');
+              } else if (op.status === 'failed') {
+                completed = true;
+                failedCount++;
+                updateContainer(containerName, { status: 'failed', message: op.error_message, error: op.error_message });
+                addLog(`${containerName} failed: ${op.error_message || 'Unknown error'}`, 'error', 'fa-circle-xmark');
+              }
+            }
+          } catch {
+            // Continue polling on error
+          }
+        }
+
+        if (!completed) {
+          failedCount++;
+          updateContainer(containerName, { status: 'failed', message: 'Timed out waiting for completion' });
+          addLog(`${containerName} timed out`, 'error', 'fa-clock');
+        }
+      } catch (err) {
+        failedCount++;
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+        addLog(`${containerName} failed: ${errorMsg}`, 'error', 'fa-circle-xmark');
+      }
+    }
+
+    // Final status
+    if (failedCount > 0) {
+      if (successCount > 0) {
+        addLog(`Completed with errors: ${successCount} fixed, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('failed');
+      } else {
+        addLog(`All ${failedCount} fix(es) failed`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      }
+    } else {
+      addLog(`All ${successCount} compose mismatch(es) fixed successfully`, 'success', 'fa-circle-check');
+      setStatus('success');
+    }
+  };
+
+  // Run mixed operation (updates + mismatches)
+  const runMixed = async (info: MixedOperation) => {
+    const { updates, mismatches } = info;
+    const totalCount = updates.length + mismatches.length;
+
+    addLog(`Processing ${totalCount} item(s): ${updates.length} update(s) and ${mismatches.length} mismatch fix(es)...`, 'info', 'fa-layer-group');
+
+    // Initialize containers for both types
+    const allContainers = [
+      ...updates.map(u => ({ name: u.name, status: 'pending' as const, message: 'Update pending' })),
+      ...mismatches.map(name => ({ name, status: 'pending' as const, message: 'Fix pending' })),
+    ];
+    setContainers(allContainers);
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    // First, run updates via batch update API
+    if (updates.length > 0) {
+      addLog(`Starting ${updates.length} update(s)...`, 'info', 'fa-download');
+
+      try {
+        const response = await triggerBatchUpdate(updates);
+
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to start batch update');
+        }
+
+        // Track operations (batch update returns stack-level operations)
+        if (response.data?.operations) {
+          for (const stackOp of response.data.operations) {
+            if (stackOp.operation_id) {
+              // Mark all containers in this stack as in progress
+              for (const containerName of stackOp.containers) {
+                updateContainer(containerName, { status: 'in_progress', message: 'Updating...' });
+                containerToOpIdRef.current.set(containerName, stackOp.operation_id);
+              }
+            } else if (stackOp.error) {
+              // Mark all containers in this stack as failed
+              for (const containerName of stackOp.containers) {
+                failedCount++;
+                updateContainer(containerName, { status: 'failed', message: stackOp.error || 'Failed to start', error: stackOp.error });
+                addLog(`${containerName} failed to start: ${stackOp.error || 'Unknown error'}`, 'error', 'fa-circle-xmark');
+              }
+            }
+          }
+        }
+
+        // Poll for update completions
+        const pendingUpdates = new Set(updates.map(u => u.name).filter(name =>
+          containerToOpIdRef.current.has(name)
+        ));
+
+        let pollCount = 0;
+        const maxPolls = 120;
+
+        while (pendingUpdates.size > 0 && pollCount < maxPolls) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          pollCount++;
+
+          for (const name of pendingUpdates) {
+            const opId = containerToOpIdRef.current.get(name);
+            if (!opId) continue;
+
+            try {
+              const opResponse = await fetch(`/api/operations/${opId}`);
+              const opData = await opResponse.json();
+
+              if (opData.success && opData.data) {
+                const op = opData.data;
+                if (op.status === 'complete') {
+                  pendingUpdates.delete(name);
+                  successCount++;
+                  updateContainer(name, { status: 'success', message: 'Updated', percent: 100 });
+                  addLog(`${name} updated successfully`, 'success', 'fa-circle-check');
+                } else if (op.status === 'failed') {
+                  pendingUpdates.delete(name);
+                  failedCount++;
+                  updateContainer(name, { status: 'failed', message: op.error_message, error: op.error_message });
+                  addLog(`${name} update failed: ${op.error_message || 'Unknown error'}`, 'error', 'fa-circle-xmark');
+                }
+              }
+            } catch {
+              // Continue polling
+            }
+          }
+        }
+
+        // Handle timeouts
+        for (const name of pendingUpdates) {
+          failedCount++;
+          updateContainer(name, { status: 'failed', message: 'Timed out' });
+          addLog(`${name} timed out`, 'error', 'fa-clock');
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Batch update failed';
+        addLog(errorMsg, 'error', 'fa-circle-xmark');
+        // Mark all pending updates as failed
+        for (const u of updates) {
+          const container = allContainers.find(c => c.name === u.name);
+          if (container?.status === 'pending') {
+            failedCount++;
+            updateContainer(u.name, { status: 'failed', message: errorMsg, error: errorMsg });
+          }
+        }
+      }
+    }
+
+    // Then, run mismatch fixes sequentially
+    if (mismatches.length > 0) {
+      addLog(`Starting ${mismatches.length} mismatch fix(es)...`, 'info', 'fa-rotate');
+
+      for (const containerName of mismatches) {
+        updateContainer(containerName, { status: 'in_progress', message: 'Syncing to compose file...' });
+
+        try {
+          const response = await fixComposeMismatch(containerName);
+
+          if (!response.success || !response.data?.operation_id) {
+            throw new Error(response.error || 'Failed to start');
+          }
+
+          // Poll for completion
+          let completed = false;
+          let pollCount = 0;
+          const maxPolls = 60;
+
+          while (!completed && pollCount < maxPolls) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            pollCount++;
+
+            try {
+              const opResponse = await fetch(`/api/operations/${response.data.operation_id}`);
+              const opData = await opResponse.json();
+
+              if (opData.success && opData.data) {
+                const op = opData.data;
+                if (op.status === 'complete') {
+                  completed = true;
+                  successCount++;
+                  updateContainer(containerName, { status: 'success', message: 'Fixed', percent: 100 });
+                  addLog(`${containerName} fixed successfully`, 'success', 'fa-circle-check');
+                } else if (op.status === 'failed') {
+                  completed = true;
+                  failedCount++;
+                  updateContainer(containerName, { status: 'failed', message: op.error_message, error: op.error_message });
+                  addLog(`${containerName} fix failed: ${op.error_message || 'Unknown error'}`, 'error', 'fa-circle-xmark');
+                }
+              }
+            } catch {
+              // Continue polling
+            }
+          }
+
+          if (!completed) {
+            failedCount++;
+            updateContainer(containerName, { status: 'failed', message: 'Timed out' });
+            addLog(`${containerName} timed out`, 'error', 'fa-clock');
+          }
+        } catch (err) {
+          failedCount++;
+          const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+          updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+          addLog(`${containerName} fix failed: ${errorMsg}`, 'error', 'fa-circle-xmark');
+        }
+      }
+    }
+
+    // Final status
+    if (failedCount > 0) {
+      if (successCount > 0) {
+        addLog(`Completed with errors: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+      } else {
+        addLog(`All ${failedCount} operation(s) failed`, 'error', 'fa-circle-xmark');
+      }
+      setStatus('failed');
+    } else {
+      addLog(`All ${successCount} operation(s) completed successfully`, 'success', 'fa-circle-check');
+      setStatus('success');
+    }
+  };
+
   // Handle force retry
   const handleForceRetry = () => {
     if (!operationInfo) return;
@@ -1467,6 +1853,9 @@ export function OperationProgressPage() {
       case 'remove': return 'Removing Container';
       case 'stackRestart': return 'Restarting Stack';
       case 'stackStop': return 'Stopping Stack';
+      case 'fixMismatch': return 'Fixing Compose Mismatch';
+      case 'batchFixMismatch': return 'Fixing Compose Mismatches';
+      case 'mixed': return 'Processing Containers';
       default: return 'Progress';
     }
   };
@@ -1504,6 +1893,9 @@ export function OperationProgressPage() {
         case 'remove': return 'Container removed successfully!';
         case 'stackRestart': return 'Stack restarted successfully!';
         case 'stackStop': return 'Stack stopped successfully!';
+        case 'fixMismatch': return 'Compose mismatch fixed successfully!';
+        case 'batchFixMismatch': return 'All compose mismatches fixed successfully!';
+        case 'mixed': return 'All operations completed successfully!';
         default: return 'Completed successfully!';
       }
     }
@@ -1530,6 +1922,9 @@ export function OperationProgressPage() {
       case 'remove': return `Removing ${(operationInfo as RemoveOperation).containerName}...`;
       case 'stackRestart': return `Restarting ${(operationInfo as StackRestartOperation).containers.length} container(s) in "${(operationInfo as StackRestartOperation).stackName}"...`;
       case 'stackStop': return `Stopping ${(operationInfo as StackStopOperation).containers.length} container(s) in "${(operationInfo as StackStopOperation).stackName}"...`;
+      case 'fixMismatch': return `Fixing ${(operationInfo as FixMismatchOperation).containerName}...`;
+      case 'batchFixMismatch': return `Fixing ${(operationInfo as BatchFixMismatchOperation).containerNames.length} compose mismatch(es)...`;
+      case 'mixed': return `Processing ${(operationInfo as MixedOperation).updates.length + (operationInfo as MixedOperation).mismatches.length} container(s)...`;
       default: return 'Processing...';
     }
   };

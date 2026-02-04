@@ -400,6 +400,100 @@
   cursor: pointer;
 }
 
+/* Compose Mismatch Card */
+.container-page .mismatch-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid rgba(255, 159, 10, 0.3);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.container-page .mismatch-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.container-page .mismatch-info > i {
+  font-size: 20px;
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.container-page .mismatch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.container-page .mismatch-text strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.container-page .mismatch-text span {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.container-page .mismatch-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.container-page .mismatch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.container-page .mismatch-label {
+  color: var(--color-text-tertiary);
+  min-width: 65px;
+}
+
+.container-page .mismatch-row code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.container-page .fix-mismatch-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--color-warning);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.container-page .fix-mismatch-btn:hover {
+  filter: brightness(1.1);
+}
+
 /* Info Section */
 .container-page .info-section {
   margin-bottom: 16px;

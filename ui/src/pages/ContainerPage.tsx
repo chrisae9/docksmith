@@ -679,6 +679,41 @@ export function ContainerPage() {
               </section>
             )}
 
+            {/* Compose Mismatch Card */}
+            {docksmithData?.status === 'COMPOSE_MISMATCH' && (
+              <section className="mismatch-card">
+                <div className="mismatch-info">
+                  <i className="fa-solid fa-triangle-exclamation"></i>
+                  <div className="mismatch-text">
+                    <strong>Compose Mismatch</strong>
+                    <div className="mismatch-details">
+                      <span className="mismatch-row">
+                        <span className="mismatch-label">Running:</span>
+                        <code>{docksmithData.image}</code>
+                      </span>
+                      <span className="mismatch-row">
+                        <span className="mismatch-label">Compose:</span>
+                        <code>{docksmithData.compose_image || 'unknown'}</code>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  className="fix-mismatch-btn"
+                  onClick={() => navigate('/operation', {
+                    state: {
+                      fixMismatch: {
+                        containerName: docksmithData.container_name,
+                      }
+                    }
+                  })}
+                >
+                  <i className="fa-solid fa-rotate"></i>
+                  Fix Mismatch
+                </button>
+              </section>
+            )}
+
             {/* Labels Sync Warning */}
             {docksmithData?.labels_out_of_sync && (
               <div className="sync-warning">

@@ -31,6 +31,7 @@ export interface ContainerInfo {
   pre_update_check_fail?: string;
   pre_update_check_pass: boolean;
   health_status?: string; // Health status: "healthy", "unhealthy", "starting", "none"
+  compose_image?: string; // Image specified in compose file (for COMPOSE_MISMATCH)
   id: string;
   stack?: string;
   service?: string;

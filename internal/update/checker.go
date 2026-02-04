@@ -16,6 +16,7 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
+	"gopkg.in/yaml.v3"
 	"github.com/chis/docksmith/internal/version"
 )
 
@@ -178,7 +179,7 @@ func (c *Checker) shouldIgnoreContainer(container docker.Container) bool {
 
 // checkComposeMismatch checks if the running container's image differs from the compose file specification.
 // Detects two scenarios:
-// 1. Container lost its tag reference and is running with bare SHA digest
+// 1. Container lost its tag reference and is running with bare SHA digest (and compose has image: spec)
 // 2. Container is running different tag than what compose file specifies
 // Returns (true, expectedImage) if there's a mismatch, (false, "") if no mismatch or unable to determine.
 func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string) {
@@ -189,21 +190,12 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 		return false, ""
 	}
 
-	// SCENARIO 1: Check if container lost its tag reference (running with bare SHA)
-	// This happens when container.Image is "sha256:..." or just the digest
-	if strings.HasPrefix(container.Image, "sha256:") || (!strings.Contains(container.Image, ":") && len(container.Image) == 64) {
-		log.Printf("Container %s: Lost tag reference - running with bare SHA digest", container.Name)
-		return true, "(lost tag reference - see compose file)"
-	}
-
-	// SCENARIO 2: Check if running image differs from compose file specification
-	// The label may contain multiple paths separated by comma
+	// First, try to load the compose file to check what it specifies
 	composeFiles := strings.Split(composeFile, ",")
 	if len(composeFiles) == 0 {
 		return false, ""
 	}
 
-	// Use the first compose file
 	composePath := strings.TrimSpace(composeFiles[0])
 	if composePath == "" {
 		return false, ""
@@ -212,9 +204,7 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 	// Load and parse the compose file (handles include-based setups)
 	composeData, err := compose.LoadComposeFileOrIncluded(composePath, container.Name)
 	if err != nil {
-		// If we can't read the compose file, we can't verify scenario 2 (file content mismatch)
-		// This is OK - scenario 1 (lost tag) already works above
-		// Note: Path translation is handled elsewhere when docksmith runs inside Docker
+		// If we can't read the compose file, we can't determine mismatch
 		return false, ""
 	}
 
@@ -226,23 +216,38 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 	}
 
 	// Extract the image specification from the service definition
-	if service.Node.Kind != 2 { // yaml.MappingNode
+	if service.Node.Kind != yaml.MappingNode {
 		return false, ""
 	}
 
 	var imageSpec string
+	var hasBuild bool
 	for i := 0; i < len(service.Node.Content); i += 2 {
 		keyNode := service.Node.Content[i]
 		if keyNode.Value == "image" && i+1 < len(service.Node.Content) {
 			valueNode := service.Node.Content[i+1]
 			imageSpec = valueNode.Value
-			break
+		}
+		if keyNode.Value == "build" {
+			hasBuild = true
 		}
 	}
 
-	if imageSpec == "" {
-		// No image spec in compose file (might be using build)
+	// If compose uses build: without image:, this is a local build - not a mismatch
+	if hasBuild && imageSpec == "" {
 		return false, ""
+	}
+
+	if imageSpec == "" {
+		// No image spec in compose file
+		return false, ""
+	}
+
+	// SCENARIO 1: Check if container lost its tag reference (running with bare SHA)
+	// This happens when container.Image is "sha256:..." or just the digest
+	if strings.HasPrefix(container.Image, "sha256:") || (!strings.Contains(container.Image, ":") && len(container.Image) == 64) {
+		log.Printf("Container %s: Lost tag reference - running with bare SHA digest, compose specifies: %s", container.Name, imageSpec)
+		return true, imageSpec
 	}
 
 	// Normalize both images for comparison (handle digest vs tag differences)
@@ -287,6 +292,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	if mismatch, expectedImage := c.checkComposeMismatch(container); mismatch {
 		log.Printf("Container %s: COMPOSE MISMATCH - running %s, compose specifies %s", container.Name, container.Image, expectedImage)
 		update.Status = ComposeMismatch
+		update.ComposeImage = expectedImage
 		update.Error = fmt.Sprintf("Running image (%s) differs from compose specification (%s)", container.Image, expectedImage)
 		return update
 	}
@@ -480,7 +486,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 					} else {
 						log.Printf("Could not resolve semver for %s, falling back to tag: %s", container.Name, checkTag)
 						// Couldn't find semantic version, fall back to tag name
-						update.LatestVersion = fmt.Sprintf("(newer image available, tag: %s)", checkTag)
+						// Set the actual tag (not a message) so it can be used for updates
+						update.LatestVersion = checkTag
 					}
 					// Mark digest check complete
 					digestCheckComplete = true
@@ -630,7 +637,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 					} else {
 						log.Printf("Could not resolve semver for %s, falling back to tag: %s", container.Name, checkTag)
 						// Couldn't find semantic version, fall back to tag name
-						update.LatestVersion = fmt.Sprintf("(newer image available, tag: %s)", checkTag)
+						// Set the actual tag (not a message) so it can be used for updates
+						update.LatestVersion = checkTag
 					}
 				} else {
 					update.Status = UpToDate

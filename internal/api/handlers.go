@@ -391,6 +391,35 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleFixComposeMismatch triggers a fix for containers where the running image
+// doesn't match what's specified in the compose file
+func (s *Server) handleFixComposeMismatch(w http.ResponseWriter, r *http.Request) {
+	if !s.requireUpdateOrchestrator(w) {
+		return
+	}
+
+	ctx := r.Context()
+	containerName := r.PathValue("name")
+
+	if !validateRequired(w, "container name", containerName) {
+		return
+	}
+
+	operationID, err := s.updateOrchestrator.FixComposeMismatch(ctx, containerName)
+	if err != nil {
+		log.Printf("Fix compose mismatch failed for %s: %v", containerName, err)
+		RespondInternalError(w, err)
+		return
+	}
+
+	RespondSuccess(w, map[string]any{
+		"operation_id":   operationID,
+		"container_name": containerName,
+		"status":         "started",
+		"message":        "Fix compose mismatch initiated",
+	})
+}
+
 // Helper functions
 
 // HistoryEntry represents a unified history entry (same as CLI)

@@ -127,26 +127,32 @@ func NewServer(cfg Config) *Server {
 	// Create background checker using the discovery orchestrator
 	backgroundChecker := update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
 
-	// Create rate limiter with path-specific limits
-	rateLimiter := NewPathRateLimiter(DefaultRateLimitConfig())
-	// Allow higher rate for SSE events endpoint (long-lived connections)
-	rateLimiter.SetPathLimit("/api/events", RateLimitConfig{
-		RequestsPerMinute: 10,
-		BurstSize:         5,
-		CleanupInterval:   5 * time.Minute,
-	})
-	// Allow higher rate for health checks
-	rateLimiter.SetPathLimit("/api/health", RateLimitConfig{
-		RequestsPerMinute: 120,
-		BurstSize:         20,
-		CleanupInterval:   5 * time.Minute,
-	})
-	// Lower rate for mutation endpoints
-	rateLimiter.SetPathLimit("/api/update", RateLimitConfig{
-		RequestsPerMinute: 30,
-		BurstSize:         5,
-		CleanupInterval:   5 * time.Minute,
-	})
+	// Create rate limiter with path-specific limits (can be disabled for testing)
+	var rateLimiter *PathRateLimiter
+	disableRateLimit := os.Getenv("DOCKSMITH_DISABLE_RATE_LIMIT") == "true"
+	if !disableRateLimit {
+		rateLimiter = NewPathRateLimiter(DefaultRateLimitConfig())
+		// Allow higher rate for SSE events endpoint (long-lived connections)
+		rateLimiter.SetPathLimit("/api/events", RateLimitConfig{
+			RequestsPerMinute: 10,
+			BurstSize:         5,
+			CleanupInterval:   5 * time.Minute,
+		})
+		// Allow higher rate for health checks
+		rateLimiter.SetPathLimit("/api/health", RateLimitConfig{
+			RequestsPerMinute: 120,
+			BurstSize:         20,
+			CleanupInterval:   5 * time.Minute,
+		})
+		// Lower rate for mutation endpoints
+		rateLimiter.SetPathLimit("/api/update", RateLimitConfig{
+			RequestsPerMinute: 30,
+			BurstSize:         5,
+			CleanupInterval:   5 * time.Minute,
+		})
+	} else {
+		log.Printf("Rate limiting disabled via DOCKSMITH_DISABLE_RATE_LIMIT")
+	}
 
 	s := &Server{
 		dockerService:         cfg.DockerService,
@@ -167,14 +173,17 @@ func NewServer(cfg Config) *Server {
 	mux := http.NewServeMux()
 	s.registerRoutes(mux, cfg.StaticDir)
 
-	// Apply middleware: CORS -> Correlation ID -> Rate Limit -> Request Logging -> Handler
-	handler := ChainMiddleware(mux,
+	// Apply middleware: CORS -> Correlation ID -> Rate Limit (optional) -> Request Logging -> Handler
+	middlewares := []func(http.Handler) http.Handler{
 		corsMiddleware,
 		CorrelationIDMiddleware,
-		PathRateLimitMiddleware(rateLimiter),
-		// Uncomment to enable request logging (can be verbose):
-		// RequestLoggingMiddleware,
-	)
+	}
+	if rateLimiter != nil {
+		middlewares = append(middlewares, PathRateLimitMiddleware(rateLimiter))
+	}
+	// Uncomment to enable request logging (can be verbose):
+	// middlewares = append(middlewares, RequestLoggingMiddleware)
+	handler := ChainMiddleware(mux, middlewares...)
 
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -233,6 +242,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/update", s.handleUpdate)
 	mux.HandleFunc("POST /api/update/batch", s.handleBatchUpdate)
 	mux.HandleFunc("POST /api/rollback", s.handleRollback)
+	mux.HandleFunc("POST /api/fix-compose-mismatch/{name}", s.handleFixComposeMismatch)
 
 	// Restart operations
 	mux.HandleFunc("POST /api/restart/start/{name}", s.handleStartRestart) // New SSE-based restart

@@ -94,6 +94,12 @@ Docksmith exposes a REST API at `/api/`.
 | DELETE | `/api/networks/{id}` | Remove a network |
 | DELETE | `/api/volumes/{name}` | Remove a volume |
 
+### Compose Mismatch
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/fix-compose-mismatch/{name}` | Fix container where running image differs from compose file |
+
 ### Container Operations
 
 | Method | Endpoint | Description |
@@ -175,6 +181,7 @@ Response:
         "image": "nginx:1.24.0",
         "current_version": "1.24.0",
         "latest_version": "1.25.3",
+        "status": "UPDATE_AVAILABLE",
         "update_available": true,
         "labels": {
           "docksmith.version-pin-major": "false"
@@ -186,6 +193,39 @@ Response:
   }
 }
 ```
+
+#### Container Status Values
+
+| Status | Description |
+|--------|-------------|
+| `UP_TO_DATE` | Container is running the latest version |
+| `UP_TO_DATE_PINNABLE` | Container uses `latest` tag, can be pinned to specific version |
+| `UPDATE_AVAILABLE` | Newer version available |
+| `UPDATE_AVAILABLE_BLOCKED` | Update available but blocked by pre-update check |
+| `COMPOSE_MISMATCH` | Running image differs from compose file specification |
+| `LOCAL_IMAGE` | Container uses locally built image (no registry) |
+| `IGNORED` | Container is ignored via `docksmith.ignore` label |
+| `ERROR` | Error checking container status |
+
+#### Compose Mismatch Details
+
+When a container has `status: "COMPOSE_MISMATCH"`, the response includes additional fields:
+
+```json
+{
+  "name": "myapp",
+  "status": "COMPOSE_MISMATCH",
+  "image": "nginx:1.24.0",
+  "compose_image": "nginx:1.25.0",
+  "error": "Running image (nginx:1.24.0) differs from compose specification (nginx:1.25.0)"
+}
+```
+
+- `image` — The image currently running
+- `compose_image` — The image specified in the compose file
+- `error` — Human-readable description of the mismatch
+
+Use `POST /api/fix-compose-mismatch/{name}` to sync the container to the compose file specification.
 
 ### GET /api/container/{name}/recheck
 
@@ -261,6 +301,40 @@ curl -X POST http://localhost:3000/api/rollback \
   -H "Content-Type: application/json" \
   -d '{"operation_id":"op_2024011510302345"}'
 ```
+
+### POST /api/fix-compose-mismatch/{name}
+
+Fix a container where the running image doesn't match the compose file specification. This can happen when:
+- The compose file was edited but the container wasn't recreated
+- The container lost its tag reference and is running with a bare SHA digest
+
+The operation will:
+1. Pull the image specified in the compose file
+2. Recreate the container with `docker compose up -d`
+
+```bash
+curl -X POST http://localhost:3000/api/fix-compose-mismatch/mycontainer
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "operation_id": "op_2024011510302345"
+  }
+}
+```
+
+Error response (e.g., container uses `build:` instead of `image:`):
+```json
+{
+  "success": false,
+  "error": "failed to extract image from compose file: no image key found for service mycontainer"
+}
+```
+
+**Note:** This endpoint only works for containers that use `image:` in their compose file. Containers using `build:` cannot be fixed this way - they need to be rebuilt manually.
 
 ### GET /api/operations
 

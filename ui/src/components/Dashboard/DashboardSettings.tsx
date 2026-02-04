@@ -6,6 +6,7 @@ export interface DashboardSettings {
   sort: SortType;
   showIgnored: boolean;
   showLocalImages: boolean;
+  showMismatch: boolean;
 }
 
 export const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
@@ -13,6 +14,7 @@ export const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
   sort: 'stack',
   showIgnored: false,
   showLocalImages: false,
+  showMismatch: true,
 };
 
 interface DashboardSettingsMenuProps {
@@ -95,6 +97,17 @@ export function DashboardSettingsMenu({
                 onChange={(e) => onSettingsChange({ showLocalImages: e.target.checked })}
               />
               <span>Show local images</span>
+            </label>
+          </div>
+
+          <div className="settings-group">
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={settings.showMismatch}
+                onChange={(e) => onSettingsChange({ showMismatch: e.target.checked })}
+              />
+              <span>Show mismatched containers</span>
             </label>
           </div>
         </div>

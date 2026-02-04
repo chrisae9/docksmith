@@ -1992,6 +1992,233 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 	log.Printf("ROLLBACK: Successfully completed rollback for container %s", container.Name)
 }
 
+// FixComposeMismatch fixes a container where the running image doesn't match the compose file.
+// This pulls the image specified in the compose file and recreates the container.
+func (o *UpdateOrchestrator) FixComposeMismatch(ctx context.Context, containerName string) (string, error) {
+	operationID := uuid.New().String()
+
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for _, c := range containers {
+		if c.Name == containerName || c.ID == containerName {
+			targetContainer = &c
+			break
+		}
+	}
+
+	if targetContainer == nil {
+		return "", fmt.Errorf("container not found: %s", containerName)
+	}
+
+	// Get compose file path to read the expected image
+	composeFilePath := o.getComposeFilePath(targetContainer)
+	if composeFilePath == "" {
+		return "", fmt.Errorf("no compose file found for container %s", containerName)
+	}
+
+	resolvedPath, err := o.resolveComposeFile(composeFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve compose file: %w", err)
+	}
+
+	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
+
+	if !o.acquireStackLock(stackName) {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "fix_mismatch"); err != nil {
+			return "", fmt.Errorf("failed to queue operation: %w", err)
+		}
+		return operationID, nil
+	}
+
+	// Get service name from labels
+	serviceName := targetContainer.Labels["com.docker.compose.service"]
+	if serviceName == "" {
+		o.releaseStackLock(stackName)
+		return "", fmt.Errorf("container %s has no compose service label", containerName)
+	}
+
+	// Read the compose file to get the expected image tag
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		o.releaseStackLock(stackName)
+		return "", fmt.Errorf("failed to read compose file: %w", err)
+	}
+
+	expectedImage, err := extractImageFromCompose(content, serviceName)
+	if err != nil {
+		o.releaseStackLock(stackName)
+		return "", fmt.Errorf("failed to extract image from compose file: %w", err)
+	}
+
+	log.Printf("FIX_MISMATCH: Container %s running %s, compose expects %s", containerName, targetContainer.Image, expectedImage)
+
+	// Extract current and target versions for operation tracking
+	currentVersion := ""
+	if parts := strings.Split(targetContainer.Image, ":"); len(parts) >= 2 {
+		currentVersion = parts[len(parts)-1]
+	}
+	targetVersion := ""
+	if parts := strings.Split(expectedImage, ":"); len(parts) >= 2 {
+		targetVersion = parts[len(parts)-1]
+	}
+
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   targetContainer.ID,
+		ContainerName: containerName,
+		StackName:     stackName,
+		OperationType: "fix_mismatch",
+		Status:        "validating",
+		OldVersion:    currentVersion,
+		NewVersion:    targetVersion,
+	}
+
+	if o.storage != nil {
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			o.releaseStackLock(stackName)
+			return "", fmt.Errorf("failed to save operation: %w", err)
+		}
+	}
+
+	go o.executeFixMismatch(context.Background(), operationID, targetContainer, expectedImage, stackName)
+
+	return operationID, nil
+}
+
+// executeFixMismatch pulls the image specified in compose file and recreates the container
+func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID string, container *docker.Container, expectedImage, stackName string) {
+	defer o.releaseStackLock(stackName)
+
+	log.Printf("FIX_MISMATCH: Starting fix for operation=%s container=%s expected=%s", operationID, container.Name, expectedImage)
+
+	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Validating permissions")
+
+	if err := o.checkPermissions(ctx, container); err != nil {
+		o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Permission check failed: %v", err))
+		return
+	}
+
+	// Set started_at timestamp
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	// Pull the expected image
+	log.Printf("FIX_MISMATCH: Pulling image %s", expectedImage)
+	o.publishProgress(operationID, container.Name, stackName, "pulling_image", 20, fmt.Sprintf("Pulling image: %s", expectedImage))
+
+	progressChan := make(chan PullProgress, 10)
+	go func() {
+		for progress := range progressChan {
+			percent := 20 + (progress.Percent * 40 / 100)
+			o.publishProgress(operationID, container.Name, stackName, "pulling_image", percent, progress.Status)
+		}
+	}()
+
+	if err := o.pullImage(ctx, expectedImage, progressChan); err != nil {
+		close(progressChan)
+		o.failOperation(ctx, operationID, "pulling_image", fmt.Sprintf("Image pull failed: %v", err))
+		return
+	}
+	close(progressChan)
+
+	// Recreate the container using docker compose up -d
+	log.Printf("FIX_MISMATCH: Recreating container %s", container.Name)
+	o.publishProgress(operationID, container.Name, stackName, "recreating", 60, "Recreating container")
+
+	if _, err := o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, expectedImage); err != nil {
+		o.failOperation(ctx, operationID, "recreating", fmt.Sprintf("Recreation failed: %v", err))
+		return
+	}
+
+	// Health check
+	o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Verifying health")
+
+	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
+		o.failOperation(ctx, operationID, "health_check", fmt.Sprintf("Health check failed: %v", err))
+		return
+	}
+
+	log.Printf("FIX_MISMATCH: Health check passed for operation=%s, marking complete", operationID)
+	o.publishProgress(operationID, container.Name, stackName, "complete", 100, "Fix completed successfully")
+
+	completedNow := time.Now()
+	completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if completedFound {
+		completedOp.Status = "complete"
+		completedOp.CompletedAt = &completedNow
+		o.storage.SaveUpdateOperation(ctx, completedOp)
+	}
+
+	// Publish container updated event for dashboard refresh
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"container_id":   container.ID,
+				"container_name": container.Name,
+				"operation_id":   operationID,
+				"status":         "updated",
+			},
+		})
+	}
+}
+
+// extractImageFromCompose extracts the image for a service from compose file content
+func extractImageFromCompose(content []byte, serviceName string) (string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil {
+		return "", fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return "", fmt.Errorf("invalid compose file structure")
+	}
+
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("compose file root is not a mapping")
+	}
+
+	// Find services section
+	for i := 0; i < len(doc.Content)-1; i += 2 {
+		if doc.Content[i].Value == "services" {
+			servicesNode := doc.Content[i+1]
+			if servicesNode.Kind != yaml.MappingNode {
+				return "", fmt.Errorf("services section is not a mapping")
+			}
+
+			// Find the service
+			for j := 0; j < len(servicesNode.Content)-1; j += 2 {
+				if servicesNode.Content[j].Value == serviceName {
+					serviceNode := servicesNode.Content[j+1]
+					if serviceNode.Kind != yaml.MappingNode {
+						return "", fmt.Errorf("service %s is not a mapping", serviceName)
+					}
+
+					// Find the image key
+					for k := 0; k < len(serviceNode.Content)-1; k += 2 {
+						if serviceNode.Content[k].Value == "image" {
+							return serviceNode.Content[k+1].Value, nil
+						}
+					}
+					return "", fmt.Errorf("no image key found for service %s", serviceName)
+				}
+			}
+			return "", fmt.Errorf("service %s not found in compose file", serviceName)
+		}
+	}
+
+	return "", fmt.Errorf("no services section found in compose file")
+}
+
 // getComposeFilePath extracts the compose file path from container labels.
 // It translates host paths to container paths based on volume mounts.
 func (o *UpdateOrchestrator) getComposeFilePath(container *docker.Container) string {

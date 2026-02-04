@@ -10,3 +10,21 @@ export function isUpdatable(status: string): boolean {
     status === 'UP_TO_DATE_PINNABLE'
   );
 }
+
+/**
+ * Checks if a container has a compose mismatch
+ * @param status Container status string
+ * @returns true if the container has a compose mismatch
+ */
+export function isMismatch(status: string): boolean {
+  return status === 'COMPOSE_MISMATCH';
+}
+
+/**
+ * Checks if a container can have an action taken (update or fix mismatch)
+ * @param status Container status string
+ * @returns true if the container can be selected for action
+ */
+export function isActionable(status: string): boolean {
+  return isUpdatable(status) || isMismatch(status);
+}

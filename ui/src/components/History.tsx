@@ -24,7 +24,7 @@ const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack'];
 
 // Filter options for operation types
 // Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
-type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change' | 'stop' | 'remove';
+type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change' | 'stop' | 'remove' | 'fix_mismatch';
 
 export function History({ onBack: _onBack }: HistoryProps) {
   const navigate = useNavigate();
@@ -258,6 +258,7 @@ export function History({ onBack: _onBack }: HistoryProps) {
             <option value="stop">Stops</option>
             <option value="remove">Removals</option>
             <option value="label_change">Labels</option>
+            <option value="fix_mismatch">Fix Mismatch</option>
           </select>
         </div>
       </header>
@@ -309,6 +310,9 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   {op.operation_type === 'remove' && (
                     <span className="op-type-badge remove">REMOVE</span>
                   )}
+                  {op.operation_type === 'fix_mismatch' && (
+                    <span className="op-type-badge fix">FIX</span>
+                  )}
                   {op.rollback_occurred && (
                     <span className="op-type-badge rolled-back">ROLLED BACK</span>
                   )}
@@ -326,7 +330,10 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   {op.operation_type === 'remove' && (
                     <span className="op-label-info">Container removed</span>
                   )}
-                  {op.operation_type !== 'batch' && op.operation_type !== 'label_change' && op.operation_type !== 'restart' && op.operation_type !== 'stop' && op.operation_type !== 'remove' && op.new_version && (
+                  {op.operation_type === 'fix_mismatch' && (
+                    <span className="op-label-info">Compose mismatch fixed</span>
+                  )}
+                  {op.operation_type !== 'batch' && op.operation_type !== 'label_change' && op.operation_type !== 'restart' && op.operation_type !== 'stop' && op.operation_type !== 'remove' && op.operation_type !== 'fix_mismatch' && op.new_version && (
                     <span className="op-version">
                       {op.old_version && op.old_version !== op.new_version ? (
                         <>{op.old_version} → {op.new_version}</>

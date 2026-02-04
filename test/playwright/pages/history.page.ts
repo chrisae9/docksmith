@@ -82,7 +82,7 @@ export class HistoryPage {
     }
   }
 
-  async setTypeFilter(type: 'all' | 'updates' | 'rollback' | 'restart' | 'stop' | 'remove' | 'label_change') {
+  async setTypeFilter(type: 'all' | 'updates' | 'rollback' | 'restart' | 'stop' | 'remove' | 'label_change' | 'fix_mismatch') {
     await this.typeFilterSelect.selectOption(type);
   }
 

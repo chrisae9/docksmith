@@ -4,7 +4,7 @@ import { checkContainers, getContainerStatus } from '../api/client';
 import type { DiscoveryResult, ContainerInfo, Stack } from '../types/api';
 import { useEventStream } from '../hooks/useEventStream';
 import { usePeriodicRefresh } from '../hooks/usePeriodicRefresh';
-import { isUpdatable } from '../utils/status';
+import { isMismatch, isActionable, isUpdatable } from '../utils/status';
 import { useToast } from './Toast';
 import { SearchBar, StackGroup } from './shared';
 import { ContainerRow } from './Dashboard/ContainerRow';
@@ -44,7 +44,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   });
 
   // Destructure settings for convenience
-  const { filter, sort, showIgnored, showLocalImages } = settings;
+  const { filter, sort, showIgnored, showLocalImages, showMismatch } = settings;
 
   // Update settings and persist to localStorage
   const updateSettings = (updates: Partial<DashboardSettings>) => {
@@ -141,19 +141,54 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
     const containerNames = Array.from(selectedContainers);
 
-    // Build container info with stack grouping
-    const containersToUpdate = containerNames.map(name => {
+    // Separate mismatch containers from regular updates
+    const mismatchContainers: string[] = [];
+    const containersToUpdate: Array<{ name: string; target_version: string; stack: string }> = [];
+
+    containerNames.forEach(name => {
       const container = result.containers.find(c => c.container_name === name);
-      return {
-        name,
-        target_version: container?.latest_version || '',
-        stack: container?.stack || '',
-      };
+      if (!container) return;
+
+      if (isMismatch(container.status)) {
+        mismatchContainers.push(name);
+      } else {
+        containersToUpdate.push({
+          name,
+          target_version: container.latest_version || '',
+          stack: container.stack || '',
+        });
+      }
     });
 
     // Clear selection and navigate to progress page
     setSelectedContainers(new Set());
-    navigate('/operation', { state: { update: { containers: containersToUpdate } } });
+
+    // Navigate with appropriate state based on what's selected
+    if (mismatchContainers.length > 0 && containersToUpdate.length > 0) {
+      // Mixed: both updates and mismatches
+      navigate('/operation', {
+        state: {
+          mixed: {
+            updates: containersToUpdate,
+            mismatches: mismatchContainers,
+          }
+        }
+      });
+    } else if (mismatchContainers.length > 0) {
+      // Only mismatches
+      if (mismatchContainers.length === 1) {
+        navigate('/operation', {
+          state: { fixMismatch: { containerName: mismatchContainers[0] } }
+        });
+      } else {
+        navigate('/operation', {
+          state: { batchFixMismatch: { containerNames: mismatchContainers } }
+        });
+      }
+    } else {
+      // Only updates
+      navigate('/operation', { state: { update: { containers: containersToUpdate } } });
+    }
   };
 
   const toggleAllStacks = () => {
@@ -259,11 +294,11 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
   const selectAll = () => {
     if (!result) return;
-    const updatableContainers = result.containers
-      .filter(c => isUpdatable(c.status))
+    const actionableContainers = result.containers
+      .filter(c => isActionable(c.status))
       .filter(filterContainer)
       .map(c => c.container_name);
-    setSelectedContainers(new Set(updatableContainers));
+    setSelectedContainers(new Set(actionableContainers));
   };
 
   const deselectAll = () => {
@@ -271,23 +306,23 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   };
 
   const toggleStackSelection = (containers: ContainerInfo[]) => {
-    const updatableInStack = containers
-      .filter(c => isUpdatable(c.status))
+    const actionableInStack = containers
+      .filter(c => isActionable(c.status))
       .map(c => c.container_name);
 
-    if (updatableInStack.length === 0) return;
+    if (actionableInStack.length === 0) return;
 
-    // Check if all updatable containers in this stack are already selected
-    const allSelected = updatableInStack.every(name => selectedContainers.has(name));
+    // Check if all actionable containers in this stack are already selected
+    const allSelected = actionableInStack.every(name => selectedContainers.has(name));
 
     setSelectedContainers(prev => {
       const next = new Set(prev);
       if (allSelected) {
         // Deselect all in this stack
-        updatableInStack.forEach(name => next.delete(name));
+        actionableInStack.forEach(name => next.delete(name));
       } else {
-        // Select all updatable in this stack
-        updatableInStack.forEach(name => next.add(name));
+        // Select all actionable in this stack
+        actionableInStack.forEach(name => next.add(name));
       }
       return next;
     });
@@ -315,7 +350,10 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     }
     switch (filter) {
       case 'updates':
-        return isUpdatable(container.status);
+        // Show updatable containers, and mismatch containers if showMismatch is enabled
+        if (isUpdatable(container.status)) return true;
+        if (showMismatch && isMismatch(container.status)) return true;
+        return false;
       default:
         return true;
     }
@@ -514,7 +552,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </button>
           </div>
           <div className="toolbar-options">
-            {result && result.containers.some(c => isUpdatable(c.status)) && (
+            {result && result.containers.some(c => isActionable(c.status)) && (
               <button
                 onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
                 className="icon-btn select-all-btn"
@@ -596,9 +634,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 const filteredContainers = stack.containers.filter(filterContainer);
                 if (filteredContainers.length === 0) return null;
 
-                const updatableInStack = filteredContainers.filter(c => isUpdatable(c.status));
-                const allStackSelected = updatableInStack.length > 0 &&
-                  updatableInStack.every(c => selectedContainers.has(c.container_name));
+                const actionableInStack = filteredContainers.filter(c => isActionable(c.status));
+                const allStackSelected = actionableInStack.length > 0 &&
+                  actionableInStack.every(c => selectedContainers.has(c.container_name));
 
                 return (
                   <StackGroup
@@ -606,7 +644,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     name={stack.name}
                     isCollapsed={collapsedStacks.has(stack.name)}
                     onToggle={() => toggleStack(stack.name)}
-                    actions={updatableInStack.length > 0 && (
+                    actions={actionableInStack.length > 0 && (
                       <button
                         className="stack-select-btn"
                         onClick={() => toggleStackSelection(filteredContainers)}
@@ -635,9 +673,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 const standaloneFiltered = result.standalone_containers.filter(filterContainer);
                 if (standaloneFiltered.length === 0) return null;
 
-                const updatableStandalone = standaloneFiltered.filter(c => isUpdatable(c.status));
-                const allStandaloneSelected = updatableStandalone.length > 0 &&
-                  updatableStandalone.every(c => selectedContainers.has(c.container_name));
+                const actionableStandalone = standaloneFiltered.filter(c => isActionable(c.status));
+                const allStandaloneSelected = actionableStandalone.length > 0 &&
+                  actionableStandalone.every(c => selectedContainers.has(c.container_name));
 
                 return (
                   <StackGroup
@@ -645,7 +683,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                     isCollapsed={collapsedStacks.has('__standalone__')}
                     onToggle={() => toggleStack('__standalone__')}
                     isStandalone
-                    actions={updatableStandalone.length > 0 && (
+                    actions={actionableStandalone.length > 0 && (
                       <button
                         className="stack-select-btn"
                         onClick={() => toggleStackSelection(standaloneFiltered)}
@@ -713,12 +751,20 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             )}
             <div className="selection-actions">
               <span>{selectedContainers.size} selected</span>
-              <button
-                className="update-btn"
-                onClick={handleUpdate}
-              >
-                Update
-              </button>
+              <div className="selection-buttons">
+                <button
+                  className="cancel-btn"
+                  onClick={() => setSelectedContainers(new Set())}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="update-btn"
+                  onClick={handleUpdate}
+                >
+                  Update
+                </button>
+              </div>
             </div>
           </div>
         );
