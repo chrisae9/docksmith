@@ -802,7 +802,8 @@ export function OperationProgressPage() {
     }]);
 
     try {
-      // Save settings flow - the API saves labels AND restarts the container atomically
+      // Save settings flow - API starts background operation and returns operation ID
+      // We track progress via SSE (same pattern as regular updates)
       if (saveSettings && labelChanges) {
         setCurrentStage('saving');
         const changes = describeChanges(labelChanges);
@@ -815,7 +816,7 @@ export function OperationProgressPage() {
           addLog(`Saving settings for ${containerName}...`, 'stage', 'fa-floppy-disk');
         }
 
-        // Call API - this saves labels AND restarts the container
+        // Call API - returns immediately with operation ID, work runs in background
         const saveResponse = await setLabelsAPI(containerName, {
           ...labelChanges,
           force,
@@ -825,28 +826,15 @@ export function OperationProgressPage() {
           throw new Error(saveResponse.error || 'Failed to save settings');
         }
 
-        // Show progress stages after API completes (the restart already happened on backend)
-        // This provides visual feedback of what occurred
-        const showStage = (stage: string, message: string, delay: number) => {
-          return new Promise<void>(resolve => {
-            const timeout = window.setTimeout(() => {
-              setCurrentStage(stage);
-              setCurrentPercent(delay === 0 ? 25 : delay === 300 ? 50 : delay === 600 ? 75 : 100);
-              setContainers(prev => prev.map(c => c.name === containerName ? { ...c, stage } : c));
-              addLog(message, 'stage', RESTART_STAGES[stage]?.icon || 'fa-circle');
-              resolve();
-            }, delay);
-            timeoutsRef.current.push(timeout);
-          });
-        };
+        // Get operation ID and track via SSE (same as pure restart flow)
+        const opId = saveResponse.data?.operation_id;
+        if (opId) {
+          setOperationId(opId);
+          setSearchParams({ id: opId }, { replace: true });
+          addLog(`Operation started: ${opId.substring(0, 8)}...`, 'info', 'fa-play');
+        }
 
-        await showStage('stopping', 'Stopping container...', 0);
-        await showStage('starting', 'Starting container...', 300);
-        await showStage('health_check', 'Health check passed', 300);
-
-        updateContainer(containerName, { status: 'success', stage: 'complete', message: 'Settings saved and container restarted' });
-        addLog('Settings saved and container restarted', 'success', 'fa-check');
-        setStatus('success');
+        // SSE will handle progress updates - no fake delays needed
         return;
       }
 

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
+	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/google/uuid"
@@ -189,7 +191,10 @@ type labelOperationConfig struct {
 // labelModifier is a function that applies label changes to a service and returns the modified/removed labels
 type labelModifier func(service *compose.Service) (modified map[string]string, removed []string, err error)
 
-// executeLabelOperation is the common workflow for both set and remove operations
+// executeLabelOperation is the common workflow for both set and remove operations.
+// It validates inputs, creates an operation record, and starts the work in a background
+// goroutine (like UpdateSingleContainer does). This ensures the operation survives
+// client disconnection.
 func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationConfig, modify labelModifier) (*LabelOperationResult, error) {
 	operationID := uuid.New().String()
 	result := &LabelOperationResult{
@@ -202,7 +207,7 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 		PreCheckRan:    false,
 	}
 
-	// Find container
+	// Find container (validation - must complete before returning)
 	container, err := s.findContainerByName(ctx, cfg.containerName)
 	if err != nil {
 		return nil, err
@@ -215,7 +220,7 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 		return nil, fmt.Errorf("failed to marshal old labels: %w", err)
 	}
 
-	// Get compose file path
+	// Get compose file path (validation - must complete before returning)
 	composeFilePath, ok := container.Labels[ComposeConfigFilesLabel]
 	if !ok || composeFilePath == "" {
 		return nil, fmt.Errorf("container %s is not managed by docker compose", container.Name)
@@ -246,75 +251,102 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 		s.storageService.SaveUpdateOperation(ctx, op)
 	}
 
-	// Run pre-update check if configured and not forced/no-restart
+	// Run the actual label operation in a background goroutine
+	// Use context.Background() so it survives client disconnection (like UpdateSingleContainer)
+	go s.executeLabelOperationAsync(context.Background(), operationID, container, cfg, composeFilePath, serviceName, modify)
+
+	// Return immediately with operation ID - frontend tracks progress via SSE
+	result.Success = true
+	result.Message = "Operation started"
+	return result, nil
+}
+
+// executeLabelOperationAsync runs the label modification and restart in the background.
+// This is analogous to executeSingleUpdate in the update orchestrator.
+func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID string, container *docker.Container, cfg labelOperationConfig, composeFilePath, serviceName string, modify labelModifier) {
+	stackName := container.Labels[ComposeProjectLabel]
+
+	log.Printf("LABEL_OP: Starting async label operation %s for container %s", operationID, cfg.containerName)
+
+	// Stage 1: Pre-update check (0-10%)
+	s.publishLabelProgress(operationID, cfg.containerName, stackName, "validating", 0, "Running pre-update check")
 	skipCheck := cfg.noRestart || cfg.force
-	ran, passed, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
-	result.PreCheckRan = ran
-	result.PreCheckPassed = passed
+	_, _, err := s.executeContainerPreUpdateCheck(ctx, container, skipCheck)
 	if err != nil {
-		s.failLabelOperation(ctx, operationID, fmt.Sprintf("pre-update check failed: %v", err))
-		return nil, fmt.Errorf("pre-update check failed: %w (use force to skip)", err)
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("pre-update check failed: %v", err))
+		return
 	}
 
-	// Load compose file (handles include-based setups)
+	// Stage 2: Load and modify compose file (10-30%)
+	s.publishLabelProgress(operationID, cfg.containerName, stackName, "updating_compose", 10, "Saving settings to compose file")
+
 	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, cfg.containerName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load compose file: %w", err)
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to load compose file: %v", err))
+		return
 	}
 
-	// Find service
 	service, err := composeFile.FindServiceByContainerName(serviceName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find service: %w", err)
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to find service: %v", err))
+		return
 	}
 
-	// Apply the label modifications
 	modified, removed, err := modify(service)
 	if err != nil {
-		return nil, err
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to apply labels: %v", err))
+		return
 	}
-	result.LabelsModified = modified
-	result.LabelsRemoved = removed
 
-	// Save compose file
 	if err := composeFile.Save(); err != nil {
-		return nil, fmt.Errorf("failed to save compose file: %w", err)
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to save compose file: %v", err))
+		return
 	}
 
-	// Restart container to apply changes (unless --no-restart)
+	s.publishLabelProgress(operationID, cfg.containerName, stackName, "updating_compose", 30, "Settings saved")
+
+	// Stage 3: Restart container (30-90%)
 	if !cfg.noRestart {
+		s.publishLabelProgress(operationID, cfg.containerName, stackName, "stopping", 40, "Stopping container")
+
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
-			s.failLabelOperation(ctx, operationID, fmt.Sprintf("failed to restart container: %v", err))
-			return nil, fmt.Errorf("failed to restart container: %w", err)
+			s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to restart container: %v", err))
+			return
 		}
-		result.Restarted = true
+
+		s.publishLabelProgress(operationID, cfg.containerName, stackName, "starting", 70, "Starting container")
+		s.publishLabelProgress(operationID, cfg.containerName, stackName, "health_check", 90, "Health check passed")
 	}
 
-	result.Success = true
+	// Stage 4: Complete (100%)
+	s.publishLabelProgress(operationID, cfg.containerName, stackName, "complete", 100, "Settings saved and container restarted")
 
-	// Complete the operation
 	var newLabelsJSON []byte
 	if len(modified) > 0 {
-		newLabelsJSON, err = json.Marshal(modified)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal modified labels: %w", err)
-		}
-		result.Message = fmt.Sprintf("%d label(s) set successfully", len(modified))
+		newLabelsJSON, _ = json.Marshal(modified)
 	} else if len(removed) > 0 {
-		// For remove, create map with empty values to indicate removed
 		removedMap := make(map[string]string)
 		for _, labelName := range removed {
 			removedMap[labelName] = ""
 		}
-		newLabelsJSON, err = json.Marshal(removedMap)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal removed labels: %w", err)
-		}
-		result.Message = fmt.Sprintf("%d label(s) removed successfully", len(removed))
+		newLabelsJSON, _ = json.Marshal(removedMap)
 	}
 	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
 
-	return result, nil
+	// Emit container updated event for dashboard refresh
+	if s.eventBus != nil {
+		s.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"container_id":   container.ID,
+				"container_name": cfg.containerName,
+				"operation_id":   operationID,
+				"status":         "complete",
+			},
+		})
+	}
+
+	log.Printf("LABEL_OP: Completed label operation %s for container %s", operationID, cfg.containerName)
 }
 
 // setLabels implements the label setting logic (atomic: compose update + restart)
@@ -422,6 +454,48 @@ func (s *Server) completeLabelOperation(ctx context.Context, operationID, newLab
 	op.NewVersion = newLabelsJSON
 	op.CompletedAt = &now
 	s.storageService.SaveUpdateOperation(ctx, op)
+}
+
+// publishLabelProgress publishes SSE progress events for label operations
+func (s *Server) publishLabelProgress(operationID, containerName, stackName, stage string, percent int, message string) {
+	if s.eventBus == nil {
+		return
+	}
+
+	log.Printf("LABEL_OP: Publishing %s (%d%%) for operation=%s", stage, percent, operationID)
+
+	s.eventBus.Publish(events.Event{
+		Type: events.EventUpdateProgress,
+		Payload: map[string]interface{}{
+			"operation_id":   operationID,
+			"container_name": containerName,
+			"stack_name":     stackName,
+			"stage":          stage,
+			"progress":       percent,
+			"message":        message,
+			"timestamp":      time.Now().Unix(),
+		},
+	})
+}
+
+// failLabelOperationWithEvent marks operation as failed and emits SSE events
+func (s *Server) failLabelOperationWithEvent(ctx context.Context, operationID, containerName, stackName, errorMsg string) {
+	s.failLabelOperation(ctx, operationID, errorMsg)
+	s.publishLabelProgress(operationID, containerName, stackName, "failed", 0, errorMsg)
+
+	// Emit container updated event for dashboard refresh
+	if s.eventBus != nil {
+		s.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"container_name": containerName,
+				"operation_id":   operationID,
+				"status":         "failed",
+			},
+		})
+	}
+
+	log.Printf("LABEL_OP: Failed operation %s for container %s: %s", operationID, containerName, errorMsg)
 }
 
 // executeContainerPreUpdateCheck runs pre-update check if configured and not skipped.

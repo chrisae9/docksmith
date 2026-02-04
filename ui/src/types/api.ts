@@ -230,6 +230,7 @@ export interface LabelOperationResult {
   success: boolean;
   container: string;
   operation: string;
+  operation_id?: string;
   labels_modified?: Record<string, string>;
   labels_removed?: string[];
   compose_file: string;
