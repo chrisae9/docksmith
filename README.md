@@ -36,6 +36,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Required: Persistent storage for update history
       - ./data:/data
+      # Optional: Docker config for registry authentication (GHCR, private registries)
+      - ~/.docker/config.json:/root/.docker/config.json:ro
       # Your compose directories (add as many as needed)
       # Use same path inside/outside so env_file references work
       - /home/user/stacks:/home/user/stacks:rw
@@ -83,7 +85,16 @@ A few specific problems I kept running into:
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `GITHUB_TOKEN` | - | For private GHCR images |
 
-For private registries, mount your Docker config. See [registry setup](docs/registries.md).
+### Registry Authentication
+
+Mount your Docker config to authenticate with registries:
+
+```yaml
+volumes:
+  - ~/.docker/config.json:/root/.docker/config.json:ro
+```
+
+This enables access to private images and avoids Docker Hub rate limits. See [registry setup](docs/registries.md) for details.
 
 ---
 
