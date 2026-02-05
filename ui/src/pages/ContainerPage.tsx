@@ -650,7 +650,7 @@ export function ContainerPage() {
           <div className="overview-tab">
             {/* Docksmith Version Card */}
             {docksmithData && (docksmithData.status === 'UPDATE_AVAILABLE' || docksmithData.status === 'UPDATE_AVAILABLE_BLOCKED') &&
-             docksmithData.current_version && docksmithData.latest_version && (
+             (docksmithData.current_version || docksmithData.current_tag) && docksmithData.latest_version && (
               <section className="version-card">
                 <div className="version-info">
                   <span className="version-current">{(() => {
