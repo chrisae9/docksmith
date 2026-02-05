@@ -39,6 +39,10 @@ test/playwright/test-results/
 test/playwright/node_modules/
 .playwright-screenshots/
 
+# Backup and scratch files
+*.bak
+TODO
+
 # OS files
 .DS_Store
 Thumbs.db
