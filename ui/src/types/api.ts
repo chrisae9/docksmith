@@ -18,6 +18,7 @@ export interface ContainerInfo {
   current_version?: string;
   current_suffix?: string;
   latest_version?: string;
+  latest_resolved_version?: string;
   current_digest?: string;
   latest_digest?: string;
   available_tags?: string[];

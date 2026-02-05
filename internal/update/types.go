@@ -25,9 +25,10 @@ type ContainerUpdate struct {
 	CurrentTag         string              `json:"current_tag,omitempty"` // The tag portion of the image (e.g., "latest", "v1.2.3")
 	CurrentVersion     string              `json:"current_version,omitempty"`
 	CurrentSuffix      string              `json:"current_suffix,omitempty"` // Variant suffix (e.g., "tensorrt", "alpine") - used for strict filtering
-	LatestVersion      string              `json:"latest_version,omitempty"`
-	CurrentDigest      string              `json:"current_digest,omitempty"` // SHA256 digest of current image
-	LatestDigest       string              `json:"latest_digest,omitempty"`  // SHA256 digest of latest (for non-versioned fallback)
+	LatestVersion         string              `json:"latest_version,omitempty"`
+	LatestResolvedVersion string              `json:"latest_resolved_version,omitempty"` // Resolved semantic version from latest digest lookup
+	CurrentDigest         string              `json:"current_digest,omitempty"`          // SHA256 digest of current image
+	LatestDigest          string              `json:"latest_digest,omitempty"`           // SHA256 digest of latest (for non-versioned fallback)
 	AvailableTags      []string            `json:"available_tags,omitempty"`
 	ChangeType         version.ChangeType  `json:"change_type"`
 	Status             UpdateStatus        `json:"status"`

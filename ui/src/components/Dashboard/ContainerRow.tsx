@@ -86,9 +86,33 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
       return `${currentTag} → ${container.recommended_tag}`;
     }
     if (hasUpdate && container.latest_version) {
-      // Use current_tag for consistency with latest_version (both are tag format)
-      const currentDisplay = container.current_tag || container.current_version || 'current';
-      return `${currentDisplay} → ${container.latest_version}`;
+      // Show tag with resolved version in parentheses only when tag doesn't contain version info
+      // e.g., "latest (2026.1.29) → latest (2026.2.3)" but "3.14.2-slim → 3.14.3-slim" (no redundant parens)
+      const currentTag = container.current_tag || '';
+      const currentResolved = container.current_version || '';
+
+      // Build current display: show tag with resolved version in parentheses
+      // only if they differ AND the tag doesn't already contain the version
+      let currentDisplay: string;
+      const currentTagContainsVersion = currentTag && currentResolved && currentTag.includes(currentResolved);
+      if (currentTag && currentResolved && currentTag !== currentResolved && !currentTagContainsVersion) {
+        currentDisplay = `${currentTag} (${currentResolved})`;
+      } else {
+        currentDisplay = currentTag || currentResolved || 'current';
+      }
+
+      // Build latest display: same logic for the target version
+      const latestTag = container.latest_version;
+      const latestResolved = container.latest_resolved_version || '';
+      let latestDisplay: string;
+      const latestTagContainsVersion = latestTag && latestResolved && latestTag.includes(latestResolved);
+      if (latestTag && latestResolved && latestTag !== latestResolved && !latestTagContainsVersion) {
+        latestDisplay = `${latestTag} (${latestResolved})`;
+      } else {
+        latestDisplay = latestTag;
+      }
+
+      return `${currentDisplay} → ${latestDisplay}`;
     }
     if (container.status === 'LOCAL_IMAGE') {
       return 'Local image';

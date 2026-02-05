@@ -653,9 +653,27 @@ export function ContainerPage() {
              docksmithData.current_version && docksmithData.latest_version && (
               <section className="version-card">
                 <div className="version-info">
-                  <span className="version-current">{docksmithData.current_version}</span>
+                  <span className="version-current">{(() => {
+                    // Show tag with resolved version: "latest (2026.1.29)" or just version if tag contains it
+                    const tag = docksmithData.current_tag || '';
+                    const version = docksmithData.current_version || '';
+                    const tagContainsVersion = tag && version && tag.includes(version);
+                    if (tag && version && tag !== version && !tagContainsVersion) {
+                      return `${tag} (${version})`;
+                    }
+                    return tag || version;
+                  })()}</span>
                   <i className="fa-solid fa-arrow-right"></i>
-                  <span className="version-latest">{docksmithData.latest_version}</span>
+                  <span className="version-latest">{(() => {
+                    // Show tag with resolved version: "latest (2026.2.3)" or just tag if no resolved version
+                    const latestTag = docksmithData.latest_version || '';
+                    const latestResolved = docksmithData.latest_resolved_version || '';
+                    const tagContainsVersion = latestTag && latestResolved && latestTag.includes(latestResolved);
+                    if (latestTag && latestResolved && latestTag !== latestResolved && !tagContainsVersion) {
+                      return `${latestTag} (${latestResolved})`;
+                    }
+                    return latestTag;
+                  })()}</span>
                 </div>
                 {!hasChanges && docksmithData.status === 'UPDATE_AVAILABLE' && (
                   <button

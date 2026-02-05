@@ -394,7 +394,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		imageRef := imgInfo.Registry + "/" + imgInfo.Repository
 
 		resolvedVersion := c.resolveVersionFromDigest(ctx, imageRef, currentDigest)
-		if resolvedVersion != "" {
+		if resolvedVersion != "" && resolvedVersion != "latest" {
 			log.Printf("checkContainer %s: Resolved version from digest: %s", container.Name, resolvedVersion)
 			currentVersion = resolvedVersion
 			update.CurrentVersion = currentVersion
@@ -438,6 +438,26 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	update.AvailableTags = tags
 	log.Printf("Container %s: Got %d available tags from registry", container.Name, len(tags))
 
+	// For non-versioned, non-meta tags (e.g., "server-cuda"), the label-derived version
+	// may come from a base image (e.g., Ubuntu "22.04") rather than the application.
+	// Validate by checking if the version appears in any of the registry's actual tags.
+	// Meta tags (latest, stable, etc.) are excluded because publishers typically set
+	// org.opencontainers.image.version correctly for these.
+	if tagVersion == "" && !isMetaTag(checkTag) && currentVersion != "" {
+		versionInTags := false
+		for _, t := range tags {
+			if strings.Contains(t, currentVersion) {
+				versionInTags = true
+				break
+			}
+		}
+		if !versionInTags {
+			log.Printf("checkContainer %s: Label version '%s' not found in registry tags for non-meta tag '%s', likely from base image — clearing", container.Name, currentVersion, checkTag)
+			currentVersion = ""
+			update.CurrentVersion = ""
+		}
+	}
+
 	// Parse current version to check if it's stable (for prerelease filtering)
 	currentVer := c.versionParser.ParseTag(currentVersion)
 
@@ -461,14 +481,16 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 				if currentSHA != latestSHA {
 					update.Status = UpdateAvailable
 					update.ChangeType = version.UnknownChange
+					// Set the tag we're tracking as the "latest version" (what to update to)
+					update.LatestVersion = checkTag
 
 					// Try to resolve the semantic version tag for the latest digest
 					log.Printf("Resolving semver for %s latest digest: %s (suffix: '%s')", container.Name, latestDigest, currentSuffix)
 					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest, currentSuffix)
-					if semverTag != "" {
+					if semverTag != "" && semverTag != "latest" {
 						log.Printf("Found semver tag for %s: %s", container.Name, semverTag)
-						// Found a semantic version tag for the latest digest
-						update.LatestVersion = semverTag
+						// Found a semantic version tag for the latest digest - store as resolved version
+						update.LatestResolvedVersion = semverTag
 
 						// Compare versions to determine change type
 						if currentVersion != "" {
@@ -484,38 +506,35 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 							}
 						}
 					} else {
-						log.Printf("Could not resolve semver for %s, falling back to tag: %s", container.Name, checkTag)
-						// Couldn't find semantic version, fall back to tag name
-						// Set the actual tag (not a message) so it can be used for updates
-						update.LatestVersion = checkTag
+						log.Printf("Could not resolve semver for %s (tracking %s), no resolved version to display", container.Name, checkTag)
+						// Couldn't find semantic version - LatestVersion stays as checkTag, no resolved version
 					}
 					// Mark digest check complete
 					digestCheckComplete = true
 				} else {
 					// Digests match - we're up to date with :latest
 					update.Status = UpToDate
+					update.LatestVersion = checkTag // Keep the tag we're tracking
 					log.Printf("Container %s: Digests match, marking as UpToDate", container.Name)
 					// Find semantic version tag that points to the SAME digest
 					// This ensures we only recommend tag migration, not an actual update
 					log.Printf("Container %s: Finding semver tag for same digest (suffix: '%s')", container.Name, currentSuffix)
 					semverTag := c.resolveVersionFromDigest(ctx, imageRef, currentDigest, currentSuffix)
-					if semverTag != "" {
-						update.LatestVersion = semverTag
+					if semverTag != "" && semverTag != "latest" {
+						update.LatestResolvedVersion = semverTag
 						log.Printf("Container %s: Found semver tag %s for current digest", container.Name, semverTag)
-					} else if currentVersion != "" {
-						update.LatestVersion = currentVersion
-						log.Printf("Container %s: No semver tag found for digest, using current version", container.Name)
+					} else {
+						log.Printf("Container %s: No semver tag found for digest", container.Name)
 					}
 				}
 				// If using :latest and up to date, mark as pinnable (unless explicitly allowed)
 				// But only if we found an actual semantic version to recommend
 				if update.Status == UpToDate && checkTag == "latest" && !allowLatest {
 					// Check if we have a real semantic version TAG to recommend (not just "latest")
-					// We check LatestVersion exists and isn't "latest" - we don't care if the VERSION
-					// number is the same, we want to migrate from :latest TAG to a specific semver TAG
-					if update.LatestVersion != "" && update.LatestVersion != "latest" {
+					// We check LatestResolvedVersion exists - this is the actual semver tag to migrate to
+					if update.LatestResolvedVersion != "" {
 						update.Status = UpToDatePinnable
-						update.RecommendedTag = update.LatestVersion
+						update.RecommendedTag = update.LatestResolvedVersion
 						log.Printf("Container %s: Marked as pinnable with recommendation: %s", container.Name, update.RecommendedTag)
 					} else {
 						log.Printf("Container %s: Using :latest but no semver tags available for migration", container.Name)
@@ -540,24 +559,35 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	}
 
 	// Find the latest version from tags (filtered by suffix)
-	// We always do this to populate LatestVersion for display/recommendation purposes
+	// Used for semver comparison when not using meta tags
 	log.Printf("Container %s: Calling findLatestVersion with suffix='%s', currentVer=%v", container.Name, currentSuffix, currentVer)
 	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels)
 	log.Printf("Container %s: findLatestVersion returned: '%s'", container.Name, latestVersion)
 
-	// Update LatestVersion if we don't already have one from digest resolution
-	// or if we only have "latest" (not a real semver tag)
-	if update.LatestVersion == "" || update.LatestVersion == "latest" {
+	// For non-meta tags, set LatestVersion to the latest semver tag from registry
+	// For meta tags, LatestVersion was already set to the meta tag above
+	if update.LatestVersion == "" {
 		update.LatestVersion = latestVersion
 	}
 
-	// Re-check pinnable status after we have the actual latest semver tag
-	// This handles the case where resolveVersionFromDigest returned "latest"
-	// because no semver tag matched the digest, but findLatestVersion found one
+	// Re-check pinnable status using findLatestVersion result
+	// This handles the case where resolveVersionFromDigest didn't find a semver tag,
+	// but findLatestVersion found one (they could point to the same image)
 	if update.Status == UpToDate && checkTag == "latest" && !allowLatest && latestVersion != "" && latestVersion != "latest" {
+		if update.LatestResolvedVersion == "" {
+			// No resolved version from digest lookup, use findLatestVersion result
+			update.LatestResolvedVersion = latestVersion
+		}
 		update.Status = UpToDatePinnable
-		update.RecommendedTag = latestVersion
+		update.RecommendedTag = update.LatestResolvedVersion
 		log.Printf("Container %s: Marked as pinnable with recommendation: %s", container.Name, update.RecommendedTag)
+	}
+
+	// For meta tag containers with updates, fall back to findLatestVersion for resolved version
+	// when digest-to-tag resolution failed (ListTagsWithDigests can return incomplete results)
+	if isMetaTag(checkTag) && update.LatestResolvedVersion == "" && latestVersion != "" && latestVersion != "latest" {
+		update.LatestResolvedVersion = latestVersion
+		log.Printf("Container %s: Using findLatestVersion as resolved version: %s", container.Name, latestVersion)
 	}
 
 	// Only do semantic version comparison if we haven't already determined status via digest check
@@ -612,14 +642,16 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 				if currentSHA != latestSHA {
 					update.Status = UpdateAvailable
 					update.ChangeType = version.UnknownChange
+					// Set the tag we're tracking as the "latest version"
+					update.LatestVersion = checkTag
 
 					// Try to resolve the semantic version tag for the latest digest
 					log.Printf("Resolving semver for %s latest digest: %s (suffix: '%s')", container.Name, latestDigest, currentSuffix)
 					semverTag := c.resolveVersionFromDigest(ctx, imageRef, latestDigest, currentSuffix)
-					if semverTag != "" {
+					if semverTag != "" && semverTag != "latest" {
 						log.Printf("Found semver tag for %s: %s", container.Name, semverTag)
-						// Found a semantic version tag for the latest digest
-						update.LatestVersion = semverTag
+						// Found a semantic version tag for the latest digest - store as resolved version
+						update.LatestResolvedVersion = semverTag
 
 						// Compare versions to determine change type
 						if currentVersion != "" {
@@ -635,10 +667,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 							}
 						}
 					} else {
-						log.Printf("Could not resolve semver for %s, falling back to tag: %s", container.Name, checkTag)
-						// Couldn't find semantic version, fall back to tag name
-						// Set the actual tag (not a message) so it can be used for updates
-						update.LatestVersion = checkTag
+						log.Printf("Could not resolve semver for %s (tracking %s), no resolved version to display", container.Name, checkTag)
+						// Couldn't find semantic version - no resolved version
 					}
 				} else {
 					update.Status = UpToDate
@@ -675,13 +705,11 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	// If using :latest tag and we resolved a semantic version, mark as pinnable (unless explicitly allowed)
 	// But only if we have an actual semantic version to recommend
 	if update.UsingLatestTag && update.CurrentVersion != "" && update.Status == UpToDate && !allowLatest {
-		// Check if we have a real semantic version TAG to recommend (not just "latest")
-		// We check LatestVersion exists and isn't "latest" - we don't care if the VERSION
-		// number is the same, we want to migrate from :latest TAG to a specific semver TAG
-		if update.LatestVersion != "" && update.LatestVersion != "latest" {
+		// Check if we have a resolved semantic version TAG to recommend
+		if update.LatestResolvedVersion != "" {
 			// Change status to indicate it should be pinned to semver
 			update.Status = UpToDatePinnable
-			update.RecommendedTag = update.LatestVersion
+			update.RecommendedTag = update.LatestResolvedVersion
 			log.Printf("Container %s: Marked as pinnable with recommendation: %s", container.Name, update.RecommendedTag)
 		} else {
 			log.Printf("Container %s: Using :latest but no semver tags available for migration", container.Name)
