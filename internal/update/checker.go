@@ -899,6 +899,12 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 			continue // Skip tags without semantic versions
 		}
 
+		// Skip tags whose version type doesn't match the current version's type
+		// This prevents cross-comparison of semantic versions (3.23.3) with date tags (20260127)
+		if currentVersion != nil && currentVersion.Type != "" && tagInfo.Version.Type != currentVersion.Type {
+			continue
+		}
+
 		// Filter by suffix - must match exactly
 		if tagInfo.Suffix != requiredSuffix {
 			log.Printf("  Skipping tag %s: suffix '%s' != required '%s'", tag, tagInfo.Suffix, requiredSuffix)
