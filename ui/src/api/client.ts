@@ -364,7 +364,7 @@ export async function inspectContainer(
 export async function stopContainer(
   name: string,
   timeout?: number
-): Promise<APIResponse<{ container: string; status: string; message: string }>> {
+): Promise<APIResponse<{ container: string; status: string; message: string; operation_id?: string }>> {
   const params = timeout ? `?timeout=${timeout}` : '';
   return fetchAPI(`/containers/${encodeURIComponent(name)}/stop${params}`, {
     method: 'POST',
@@ -374,7 +374,7 @@ export async function stopContainer(
 // Start a stopped container
 export async function startContainer(
   name: string
-): Promise<APIResponse<{ container: string; status: string; message: string }>> {
+): Promise<APIResponse<{ container: string; status: string; message: string; operation_id?: string }>> {
   return fetchAPI(`/containers/${encodeURIComponent(name)}/start`, {
     method: 'POST',
   });
@@ -395,7 +395,7 @@ export async function restartContainerQuick(
 export async function removeContainer(
   name: string,
   options?: { force?: boolean; volumes?: boolean }
-): Promise<APIResponse<{ container: string; status: string; message: string; force: boolean; volumes: boolean }>> {
+): Promise<APIResponse<{ container: string; status: string; message: string; operation_id?: string; force: boolean; volumes: boolean }>> {
   const params = new URLSearchParams();
   if (options?.force) params.set('force', 'true');
   if (options?.volumes) params.set('volumes', 'true');

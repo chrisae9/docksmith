@@ -609,6 +609,56 @@
   background: var(--color-status-ignored);
 }
 
+/* Status Type Badges - Colored pills replacing dots for actionable statuses */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-2xs);
+  font-weight: var(--font-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.status-badge.major {
+  background: var(--color-badge-major-dim);
+  color: var(--color-badge-major);
+}
+
+.status-badge.minor {
+  background: var(--color-badge-minor-dim);
+  color: var(--color-badge-minor);
+}
+
+.status-badge.patch {
+  background: var(--color-badge-patch-dim);
+  color: var(--color-badge-patch);
+}
+
+.status-badge.rebuild {
+  background: var(--color-badge-patch-dim);
+  color: var(--color-badge-patch);
+}
+
+.status-badge.blocked {
+  background: var(--color-badge-blocked-dim);
+  color: var(--color-badge-blocked);
+}
+
+.status-badge.pin {
+  background: var(--color-badge-pin-dim);
+  color: var(--color-badge-pin);
+}
+
+.status-badge.mismatch {
+  background: var(--color-warning-dim);
+  color: var(--color-warning);
+}
+
 /* Status Badge Pills - Semantic Colors */
 .status-pill {
   display: inline-flex;

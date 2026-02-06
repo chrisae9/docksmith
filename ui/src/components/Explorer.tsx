@@ -3,10 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import {
   getExplorerData,
-  stopContainer,
-  startContainer,
-  restartContainerQuick,
-  removeContainer,
   removeImage,
   removeNetwork,
   removeVolume,
@@ -61,7 +57,7 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [activeActionMenu, setActiveActionMenu] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionLoading] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   // State for image/network/volume action menus
   const [activeImageMenu, setActiveImageMenu] = useState<string | null>(null);
@@ -220,44 +216,17 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
     pullStartY.current = null;
   };
 
-  // Container actions
+  // Container actions — all navigate to the operation page
   const handleContainerAction = async (
     containerName: string,
     action: 'start' | 'stop' | 'restart' | 'remove',
     force?: boolean
   ) => {
-    setActionLoading(containerName);
     setActiveActionMenu(null);
     setConfirmRemove(null);
-
-    try {
-      let result;
-      switch (action) {
-        case 'start':
-          result = await startContainer(containerName);
-          break;
-        case 'stop':
-          result = await stopContainer(containerName);
-          break;
-        case 'restart':
-          result = await restartContainerQuick(containerName);
-          break;
-        case 'remove':
-          result = await removeContainer(containerName, { force });
-          break;
-      }
-
-      if (result.success) {
-        toast.success(result.data?.message || `Container ${action}ed successfully`);
-        await fetchData();
-      } else {
-        toast.error(result.error || `Failed to ${action} container`);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to ${action} container`);
-    } finally {
-      setActionLoading(null);
-    }
+    navigate('/operation', {
+      state: { [action]: { containerName, force } }
+    });
   };
 
   // Stack actions - restart or stop all containers in a stack

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, stopContainer, removeContainer, fixComposeMismatch } from '../api/client';
+import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -10,7 +10,7 @@ import '../styles/progress-common.css';
 import './OperationProgressPage.css';
 
 // Operation types
-type OperationType = 'restart' | 'update' | 'rollback' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed';
+type OperationType = 'restart' | 'update' | 'rollback' | 'start' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed';
 
 // Restart operation info (includes save settings)
 interface RestartOperation {
@@ -49,6 +49,12 @@ interface RollbackOperation {
   oldVersion?: string;
   newVersion?: string;
   force?: boolean;
+}
+
+// Start operation info
+interface StartOperation {
+  type: 'start';
+  containerName: string;
 }
 
 // Stop operation info
@@ -103,7 +109,7 @@ interface MixedOperation {
   mismatches: string[];
 }
 
-type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation;
+type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StartOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation;
 
 export function OperationProgressPage() {
   const navigate = useNavigate();
@@ -125,6 +131,9 @@ export function OperationProgressPage() {
     }
     if (state.rollback) {
       return { type: 'rollback', ...state.rollback };
+    }
+    if (state.start) {
+      return { type: 'start', ...state.start };
     }
     if (state.stop) {
       return { type: 'stop', ...state.stop };
@@ -727,6 +736,9 @@ export function OperationProgressPage() {
       case 'rollback':
         runRollback(operationInfo);
         break;
+      case 'start':
+        runStart(operationInfo);
+        break;
       case 'stop':
         runStop(operationInfo);
         break;
@@ -1130,6 +1142,43 @@ export function OperationProgressPage() {
     }
   };
 
+  // Run start operation
+  const runStart = async (info: StartOperation) => {
+    const { containerName } = info;
+
+    setContainers([{
+      name: containerName,
+      status: 'in_progress',
+      message: 'Starting container...',
+    }]);
+
+    addLog(`Starting ${containerName}...`, 'info', 'fa-play');
+
+    try {
+      const response = await startContainer(containerName);
+
+      if (response.success) {
+        const opId = response.data?.operation_id;
+        if (opId) {
+          setOperationId(opId);
+          setSearchParams({ id: opId }, { replace: true });
+        }
+        setStatus('success');
+        updateContainer(containerName, { status: 'success', message: 'Container started successfully' });
+        addLog('Container started successfully', 'success', 'fa-circle-check');
+      } else {
+        setStatus('failed');
+        updateContainer(containerName, { status: 'failed', message: response.error, error: response.error });
+        addLog(response.error || 'Failed to start container', 'error', 'fa-circle-xmark');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to start container';
+      setStatus('failed');
+      updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+    }
+  };
+
   // Run stop operation
   const runStop = async (info: StopOperation) => {
     const { containerName } = info;
@@ -1146,6 +1195,11 @@ export function OperationProgressPage() {
       const response = await stopContainer(containerName);
 
       if (response.success) {
+        const opId = response.data?.operation_id;
+        if (opId) {
+          setOperationId(opId);
+          setSearchParams({ id: opId }, { replace: true });
+        }
         setStatus('success');
         updateContainer(containerName, { status: 'success', message: 'Container stopped successfully' });
         addLog('Container stopped successfully', 'success', 'fa-circle-check');
@@ -1178,6 +1232,11 @@ export function OperationProgressPage() {
       const response = await removeContainer(containerName, { force });
 
       if (response.success) {
+        const opId = response.data?.operation_id;
+        if (opId) {
+          setOperationId(opId);
+          setSearchParams({ id: opId }, { replace: true });
+        }
         setStatus('success');
         updateContainer(containerName, { status: 'success', message: 'Container removed successfully' });
         addLog('Container removed successfully', 'success', 'fa-circle-check');
@@ -1828,6 +1887,7 @@ export function OperationProgressPage() {
         case 'single': return 'Updating Container';
         case 'batch': return 'Updating Containers';
         case 'rollback': return 'Rolling Back';
+        case 'start': return 'Starting Container';
         case 'stop': return 'Stopping Container';
         case 'remove': return 'Removing Container';
         default: return 'Operation Progress';
@@ -1837,6 +1897,7 @@ export function OperationProgressPage() {
       case 'restart': return 'Restarting Container';
       case 'update': return 'Updating Containers';
       case 'rollback': return 'Rolling Back';
+      case 'start': return 'Starting Container';
       case 'stop': return 'Stopping Container';
       case 'remove': return 'Removing Container';
       case 'stackRestart': return 'Restarting Stack';
@@ -1877,6 +1938,7 @@ export function OperationProgressPage() {
         case 'restart': return 'Container restarted successfully!';
         case 'update': return 'All updates completed successfully!';
         case 'rollback': return 'Rollback completed successfully!';
+        case 'start': return 'Container started successfully!';
         case 'stop': return 'Container stopped successfully!';
         case 'remove': return 'Container removed successfully!';
         case 'stackRestart': return 'Stack restarted successfully!';
@@ -1906,6 +1968,7 @@ export function OperationProgressPage() {
       case 'restart': return `Restarting ${(operationInfo as RestartOperation).containerName}...`;
       case 'update': return `Updating ${containers.length} container(s)...`;
       case 'rollback': return `Rolling back ${(operationInfo as RollbackOperation).containerName}...`;
+      case 'start': return `Starting ${(operationInfo as StartOperation).containerName}...`;
       case 'stop': return `Stopping ${(operationInfo as StopOperation).containerName}...`;
       case 'remove': return `Removing ${(operationInfo as RemoveOperation).containerName}...`;
       case 'stackRestart': return `Restarting ${(operationInfo as StackRestartOperation).containers.length} container(s) in "${(operationInfo as StackRestartOperation).stackName}"...`;

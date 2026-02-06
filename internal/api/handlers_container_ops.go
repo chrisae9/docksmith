@@ -503,17 +503,53 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate operation ID and record operation start
+	operationID := uuid.New().String()
+	now := time.Now()
+
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   ctr.ID,
+		ContainerName: containerName,
+		StackName:     ctr.Stack,
+		OperationType: "start",
+		Status:        "in_progress",
+		StartedAt:     &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if s.storageService != nil {
+		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("Failed to save start operation to database: %v", err)
+		}
+	}
+
 	// Start the container
 	err = s.dockerService.GetClient().ContainerStart(ctx, ctr.ID, container.StartOptions{})
 	if err != nil {
+		if s.storageService != nil {
+			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
+		}
 		RespondInternalError(w, fmt.Errorf("failed to start container: %w", err))
 		return
 	}
 
+	// Record success
+	if s.storageService != nil {
+		completedAt := time.Now()
+		op.Status = "complete"
+		op.CompletedAt = &completedAt
+		op.UpdatedAt = completedAt
+		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("Failed to save start operation completion: %v", err)
+		}
+	}
+
 	RespondSuccess(w, map[string]any{
-		"container": containerName,
-		"status":    "started",
-		"message":   fmt.Sprintf("Container %s started successfully", containerName),
+		"container":    containerName,
+		"status":       "started",
+		"operation_id": operationID,
+		"message":      fmt.Sprintf("Container %s started successfully", containerName),
 	})
 }
 

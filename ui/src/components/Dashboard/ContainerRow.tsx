@@ -31,51 +31,29 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
   const getStatusIndicator = () => {
     switch (container.status) {
       case 'UPDATE_AVAILABLE':
-        if (container.change_type === ChangeType.MajorChange) return <span className="dot major" title="Major update"></span>;
-        if (container.change_type === ChangeType.MinorChange) return <span className="dot minor" title="Minor update"></span>;
-        if (container.change_type === ChangeType.PatchChange) return <span className="dot patch" title="Patch update"></span>;
-        return <span className="dot update" title="Update available"></span>;
+        if (container.change_type === ChangeType.MajorChange) return <span className="status-badge major" title="Major update">MAJOR</span>;
+        if (container.change_type === ChangeType.MinorChange) return <span className="status-badge minor" title="Minor update">MINOR</span>;
+        if (container.change_type === ChangeType.PatchChange) return <span className="status-badge patch" title="Patch update">PATCH</span>;
+        return <span className="status-badge rebuild" title="Update available">REBUILD</span>;
       case 'UPDATE_AVAILABLE_BLOCKED':
-        return <span className="dot blocked" title="Update blocked"></span>;
+        return <span className="status-badge blocked" title="Update blocked">BLOCKED</span>;
       case 'UP_TO_DATE':
         return <span className="dot current" title="Up to date"></span>;
-      case 'UP_TO_DATE_PINNABLE':
+      case 'UP_TO_DATE_PINNABLE': {
         const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
-        return <span className="dot pinnable" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}></span>;
+        return <span className="status-badge pin" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}>PIN</span>;
+      }
       case 'LOCAL_IMAGE':
         return <span className="dot local" title="Local image"></span>;
       case 'COMPOSE_MISMATCH': {
         const runningImg = container.image || 'unknown';
         const composeImg = container.compose_image || 'unknown';
-        return <span className="dot mismatch" title={`Running: ${runningImg}\nCompose: ${composeImg}`}></span>;
+        return <span className="status-badge mismatch" title={`Running: ${runningImg}\nCompose: ${composeImg}`}>MISMATCH</span>;
       }
       case 'IGNORED':
         return <span className="dot ignored" title="Ignored"></span>;
       default:
         return <span className="dot" title={container.status}></span>;
-    }
-  };
-
-  const getChangeTypeBadge = () => {
-    // Show PIN badge for pinnable containers (migrating from :latest to semver)
-    if (container.status === 'UP_TO_DATE_PINNABLE') {
-      return <span className="change-badge pin">PIN</span>;
-    }
-
-    if (container.status !== 'UPDATE_AVAILABLE' && container.status !== 'UPDATE_AVAILABLE_BLOCKED') return null;
-
-    switch (container.change_type) {
-      case ChangeType.MajorChange:
-        return <span className="change-badge major">MAJOR</span>;
-      case ChangeType.MinorChange:
-        return <span className="change-badge minor">MINOR</span>;
-      case ChangeType.PatchChange:
-        return <span className="change-badge patch">PATCH</span>;
-      case ChangeType.UnknownChange:
-        // For :latest tag updates or when version parsing fails
-        return <span className="change-badge rebuild">REBUILD</span>;
-      default:
-        return null;
     }
   };
 
@@ -203,7 +181,7 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
       </div>
       <div className="container-info">
         <span className="name">{container.container_name}</span>
-        <span className="version">{getVersion()} {getChangeTypeBadge()}</span>
+        <span className="version">{getVersion()}</span>
       </div>
       {getStatusIndicator()}
       {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}

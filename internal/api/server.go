@@ -343,6 +343,15 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// setNoCacheHeaders ensures the browser never serves a stale HTML page.
+// Uses no-store to prevent caching entirely — critical for SPA index.html
+// so that new deployments are picked up immediately without manual cache clears.
+func setNoCacheHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
 // spaHandler serves static files and falls back to index.html for SPA routing
 func spaHandler(staticDir string) http.Handler {
 	fileServer := http.FileServer(http.Dir(staticDir))
@@ -368,8 +377,7 @@ func spaHandler(staticDir string) http.Handler {
 			// File doesn't exist, serve index.html for SPA routing
 			indexPath := filepath.Join(staticDir, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
-				// HTML files: always validate (allows 304 responses for better mobile performance)
-				w.Header().Set("Cache-Control", "no-cache")
+				setNoCacheHeaders(w)
 				http.ServeFile(w, r, indexPath)
 				return
 			}
@@ -386,23 +394,20 @@ func spaHandler(staticDir string) http.Handler {
 			// Try to serve index.html in the directory
 			indexPath := filepath.Join(fullPath, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
-				// HTML files: always validate (allows 304 responses for better mobile performance)
-				w.Header().Set("Cache-Control", "no-cache")
+				setNoCacheHeaders(w)
 				http.ServeFile(w, r, indexPath)
 				return
 			}
 			// Otherwise serve root index.html for SPA routing
 			rootIndex := filepath.Join(staticDir, "index.html")
-			// HTML files: always validate (allows 304 responses for better mobile performance)
-			w.Header().Set("Cache-Control", "no-cache")
+			setNoCacheHeaders(w)
 			http.ServeFile(w, r, rootIndex)
 			return
 		}
 
 		// Set cache headers based on file type
 		if strings.HasSuffix(path, ".html") {
-			// HTML files: always validate (allows 304 responses for better mobile performance)
-			w.Header().Set("Cache-Control", "no-cache")
+			setNoCacheHeaders(w)
 		} else if strings.HasPrefix(path, "/assets/") {
 			// Versioned assets (JS/CSS with hashes): cache forever
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

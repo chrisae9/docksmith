@@ -1135,12 +1135,20 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 }
 
 // checkPermissions validates Docker access and file permissions.
-func (o *UpdateOrchestrator) checkPermissions(ctx context.Context, container *docker.Container) error {
-	// Skip Docker ping if SDK not initialized (e.g., in tests with mocked clients)
+// checkDockerAccess validates only Docker socket connectivity.
+// Use this for operations that don't need compose file access (e.g., restart, stop).
+func (o *UpdateOrchestrator) checkDockerAccess(ctx context.Context) error {
 	if o.dockerSDK != nil {
 		if _, err := o.dockerSDK.Ping(ctx); err != nil {
 			return fmt.Errorf("docker socket access denied: %w", err)
 		}
+	}
+	return nil
+}
+
+func (o *UpdateOrchestrator) checkPermissions(ctx context.Context, container *docker.Container) error {
+	if err := o.checkDockerAccess(ctx); err != nil {
+		return err
 	}
 
 	composeFilePath := o.getComposeFilePath(container)
@@ -2552,7 +2560,9 @@ func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID str
 	// Stage 1: Validating (0-10%)
 	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Validating permissions")
 
-	if err := o.checkPermissions(ctx, container); err != nil {
+	// Restart only needs Docker socket access, not compose file access.
+	// The compose file is optional — executeRestart falls back to Docker API if unavailable.
+	if err := o.checkDockerAccess(ctx); err != nil {
 		o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Permission check failed: %v", err))
 		return
 	}
