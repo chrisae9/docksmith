@@ -143,7 +143,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
     // Separate mismatch containers from regular updates
     const mismatchContainers: string[] = [];
-    const containersToUpdate: Array<{ name: string; target_version: string; stack: string }> = [];
+    const containersToUpdate: Array<{ name: string; target_version: string; stack: string; change_type: number; old_resolved_version: string; new_resolved_version: string }> = [];
 
     containerNames.forEach(name => {
       const container = result.containers.find(c => c.container_name === name);
@@ -156,6 +156,9 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
           name,
           target_version: container.latest_version || '',
           stack: container.stack || '',
+          change_type: container.change_type || 0,
+          old_resolved_version: container.current_version || '',
+          new_resolved_version: container.latest_resolved_version || container.latest_version || '',
         });
       }
     });

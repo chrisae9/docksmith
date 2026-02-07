@@ -126,6 +126,9 @@ export async function triggerBatchUpdate(containers: Array<{
   name: string;
   target_version: string;
   stack: string;
+  change_type?: number;
+  old_resolved_version?: string;
+  new_resolved_version?: string;
 }>): Promise<APIResponse<{
   operations: Array<{
     stack: string;
@@ -134,6 +137,7 @@ export async function triggerBatchUpdate(containers: Array<{
     status: string;
     error?: string;
   }>;
+  batch_group_id: string;
   status: string;
 }>> {
   return fetchAPI('/update/batch', {
@@ -150,6 +154,34 @@ export async function getRollbackInfo(operationId: string): Promise<APIResponse<
     method: 'POST',
     body: JSON.stringify({
       operation_id: operationId,
+    }),
+  });
+}
+
+// Get all operations in a batch group
+export async function getOperationsByGroup(groupId: string): Promise<APIResponse<{
+  batch_group_id: string;
+  operations: import('../types/api').UpdateOperation[];
+  count: number;
+}>> {
+  return fetchAPI(`/operations/group/${groupId}`);
+}
+
+// Rollback specific containers from an operation
+export async function rollbackContainers(
+  operationId: string,
+  containerNames: string[],
+  force = false
+): Promise<APIResponse<{
+  operation_id: string;
+  message: string;
+}>> {
+  return fetchAPI('/rollback/containers', {
+    method: 'POST',
+    body: JSON.stringify({
+      operation_id: operationId,
+      container_names: containerNames,
+      force,
     }),
   });
 }

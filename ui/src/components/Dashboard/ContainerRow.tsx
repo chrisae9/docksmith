@@ -38,22 +38,22 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
       case 'UPDATE_AVAILABLE_BLOCKED':
         return <span className="status-badge blocked" title="Update blocked">BLOCKED</span>;
       case 'UP_TO_DATE':
-        return <span className="dot current" title="Up to date"></span>;
+        return <span className="status-badge current" title="Up to date">CURRENT</span>;
       case 'UP_TO_DATE_PINNABLE': {
         const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
         return <span className="status-badge pin" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}>PIN</span>;
       }
       case 'LOCAL_IMAGE':
-        return <span className="dot local" title="Local image"></span>;
+        return <span className="status-badge local" title="Local image">LOCAL</span>;
       case 'COMPOSE_MISMATCH': {
         const runningImg = container.image || 'unknown';
         const composeImg = container.compose_image || 'unknown';
         return <span className="status-badge mismatch" title={`Running: ${runningImg}\nCompose: ${composeImg}`}>MISMATCH</span>;
       }
       case 'IGNORED':
-        return <span className="dot ignored" title="Ignored"></span>;
+        return <span className="status-badge ignored" title="Ignored">IGNORED</span>;
       default:
-        return <span className="dot" title={container.status}></span>;
+        return <span className="status-badge" title={container.status}>{container.status}</span>;
     }
   };
 
@@ -183,7 +183,6 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
         <span className="name">{container.container_name}</span>
         <span className="version">{getVersion()}</span>
       </div>
-      {getStatusIndicator()}
       {container.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
       {container.pre_update_check_fail && (
         <span className="warn" title={container.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>
@@ -225,6 +224,7 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
           <i className="fa-solid fa-tag"></i>
         </span>
       )}
+      {getStatusIndicator()}
     </li>
   );
 }

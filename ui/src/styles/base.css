@@ -68,19 +68,19 @@
   --color-update-minor: #FF9F0A;        /* iOS Orange - notable change */
   --color-update-major: #EF4444;        /* Red - breaking change */
 
-  /* === BACKGROUND COLORS - RICH DARK THEME === */
-  --color-bg-primary: #0C0C0E;
-  --color-bg-primary-translucent: rgba(12, 12, 14, 0.97);
-  --color-bg-secondary: #121214;
-  --color-bg-tertiary: #1A1A1E;
-  --color-bg-quaternary: #222226;
-  --color-bg-elevated: #2A2A30;
-  --color-bg-hover: #32323A;
+  /* === BACKGROUND COLORS - WARM ZINC PALETTE === */
+  --color-bg-primary: #09090B;
+  --color-bg-primary-translucent: rgba(9, 9, 11, 0.97);
+  --color-bg-secondary: #111114;
+  --color-bg-tertiary: #18181B;
+  --color-bg-quaternary: #212124;
+  --color-bg-elevated: #27272A;
+  --color-bg-hover: #303033;
   --color-bg-hover-faint: rgba(255, 255, 255, 0.04);
 
   /* Overlay */
-  --color-overlay: rgba(8, 8, 10, 0.94);
-  --color-overlay-light: rgba(8, 8, 10, 0.80);
+  --color-overlay: rgba(0, 0, 0, 0.92);
+  --color-overlay-light: rgba(0, 0, 0, 0.78);
 
   /* === TEXT COLORS - IMPROVED CONTRAST === */
   --color-text-primary: #F4F4F5;
@@ -89,9 +89,9 @@
   --color-text-quaternary: #5C5C66;
   --color-text-tertiary-dim: rgba(161, 161, 170, 0.12);
 
-  /* === BORDERS & SEPARATORS - MORE VISIBLE === */
-  --color-separator: #2A2A30;
-  --color-separator-opaque: #363640;
+  /* === BORDERS & SEPARATORS === */
+  --color-separator: #27272A;
+  --color-separator-opaque: #343438;
   --color-border: rgba(255, 255, 255, 0.15);
   --color-border-subtle: rgba(255, 255, 255, 0.10);
   --color-border-glow: rgba(14, 165, 233, 0.25);
@@ -179,6 +179,19 @@ body {
   touch-action: manipulation;
 }
 
+/* Subtle noise texture overlay — breaks flat digital surfaces */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.018;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
 #root {
   width: 100%;
   height: 100%;
@@ -199,9 +212,9 @@ body {
 }
 
 h1 {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 /* Loading */

@@ -213,6 +213,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	// Operations history
 	mux.HandleFunc("GET /api/operations", s.handleOperations)
 	mux.HandleFunc("GET /api/operations/{id}", s.handleOperationByID)
+	mux.HandleFunc("GET /api/operations/group/{groupId}", s.handleOperationsByGroup)
 
 	// Check and update history
 	mux.HandleFunc("GET /api/history", s.handleHistory)
@@ -242,6 +243,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/update", s.handleUpdate)
 	mux.HandleFunc("POST /api/update/batch", s.handleBatchUpdate)
 	mux.HandleFunc("POST /api/rollback", s.handleRollback)
+	mux.HandleFunc("POST /api/rollback/containers", s.handleRollbackContainers)
 	mux.HandleFunc("POST /api/fix-compose-mismatch/{name}", s.handleFixComposeMismatch)
 
 	// Restart operations

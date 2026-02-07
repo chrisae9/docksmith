@@ -260,6 +260,10 @@ func (m *MockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start,
 	return m.operations, m.GetError
 }
 
+func (m *MockStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
+	return m.operations, m.GetError
+}
+
 func (m *MockStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]storage.UpdateOperation, error) {
 	if m.GetError != nil {
 		return nil, m.GetError

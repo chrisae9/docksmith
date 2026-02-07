@@ -123,6 +123,10 @@ func (m *bgCheckerMockStorage) GetUpdateOperationsByTimeRange(ctx context.Contex
 	return nil, nil
 }
 
+func (m *bgCheckerMockStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
 func (m *bgCheckerMockStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]storage.UpdateOperation, error) {
 	return nil, nil
 }

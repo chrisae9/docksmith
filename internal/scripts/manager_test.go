@@ -134,6 +134,9 @@ func (m *mockStorage) GetUpdateOperationsByContainer(ctx context.Context, contai
 func (m *mockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]storage.UpdateOperation, error) {
 	return nil, nil
 }
+func (m *mockStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
 func (m *mockStorage) GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]storage.UpdateOperation, error) {
 	return nil, nil
 }

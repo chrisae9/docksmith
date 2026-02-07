@@ -414,6 +414,71 @@ test_batch_update() {
     assert_version "test-redis-basic" "8.4" "Redis updated to 8.4"
 }
 
+# Test 20: POST /api/update/batch with metadata fields
+test_batch_update_with_metadata() {
+    print_info "Test: POST /api/update/batch with change_type and resolved versions"
+
+    # Update with metadata fields (change_type, old_resolved_version, new_resolved_version)
+    local body='{"containers":[{"name":"test-nginx-basic","target_version":"1.29.3","stack":"test-stack","change_type":1,"old_resolved_version":"1.29.2","new_resolved_version":"1.29.3"}]}'
+    local response=$(curl_api POST "/update/batch" "$body")
+    assert_api_success "$response" "Batch update with metadata initiated"
+
+    # Verify batch_group_id is returned
+    local batch_group_id=$(echo "$response" | jq -r '.data.batch_group_id // empty')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ -n "$batch_group_id" ] && [ "$batch_group_id" != "null" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "batch_group_id returned: $batch_group_id"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "batch_group_id not returned in response"
+    fi
+
+    # Wait for operation to complete
+    local op_ids=$(echo "$response" | jq -r '.data.operations[].operation_id // empty')
+    for op_id in $op_ids; do
+        if [ -n "$op_id" ] && [ "$op_id" != "null" ]; then
+            wait_for_operation "$op_id" 180
+
+            # Verify batch_details has metadata
+            local op_response=$(curl_api GET "/operations/$op_id")
+            local change_type=$(echo "$op_response" | jq -r '.data.batch_details[0].change_type // empty')
+            local old_resolved=$(echo "$op_response" | jq -r '.data.batch_details[0].old_resolved_version // empty')
+            local new_resolved=$(echo "$op_response" | jq -r '.data.batch_details[0].new_resolved_version // empty')
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if [ "$change_type" = "1" ]; then
+                TESTS_PASSED=$((TESTS_PASSED + 1))
+                print_success "change_type=1 (PATCH) stored in batch_details"
+            else
+                TESTS_FAILED=$((TESTS_FAILED + 1))
+                print_error "Expected change_type=1, got: $change_type"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if [ "$old_resolved" = "1.29.2" ] && [ "$new_resolved" = "1.29.3" ]; then
+                TESTS_PASSED=$((TESTS_PASSED + 1))
+                print_success "Resolved versions stored correctly"
+            else
+                TESTS_FAILED=$((TESTS_FAILED + 1))
+                print_error "Expected resolved versions 1.29.2/1.29.3, got: $old_resolved/$new_resolved"
+            fi
+        fi
+    done
+
+    # Verify batch_group_id links operations
+    local group_response=$(curl_api GET "/operations/group/$batch_group_id")
+    local group_count=$(echo "$group_response" | jq -r '.data.operations | length // 0')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$group_count" -ge 1 ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "batch_group_id links $group_count operations"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "batch_group_id query returned $group_count operations"
+    fi
+}
+
 # Main test execution
 main() {
     check_docksmith || exit 1
@@ -450,6 +515,7 @@ main() {
     test_remove_container
     test_remove_container_force
     test_batch_update
+    test_batch_update_with_metadata
 
     # Print summary
     print_test_summary

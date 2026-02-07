@@ -18,15 +18,16 @@
   padding: var(--space-8) var(--space-8) var(--space-6);
   padding-left: calc(var(--space-8) + var(--safe-area-inset-left));
   padding-right: calc(var(--space-8) + var(--safe-area-inset-right));
-  border-bottom: 1px solid var(--color-separator);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Page Title */
 .dashboard > header h1 {
-  font-size: var(--text-5xl);
-  font-weight: var(--font-bold);
+  font-size: var(--text-4xl);
+  font-weight: var(--font-semibold);
   margin: 0;
   color: var(--color-text-primary);
+  letter-spacing: -0.03em;
 }
 
 .header-top {
@@ -407,8 +408,8 @@
 .stack-container-list > li {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
-  padding: var(--space-5) var(--space-7);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--color-separator);
   transition: background-color var(--transition-fast);
 }
@@ -532,7 +533,7 @@
 .name {
   display: block;
   color: var(--color-text-primary);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   font-weight: var(--font-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -542,8 +543,8 @@
 .version {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--color-text-tertiary);
   margin-top: var(--space-1);
   font-family: var(--font-mono);
@@ -551,13 +552,13 @@
 
 .dashboard li.has-update .version,
 .stack-container-list > li.has-update .version {
-  color: var(--color-cyan);
+  color: var(--color-text-secondary);
 }
 
 /* Status Dots - Clean & Visible */
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
   background: var(--color-text-quaternary);
@@ -609,54 +610,70 @@
   background: var(--color-status-ignored);
 }
 
-/* Status Type Badges - Colored pills replacing dots for actionable statuses */
-.status-badge {
+/* Status Type Badges - Subtle micro-pill annotations */
+/* Scoped to .dashboard to beat unscoped .status-badge in modals.css / progress-common.css */
+.dashboard .status-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 6px;
-  border-radius: var(--radius-full);
-  font-size: var(--text-2xs);
-  font-weight: var(--font-bold);
+  padding: var(--badge-pad-y) var(--badge-pad-x);
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font-size);
+  font-weight: var(--font-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: var(--badge-tracking);
   white-space: nowrap;
   flex-shrink: 0;
-  line-height: 1.2;
+  line-height: var(--badge-line-height);
 }
 
-.status-badge.major {
+.dashboard .status-badge.major {
   background: var(--color-badge-major-dim);
   color: var(--color-badge-major);
 }
 
-.status-badge.minor {
+.dashboard .status-badge.minor {
   background: var(--color-badge-minor-dim);
   color: var(--color-badge-minor);
 }
 
-.status-badge.patch {
+.dashboard .status-badge.patch {
   background: var(--color-badge-patch-dim);
   color: var(--color-badge-patch);
 }
 
-.status-badge.rebuild {
-  background: var(--color-badge-patch-dim);
-  color: var(--color-badge-patch);
+.dashboard .status-badge.rebuild {
+  background: var(--color-slate-dim);
+  color: var(--color-slate);
 }
 
-.status-badge.blocked {
+.dashboard .status-badge.blocked {
   background: var(--color-badge-blocked-dim);
   color: var(--color-badge-blocked);
 }
 
-.status-badge.pin {
+.dashboard .status-badge.pin {
   background: var(--color-badge-pin-dim);
   color: var(--color-badge-pin);
 }
 
-.status-badge.mismatch {
+.dashboard .status-badge.mismatch {
   background: var(--color-warning-dim);
   color: var(--color-warning);
+}
+
+.dashboard .status-badge.current {
+  background: var(--color-success-dim);
+  color: var(--color-success);
+}
+
+.dashboard .status-badge.local {
+  background: var(--color-slate-dim);
+  color: var(--color-slate);
+}
+
+.dashboard .status-badge.ignored {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
 }
 
 /* Status Badge Pills - Semantic Colors */
@@ -665,7 +682,7 @@
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  border-radius: var(--radius-full);
+  border-radius: var(--badge-radius);
   font-size: 11px;
   font-weight: var(--font-semibold);
   text-transform: uppercase;
@@ -904,8 +921,10 @@
   right: 0;
   height: calc(var(--height-tab-bar) + var(--safe-area-inset-bottom));
   padding-bottom: var(--safe-area-inset-bottom);
-  background: var(--color-bg-secondary);
-  border-top: 1px solid var(--color-separator);
+  background: rgba(17, 17, 20, 0.82);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   justify-content: space-around;
   align-items: stretch;
@@ -936,9 +955,9 @@
   left: 50%;
   transform: translateX(-50%) scaleX(0);
   width: 32px;
-  height: 3px;
-  background: var(--color-accent);
-  border-radius: 0 0 3px 3px;
+  height: 2px;
+  background: var(--color-text-primary);
+  border-radius: 0 0 2px 2px;
   transition: transform var(--transition-normal);
 }
 
@@ -947,7 +966,7 @@
 }
 
 .tab-item.active {
-  color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 .tab-item.active::before {
@@ -970,7 +989,7 @@
 }
 
 .tab-item.active .tab-icon {
-  color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 .tab-badge {
@@ -1006,14 +1025,13 @@
 .tab-label {
   font-size: 11px;
   font-weight: var(--font-medium);
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   transition: color var(--transition-fast);
 }
 
 .tab-item.active .tab-label {
   font-weight: var(--font-semibold);
-  color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 /* Tab Content Area */
@@ -1026,7 +1044,7 @@
 /* Responsive - Mobile */
 @media (max-width: 640px) {
   .dashboard > header h1 {
-    font-size: var(--text-6xl);
+    font-size: var(--text-3xl);
   }
 
   .stat {
@@ -1046,10 +1064,15 @@
     font-size: var(--text-xs);
   }
 
+  .dashboard .status-badge {
+    font-size: 7px;
+    padding: 1px 4px;
+  }
+
   .dashboard li,
   .stack-container-list > li {
-    padding: var(--space-5) var(--space-6);
-    gap: var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    gap: var(--space-4);
   }
 }
 
@@ -1076,11 +1099,11 @@
 
   .dashboard li,
   .stack-container-list > li {
-    padding: var(--space-6) var(--space-8);
+    padding: var(--space-5) var(--space-7);
   }
 
   .name {
-    font-size: var(--text-lg);
+    font-size: var(--text-md);
   }
 
   .version {

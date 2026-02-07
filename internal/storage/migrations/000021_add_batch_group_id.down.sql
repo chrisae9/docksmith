@@ -1,0 +1,1 @@
+-- SQLite cannot drop columns; no-op (matches 000014 pattern)

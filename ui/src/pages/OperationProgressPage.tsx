@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch } from '../api/client';
+import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -38,6 +38,9 @@ interface UpdateOperation {
     target_version: string;
     stack: string;
     force?: boolean;
+    change_type?: number;
+    old_resolved_version?: string;
+    new_resolved_version?: string;
   }>;
 }
 
@@ -116,8 +119,9 @@ export function OperationProgressPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Check for operation ID in URL (for page refresh recovery)
+  // Check for operation ID or batch group ID in URL (for page refresh recovery)
   const urlOperationId = searchParams.get('id');
+  const urlBatchGroupId = searchParams.get('group');
 
   // Determine operation type from location state - capture once on mount
   const getOperationInfoFromState = (state: any): OperationInfo | null => {
@@ -164,8 +168,8 @@ export function OperationProgressPage() {
   const operationInfo = operationInfoRef.current;
   const operationType: OperationType | null = operationInfo?.type || null;
 
-  // Recovery mode: we have an operation ID in URL but no location state
-  const isRecoveryMode = !operationInfo && !!urlOperationId;
+  // Recovery mode: we have an operation ID or batch group ID in URL but no location state
+  const isRecoveryMode = !operationInfo && (!!urlOperationId || !!urlBatchGroupId);
 
   // Common state
   const [status, setStatus] = useState<'in_progress' | 'success' | 'failed'>('in_progress');
@@ -256,7 +260,137 @@ export function OperationProgressPage() {
 
   // Recovery mode: fetch operation status when we have URL param but no location state
   useEffect(() => {
-    if (!isRecoveryMode || !urlOperationId) return;
+    if (!isRecoveryMode) return;
+
+    // Batch group recovery: fetch all operations in the group
+    if (urlBatchGroupId) {
+      const fetchGroupOperations = async () => {
+        try {
+          addLog('Recovering batch group status...', 'info', 'fa-sync');
+          const response = await getOperationsByGroup(urlBatchGroupId);
+
+          if (!response.success || !response.data) {
+            addLog('Batch group not found', 'error', 'fa-circle-xmark');
+            return;
+          }
+
+          const ops = response.data.operations;
+          if (ops.length === 0) {
+            addLog('No operations found in batch group', 'error', 'fa-circle-xmark');
+            return;
+          }
+
+          // Find earliest start time
+          const startTimes = ops.map(op => op.started_at ? new Date(op.started_at).getTime() : Date.now());
+          setStartTime(Math.min(...startTimes));
+          setRecoveredOperation(ops[0]);
+
+          // Build container list from all operations' batch_details
+          const containerList: ContainerProgress[] = [];
+          for (const op of ops) {
+            if (op.batch_details && op.batch_details.length > 0) {
+              for (const detail of op.batch_details) {
+                containerList.push({
+                  name: detail.container_name,
+                  status: op.status === 'complete' ? 'success' : op.status === 'failed' ? 'failed' : 'in_progress',
+                  message: op.error_message || op.status,
+                  percent: op.status === 'complete' ? 100 : 50,
+                  versionFrom: detail.old_version,
+                  versionTo: detail.new_version,
+                  operationId: op.operation_id,
+                });
+                containerToOpIdRef.current.set(detail.container_name, op.operation_id);
+              }
+            } else {
+              containerList.push({
+                name: op.container_name || 'Unknown',
+                status: op.status === 'complete' ? 'success' : op.status === 'failed' ? 'failed' : 'in_progress',
+                message: op.error_message || op.status,
+                percent: op.status === 'complete' ? 100 : 50,
+                operationId: op.operation_id,
+              });
+              containerToOpIdRef.current.set(op.container_name, op.operation_id);
+            }
+          }
+          setContainers(containerList);
+
+          // Check overall status
+          const allComplete = ops.every(op => op.status === 'complete');
+          const anyFailed = ops.some(op => op.status === 'failed');
+          const allDone = ops.every(op => op.status === 'complete' || op.status === 'failed');
+
+          if (allComplete) {
+            setStatus('success');
+            addLog('All operations completed successfully', 'success', 'fa-circle-check');
+          } else if (allDone && anyFailed) {
+            setStatus('failed');
+            addLog('Some operations failed', 'error', 'fa-circle-xmark');
+          } else {
+            // Still in progress — poll all operations
+            addLog(`Batch update in progress (${ops.length} operations)`, 'info', 'fa-spinner');
+
+            const pollGroupOperations = async () => {
+              let attempts = 0;
+              const maxAttempts = 120;
+
+              while (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                attempts++;
+
+                try {
+                  const pollResponse = await getOperationsByGroup(urlBatchGroupId);
+                  if (!pollResponse.success || !pollResponse.data) continue;
+
+                  const pollOps = pollResponse.data.operations;
+                  const pollAllDone = pollOps.every(op => op.status === 'complete' || op.status === 'failed');
+
+                  // Update container statuses
+                  for (const op of pollOps) {
+                    const affectedNames: string[] = [];
+                    if (op.batch_details && op.batch_details.length > 0) {
+                      for (const d of op.batch_details) affectedNames.push(d.container_name);
+                    } else {
+                      affectedNames.push(op.container_name);
+                    }
+
+                    if (op.status === 'complete') {
+                      setContainers(prev => prev.map(c =>
+                        affectedNames.includes(c.name) ? { ...c, status: 'success', percent: 100, message: 'Completed' } : c
+                      ));
+                    } else if (op.status === 'failed') {
+                      setContainers(prev => prev.map(c =>
+                        affectedNames.includes(c.name) ? { ...c, status: 'failed', message: op.error_message || 'Failed' } : c
+                      ));
+                    }
+                  }
+
+                  if (pollAllDone) {
+                    const pollAllComplete = pollOps.every(op => op.status === 'complete');
+                    setStatus(pollAllComplete ? 'success' : 'failed');
+                    addLog(pollAllComplete ? 'All operations completed' : 'Some operations failed', pollAllComplete ? 'success' : 'error', pollAllComplete ? 'fa-circle-check' : 'fa-circle-xmark');
+                    return;
+                  }
+                } catch {
+                  // Continue polling
+                }
+              }
+              addLog('Timed out waiting for batch completion', 'error', 'fa-clock');
+              setStatus('failed');
+            };
+            pollGroupOperations();
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : 'Unknown error';
+          addLog(`Failed to recover batch group: ${errMsg}`, 'error', 'fa-circle-xmark');
+        }
+      };
+
+      fetchGroupOperations();
+      return;
+    }
+
+    // Single operation recovery
+    if (!urlOperationId) return;
 
     const fetchOperation = async () => {
       try {
@@ -355,7 +489,7 @@ export function OperationProgressPage() {
     };
 
     fetchOperation();
-  }, [isRecoveryMode, urlOperationId]);
+  }, [isRecoveryMode, urlOperationId, urlBatchGroupId]);
 
   // Handle reconnection after self-restart: poll operation status to see if it completed
   useEffect(() => {
@@ -936,6 +1070,12 @@ export function OperationProgressPage() {
         addLog(`Batch update failed: ${response.error}`, 'error', 'fa-circle-xmark');
         setStatus('failed');
         return;
+      }
+
+      // Save batch group ID to URL for refresh recovery
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
       }
 
       // Track operation IDs

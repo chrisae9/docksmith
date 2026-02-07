@@ -73,6 +73,18 @@
   --space-bottom-nav: 100px;
 
   /* ============================================
+     BADGE COMPONENT TOKENS
+     Shared across dashboard, explorer, history, container pages
+     ============================================ */
+  --badge-font-size: 9px;
+  --badge-font-size-lg: 10px;
+  --badge-pad-y: 2px;
+  --badge-pad-x: 7px;
+  --badge-tracking: 0.4px;
+  --badge-line-height: 1.2;
+  --badge-radius: 4px;
+
+  /* ============================================
      BORDER RADIUS
      More geometric, industrial feel
      ============================================ */

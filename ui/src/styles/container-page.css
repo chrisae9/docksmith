@@ -69,13 +69,14 @@
 .container-page .status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
+  gap: 4px;
+  font-size: var(--badge-font-size-lg);
+  font-weight: var(--font-semibold);
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--badge-tracking);
+  line-height: var(--badge-line-height);
 }
 
 .container-page .status-badge.running {
@@ -104,12 +105,13 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  font-size: 11px;
-  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font-size-lg);
+  font-weight: var(--font-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--badge-tracking);
+  line-height: var(--badge-line-height);
 }
 
 .container-page .docksmith-badge.update { background: var(--color-badge-update-dim); color: var(--color-badge-update); }
@@ -125,12 +127,13 @@
 .container-page .change-badge {
   display: inline-flex;
   align-items: center;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  font-size: 11px;
-  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font-size-lg);
+  font-weight: var(--font-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--badge-tracking);
+  line-height: var(--badge-line-height);
 }
 
 .container-page .change-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
@@ -532,14 +535,14 @@
 }
 
 .container-page .info-label {
-  font-size: 15px;
+  font-size: 14px;
   color: var(--color-text-primary);
   flex: 0 0 auto;
   max-width: 40%;
 }
 
 .container-page .info-value {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--color-text-secondary);
   text-align: right;
   word-break: break-word;
@@ -865,9 +868,8 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: 4px;
+  padding: 8px 12px 8px 8px;
   border-bottom: 1px solid var(--color-separator);
   cursor: pointer;
   min-height: 44px;
@@ -1116,18 +1118,7 @@
   margin: 0;
 }
 
-/* Updated checkbox row with help button */
-.container-page .checkbox-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px 8px 8px;
-  border-bottom: 1px solid var(--color-separator);
-  min-height: 44px;
-}
-
-.container-page .checkbox-row:last-child { border-bottom: none; }
+/* checkbox-row :last-child handled in primary definition above */
 
 .container-page .row-label-area {
   flex: 1;

@@ -52,13 +52,14 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 		var op UpdateOperation
 		var dependentsJSON sql.NullString
 		var batchDetailsJSON sql.NullString
+		var batchGroupID sql.NullString
 		var startedAt, completedAt sql.NullTime
 		var containerID, stackName, oldVersion, newVersion, errorMessage sql.NullString
 
 		err := rows.Scan(
 			&op.ID, &op.OperationID, &containerID, &op.ContainerName, &stackName, &op.OperationType, &op.Status,
 			&oldVersion, &newVersion, &startedAt, &completedAt, &errorMessage,
-			&dependentsJSON, &op.RollbackOccurred, &batchDetailsJSON, &op.CreatedAt, &op.UpdatedAt,
+			&dependentsJSON, &op.RollbackOccurred, &batchDetailsJSON, &batchGroupID, &op.CreatedAt, &op.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan update operation: %w", err)
@@ -85,6 +86,9 @@ func scanUpdateOperationRows(rows *sql.Rows) ([]UpdateOperation, error) {
 		}
 		if completedAt.Valid {
 			op.CompletedAt = &completedAt.Time
+		}
+		if batchGroupID.Valid {
+			op.BatchGroupID = batchGroupID.String
 		}
 
 		// Deserialize dependents affected from JSON

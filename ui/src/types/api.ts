@@ -78,6 +78,9 @@ export interface BatchContainerDetail {
   stack_name?: string;
   old_version: string;
   new_version: string;
+  change_type?: number;
+  old_resolved_version?: string;
+  new_resolved_version?: string;
 }
 
 // Update Operation (matches storage.UpdateOperation)
@@ -97,6 +100,7 @@ export interface UpdateOperation {
   dependents_affected?: string[];
   rollback_occurred: boolean;
   batch_details?: BatchContainerDetail[];
+  batch_group_id?: string;
   created_at: string;
   updated_at: string;
 }

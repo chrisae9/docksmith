@@ -163,6 +163,12 @@ type Storage interface {
 	//   - limit: Maximum number of entries to return (0 for no limit)
 	GetUpdateOperationsByStatus(ctx context.Context, status string, limit int) ([]UpdateOperation, error)
 
+	// GetUpdateOperationsByBatchGroup retrieves all operations in a batch group.
+	// Returns entries ordered by started_at ASC (earliest first).
+	// Parameters:
+	//   - batchGroupID: The batch group identifier linking related operations
+	GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]UpdateOperation, error)
+
 	// UpdateOperationStatus updates the status and error message of an operation.
 	// Also updates the updated_at timestamp automatically.
 	// Parameters:
@@ -271,10 +277,13 @@ type ConfigSnapshot struct {
 // Tracks progress through all stages of the update workflow.
 // BatchContainerDetail stores version info for a single container in a batch update
 type BatchContainerDetail struct {
-	ContainerName string `json:"container_name"`
-	StackName     string `json:"stack_name,omitempty"`
-	OldVersion    string `json:"old_version"`
-	NewVersion    string `json:"new_version"`
+	ContainerName      string `json:"container_name"`
+	StackName          string `json:"stack_name,omitempty"`
+	OldVersion         string `json:"old_version"`
+	NewVersion         string `json:"new_version"`
+	ChangeType         *int   `json:"change_type,omitempty"`          // version.ChangeType (0=rebuild, 1=patch, 2=minor, 3=major)
+	OldResolvedVersion string `json:"old_resolved_version,omitempty"` // Resolved version at time of update
+	NewResolvedVersion string `json:"new_resolved_version,omitempty"` // Resolved version at time of update
 }
 
 type UpdateOperation struct {
@@ -293,6 +302,7 @@ type UpdateOperation struct {
 	DependentsAffected []string                `json:"dependents_affected,omitempty"` // JSON array of container names
 	RollbackOccurred   bool                    `json:"rollback_occurred"`
 	BatchDetails       []BatchContainerDetail  `json:"batch_details,omitempty"` // Details for batch operations
+	BatchGroupID       string                  `json:"batch_group_id,omitempty"` // Links operations from a single user action
 	CreatedAt          time.Time               `json:"created_at"`
 	UpdatedAt          time.Time               `json:"updated_at"`
 }

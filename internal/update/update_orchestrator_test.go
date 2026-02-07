@@ -83,6 +83,18 @@ func (m *TestMockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, st
 	return nil, nil
 }
 
+func (m *TestMockStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ops []storage.UpdateOperation
+	for _, op := range m.operations {
+		if op.BatchGroupID == batchGroupID {
+			ops = append(ops, op)
+		}
+	}
+	return ops, nil
+}
+
 func (m *TestMockStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

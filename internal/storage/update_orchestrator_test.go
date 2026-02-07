@@ -603,3 +603,251 @@ func TestStopOperationFailure(t *testing.T) {
 		t.Errorf("Expected error message 'container not running', got %s", retrieved.ErrorMessage)
 	}
 }
+
+// TestBatchDetailsWithChangeType tests that BatchContainerDetail with *int ChangeType
+// correctly round-trips through the database (including zero value vs nil).
+func TestBatchDetailsWithChangeType(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Create helper to make *int
+	intPtr := func(v int) *int { return &v }
+
+	// Operation with ChangeType=0 (rebuild), resolved versions, and nil ChangeType
+	op := UpdateOperation{
+		OperationID:   "batch-meta-001",
+		ContainerName: "test-batch",
+		StackName:     "test-stack",
+		OperationType: "batch",
+		Status:        "complete",
+		StartedAt:     &now,
+		BatchDetails: []BatchContainerDetail{
+			{
+				ContainerName:      "container-a",
+				StackName:          "stack-1",
+				OldVersion:         "v1.0.0",
+				NewVersion:         "v1.1.0",
+				ChangeType:         intPtr(1), // PATCH
+				OldResolvedVersion: "v1.0.0",
+				NewResolvedVersion: "v1.1.0",
+			},
+			{
+				ContainerName:      "container-b",
+				StackName:          "stack-1",
+				OldVersion:         "master-omnibus",
+				NewVersion:         "master-omnibus",
+				ChangeType:         intPtr(0), // REBUILD (zero value, must be preserved)
+				OldResolvedVersion: "v0.8.0-omnibus",
+				NewResolvedVersion: "v0.8.1-omnibus",
+			},
+			{
+				ContainerName: "container-c",
+				StackName:     "stack-1",
+				OldVersion:    "latest",
+				NewVersion:    "latest",
+				// ChangeType is nil — legacy behavior, should not appear in JSON
+			},
+		},
+	}
+
+	err = storage.SaveUpdateOperation(ctx, op)
+	if err != nil {
+		t.Fatalf("Failed to save operation: %v", err)
+	}
+
+	// Retrieve and verify
+	retrieved, found, err := storage.GetUpdateOperation(ctx, "batch-meta-001")
+	if err != nil {
+		t.Fatalf("Failed to get operation: %v", err)
+	}
+	if !found {
+		t.Fatal("Expected to find operation")
+	}
+	if len(retrieved.BatchDetails) != 3 {
+		t.Fatalf("Expected 3 batch details, got %d", len(retrieved.BatchDetails))
+	}
+
+	// Verify container-a: PATCH with resolved versions
+	detailA := retrieved.BatchDetails[0]
+	if detailA.ContainerName != "container-a" {
+		t.Errorf("Expected container-a, got %s", detailA.ContainerName)
+	}
+	if detailA.ChangeType == nil || *detailA.ChangeType != 1 {
+		t.Errorf("Expected ChangeType=1 (PATCH), got %v", detailA.ChangeType)
+	}
+	if detailA.OldResolvedVersion != "v1.0.0" {
+		t.Errorf("Expected OldResolvedVersion=v1.0.0, got %s", detailA.OldResolvedVersion)
+	}
+	if detailA.NewResolvedVersion != "v1.1.0" {
+		t.Errorf("Expected NewResolvedVersion=v1.1.0, got %s", detailA.NewResolvedVersion)
+	}
+
+	// Verify container-b: REBUILD (ChangeType=0, must NOT be nil)
+	detailB := retrieved.BatchDetails[1]
+	if detailB.ChangeType == nil {
+		t.Error("Expected ChangeType=0 (REBUILD) to be non-nil, but got nil")
+	} else if *detailB.ChangeType != 0 {
+		t.Errorf("Expected ChangeType=0, got %d", *detailB.ChangeType)
+	}
+	if detailB.OldResolvedVersion != "v0.8.0-omnibus" {
+		t.Errorf("Expected OldResolvedVersion=v0.8.0-omnibus, got %s", detailB.OldResolvedVersion)
+	}
+	if detailB.NewResolvedVersion != "v0.8.1-omnibus" {
+		t.Errorf("Expected NewResolvedVersion=v0.8.1-omnibus, got %s", detailB.NewResolvedVersion)
+	}
+
+	// Verify container-c: nil ChangeType (legacy)
+	detailC := retrieved.BatchDetails[2]
+	if detailC.ChangeType != nil {
+		t.Errorf("Expected nil ChangeType for legacy container, got %d", *detailC.ChangeType)
+	}
+	if detailC.OldResolvedVersion != "" {
+		t.Errorf("Expected empty OldResolvedVersion, got %s", detailC.OldResolvedVersion)
+	}
+}
+
+// TestBatchGroupIDLinking tests that operations with the same batch_group_id
+// can be queried together.
+func TestBatchGroupIDLinking(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+	groupID := "group-abc-123"
+
+	// Create two operations in the same batch group
+	op1 := UpdateOperation{
+		OperationID:   "group-op-001",
+		ContainerName: "container-1",
+		StackName:     "stack-a",
+		OperationType: "single",
+		Status:        "complete",
+		OldVersion:    "1.0",
+		NewVersion:    "2.0",
+		BatchGroupID:  groupID,
+		StartedAt:     &now,
+	}
+	op2 := UpdateOperation{
+		OperationID:   "group-op-002",
+		ContainerName: "container-2",
+		StackName:     "stack-b",
+		OperationType: "batch",
+		Status:        "complete",
+		BatchGroupID:  groupID,
+		StartedAt:     &now,
+		BatchDetails: []BatchContainerDetail{
+			{ContainerName: "container-2", OldVersion: "v1", NewVersion: "v2"},
+			{ContainerName: "container-3", OldVersion: "v3", NewVersion: "v4"},
+		},
+	}
+	// Operation in a different group
+	op3 := UpdateOperation{
+		OperationID:   "other-op-001",
+		ContainerName: "container-x",
+		StackName:     "stack-c",
+		OperationType: "single",
+		Status:        "complete",
+		BatchGroupID:  "group-other-456",
+		StartedAt:     &now,
+	}
+
+	for _, op := range []UpdateOperation{op1, op2, op3} {
+		if err := storage.SaveUpdateOperation(ctx, op); err != nil {
+			t.Fatalf("Failed to save operation %s: %v", op.OperationID, err)
+		}
+	}
+
+	// Query by batch group ID
+	grouped, err := storage.GetUpdateOperationsByBatchGroup(ctx, groupID)
+	if err != nil {
+		t.Fatalf("Failed to get operations by batch group: %v", err)
+	}
+
+	if len(grouped) != 2 {
+		t.Fatalf("Expected 2 operations in group, got %d", len(grouped))
+	}
+
+	// Verify both operations are present
+	ids := map[string]bool{}
+	for _, op := range grouped {
+		ids[op.OperationID] = true
+	}
+	if !ids["group-op-001"] || !ids["group-op-002"] {
+		t.Errorf("Expected group-op-001 and group-op-002, got %v", ids)
+	}
+
+	// Verify batch details preserved in group query
+	for _, op := range grouped {
+		if op.OperationID == "group-op-002" && len(op.BatchDetails) != 2 {
+			t.Errorf("Expected 2 batch details for group-op-002, got %d", len(op.BatchDetails))
+		}
+	}
+}
+
+// TestRollbackOccurredTracking tests that rollback_occurred is correctly saved and retrieved.
+func TestRollbackOccurredTracking(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	storage, err := NewSQLiteStorage(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer storage.Close()
+
+	ctx := context.Background()
+	now := time.Now()
+
+	op := UpdateOperation{
+		OperationID:      "rollback-track-001",
+		ContainerName:    "test-container",
+		StackName:        "test-stack",
+		OperationType:    "batch",
+		Status:           "complete",
+		OldVersion:       "1.0",
+		NewVersion:       "2.0",
+		StartedAt:        &now,
+		RollbackOccurred: false,
+		BatchDetails: []BatchContainerDetail{
+			{ContainerName: "test-container", OldVersion: "1.0", NewVersion: "2.0"},
+		},
+	}
+
+	if err := storage.SaveUpdateOperation(ctx, op); err != nil {
+		t.Fatalf("Failed to save operation: %v", err)
+	}
+
+	// Verify initially not rolled back
+	retrieved, _, _ := storage.GetUpdateOperation(ctx, "rollback-track-001")
+	if retrieved.RollbackOccurred {
+		t.Error("Expected RollbackOccurred=false initially")
+	}
+
+	// Mark as rolled back
+	retrieved.RollbackOccurred = true
+	if err := storage.SaveUpdateOperation(ctx, retrieved); err != nil {
+		t.Fatalf("Failed to update operation: %v", err)
+	}
+
+	// Verify it persists
+	final, _, _ := storage.GetUpdateOperation(ctx, "rollback-track-001")
+	if !final.RollbackOccurred {
+		t.Error("Expected RollbackOccurred=true after update")
+	}
+}

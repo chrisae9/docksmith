@@ -140,6 +140,10 @@ func (m *mockStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start,
 	return nil, nil
 }
 
+func (m *mockStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
+	return nil, nil
+}
+
 func (m *mockStorage) UpdateOperationStatus(ctx context.Context, operationID string, status string, errorMsg string) error {
 	return nil
 }
@@ -612,6 +616,10 @@ func (f *failingStorage) GetUpdateOperationsByContainer(ctx context.Context, con
 }
 
 func (f *failingStorage) GetUpdateOperationsByTimeRange(ctx context.Context, start, end time.Time) ([]storage.UpdateOperation, error) {
+	return nil, errors.New("storage error")
+}
+
+func (f *failingStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]storage.UpdateOperation, error) {
 	return nil, errors.New("storage error")
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/storage"
+	"github.com/google/uuid"
 )
 
 // handleHealth returns server health status
@@ -273,9 +274,12 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var req struct {
 		Containers []struct {
-			Name          string `json:"name"`
-			TargetVersion string `json:"target_version"`
-			Stack         string `json:"stack"`
+			Name               string `json:"name"`
+			TargetVersion      string `json:"target_version"`
+			Stack              string `json:"stack"`
+			ChangeType         *int   `json:"change_type,omitempty"`
+			OldResolvedVersion string `json:"old_resolved_version"`
+			NewResolvedVersion string `json:"new_resolved_version"`
 		} `json:"containers"`
 	}
 
@@ -291,6 +295,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	// Group containers by stack
 	stackGroups := make(map[string][]string)
 	targetVersions := make(map[string]string)
+	containerMeta := make(map[string]storage.BatchContainerDetail)
 
 	for _, c := range req.Containers {
 		stack := c.Stack
@@ -301,15 +306,23 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 		if c.TargetVersion != "" {
 			targetVersions[c.Name] = c.TargetVersion
 		}
+		containerMeta[c.Name] = storage.BatchContainerDetail{
+			ChangeType:         c.ChangeType,
+			OldResolvedVersion: c.OldResolvedVersion,
+			NewResolvedVersion: c.NewResolvedVersion,
+		}
 	}
+
+	// Generate a batch group ID to link all operations from this user action
+	batchGroupID := uuid.New().String()
 
 	// For each stack group, start an update operation
 	operations := make([]map[string]any, 0)
 
 	for stack, containerNames := range stackGroups {
 		if len(containerNames) == 1 {
-			// Single container - use regular update
-			opID, err := s.updateOrchestrator.UpdateSingleContainer(ctx, containerNames[0], targetVersions[containerNames[0]])
+			// Single container - use regular update with group ID
+			opID, err := s.updateOrchestrator.UpdateSingleContainerInGroup(ctx, containerNames[0], targetVersions[containerNames[0]], batchGroupID, containerMeta)
 			if err != nil {
 				log.Printf("Failed to start update for %s: %v", containerNames[0], err)
 				operations = append(operations, map[string]any{
@@ -327,8 +340,8 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		} else {
-			// Multiple containers in same stack - use batch update
-			opID, err := s.updateOrchestrator.UpdateBatchContainers(ctx, containerNames, targetVersions)
+			// Multiple containers in same stack - use batch update with group ID
+			opID, err := s.updateOrchestrator.UpdateBatchContainersInGroup(ctx, containerNames, targetVersions, batchGroupID, containerMeta)
 			if err != nil {
 				log.Printf("Failed to start batch update for stack %s: %v", stack, err)
 				operations = append(operations, map[string]any{
@@ -349,8 +362,9 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	RespondSuccess(w, map[string]any{
-		"operations": operations,
-		"status":     "started",
+		"operations":     operations,
+		"batch_group_id": batchGroupID,
+		"status":         "started",
 	})
 }
 
@@ -417,6 +431,72 @@ func (s *Server) handleFixComposeMismatch(w http.ResponseWriter, r *http.Request
 		"container_name": containerName,
 		"status":         "started",
 		"message":        "Fix compose mismatch initiated",
+	})
+}
+
+// handleOperationsByGroup returns all operations in a batch group
+func (s *Server) handleOperationsByGroup(w http.ResponseWriter, r *http.Request) {
+	if !s.requireStorage(w) {
+		return
+	}
+
+	ctx := r.Context()
+	groupID := r.PathValue("groupId")
+
+	if !validateRequired(w, "group ID", groupID) {
+		return
+	}
+
+	operations, err := s.storageService.GetUpdateOperationsByBatchGroup(ctx, groupID)
+	if err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+
+	RespondSuccess(w, map[string]any{
+		"batch_group_id": groupID,
+		"operations":     operations,
+		"count":          len(operations),
+	})
+}
+
+// handleRollbackContainers rolls back specific containers from an operation
+func (s *Server) handleRollbackContainers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireUpdateOrchestrator(w) {
+		return
+	}
+
+	ctx := r.Context()
+
+	var req struct {
+		OperationID    string   `json:"operation_id"`
+		ContainerNames []string `json:"container_names"`
+		Force          bool     `json:"force"`
+	}
+
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	if !validateRequired(w, "operation_id", req.OperationID) {
+		return
+	}
+
+	if len(req.ContainerNames) == 0 {
+		RespondBadRequest(w, fmt.Errorf("container_names array is required"))
+		return
+	}
+
+	rollbackOpID, err := s.updateOrchestrator.RollbackContainers(ctx, req.OperationID, req.ContainerNames, req.Force)
+	if err != nil {
+		log.Printf("Per-container rollback failed: %v", err)
+		RespondInternalError(w, err)
+		return
+	}
+
+	RespondSuccess(w, map[string]any{
+		"operation_id": rollbackOpID,
+		"message":      "Per-container rollback initiated",
 	})
 }
 

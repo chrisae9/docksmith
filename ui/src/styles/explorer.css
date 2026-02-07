@@ -39,10 +39,11 @@
 }
 
 .explorer-header h1 {
-  font-size: var(--text-5xl);
-  font-weight: var(--font-bold);
+  font-size: var(--text-4xl);
+  font-weight: var(--font-semibold);
   margin: 0 0 var(--space-6) 0;
   color: var(--color-text-primary);
+  letter-spacing: -0.03em;
 }
 
 /* Tab bar - extends shared .segmented-control from page-layout.css */
@@ -134,7 +135,6 @@
   background: var(--color-danger-dim);
   border-color: var(--color-danger);
   color: var(--color-danger);
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
 }
 
 .prune-btn:active:not(:disabled) {
@@ -511,17 +511,18 @@
 /* Item badges */
 .item-badges {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
 .badge {
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-2xs);
+  padding: var(--badge-pad-y) var(--badge-pad-x);
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font-size);
   font-weight: var(--font-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--badge-tracking);
+  line-height: var(--badge-line-height);
 }
 
 .badge.in-use {
@@ -608,7 +609,7 @@
 /* Responsive - Mobile */
 @media (max-width: 640px) {
   .explorer-header h1 {
-    font-size: var(--text-6xl);
+    font-size: var(--text-3xl);
   }
 }
 

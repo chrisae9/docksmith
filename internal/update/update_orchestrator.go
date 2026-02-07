@@ -185,12 +185,99 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 	return operationID, nil
 }
 
-// UpdateBatchContainers initiates batch updates for multiple containers.
-func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containerNames []string, targetVersions map[string]string) (string, error) {
-	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch")
+// UpdateSingleContainerInGroup initiates an update for a single container as part of a batch group.
+func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, containerName, targetVersion, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
+	operationID := uuid.New().String()
+
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var targetContainer *docker.Container
+	for _, c := range containers {
+		if c.Name == containerName || c.ID == containerName {
+			targetContainer = &c
+			break
+		}
+	}
+
+	if targetContainer == nil {
+		return "", fmt.Errorf("container not found: %s", containerName)
+	}
+
+	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
+
+	if !o.acquireStackLock(stackName) {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "single"); err != nil {
+			return "", fmt.Errorf("failed to queue operation: %w", err)
+		}
+		return operationID, nil
+	}
+
+	currentVersion := ""
+	if parts := strings.Split(targetContainer.Image, ":"); len(parts) >= 2 {
+		currentVersion = parts[len(parts)-1]
+	}
+
+	if targetVersion == "" {
+		if currentVersion == "latest" {
+			targetVersion = "latest"
+		} else {
+			o.releaseStackLock(stackName)
+			return "", fmt.Errorf("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
+		}
+	}
+
+	// Build batch detail with metadata from frontend (resolved versions, change type)
+	detail := storage.BatchContainerDetail{
+		ContainerName: containerName,
+		StackName:     stackName,
+		OldVersion:    currentVersion,
+		NewVersion:    targetVersion,
+	}
+	if meta, ok := containerMeta[containerName]; ok {
+		detail.ChangeType = meta.ChangeType
+		detail.OldResolvedVersion = meta.OldResolvedVersion
+		detail.NewResolvedVersion = meta.NewResolvedVersion
+	}
+
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   targetContainer.ID,
+		ContainerName: containerName,
+		StackName:     stackName,
+		OperationType: "single",
+		Status:        "validating",
+		OldVersion:    currentVersion,
+		NewVersion:    targetVersion,
+		BatchGroupID:  batchGroupID,
+		BatchDetails:  []storage.BatchContainerDetail{detail},
+	}
+
+	if o.storage != nil {
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			o.releaseStackLock(stackName)
+			return "", fmt.Errorf("failed to save operation: %w", err)
+		}
+	}
+
+	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName)
+
+	return operationID, nil
 }
 
-func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, containerNames []string, targetVersions map[string]string, operationType string) (string, error) {
+// UpdateBatchContainers initiates batch updates for multiple containers.
+func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containerNames []string, targetVersions map[string]string) (string, error) {
+	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", "", nil)
+}
+
+// UpdateBatchContainersInGroup initiates batch updates as part of a batch group.
+func (o *UpdateOrchestrator) UpdateBatchContainersInGroup(ctx context.Context, containerNames []string, targetVersions map[string]string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
+	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", batchGroupID, containerMeta)
+}
+
+func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, containerNames []string, targetVersions map[string]string, operationType string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
 	operationID := uuid.New().String()
 
 	containers, err := o.dockerClient.ListContainers(ctx)
@@ -249,6 +336,7 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 		StackName:     stackName,
 		OperationType: operationType,
 		Status:        "validating",
+		BatchGroupID:  batchGroupID,
 	}
 
 	// Build batch details for all containers
@@ -280,12 +368,20 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 		// Get stack name from container labels
 		containerStack := o.stackManager.DetermineStack(ctx, *container)
 
-		batchDetails = append(batchDetails, storage.BatchContainerDetail{
+		detail := storage.BatchContainerDetail{
 			ContainerName: container.Name,
 			StackName:     containerStack,
 			OldVersion:    currentVersion,
 			NewVersion:    targetVersion,
-		})
+		}
+		if containerMeta != nil {
+			if meta, ok := containerMeta[container.Name]; ok {
+				detail.ChangeType = meta.ChangeType
+				detail.OldResolvedVersion = meta.OldResolvedVersion
+				detail.NewResolvedVersion = meta.NewResolvedVersion
+			}
+		}
+		batchDetails = append(batchDetails, detail)
 	}
 	op.BatchDetails = batchDetails
 
@@ -1774,7 +1870,18 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 		}
 
 		// Use updateBatchContainersInternal to roll back all containers with operation_type = "rollback"
-		return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "rollback")
+		rollbackOpID, err := o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "rollback", "", nil)
+		if err != nil {
+			return "", err
+		}
+
+		// Mark original operation as rolled back
+		origOp.RollbackOccurred = true
+		if saveErr := o.storage.SaveUpdateOperation(ctx, origOp); saveErr != nil {
+			log.Printf("ROLLBACK: Failed to mark original operation as rolled back: %v", saveErr)
+		}
+
+		return rollbackOpID, nil
 	}
 
 	// Single container rollback (existing logic)
@@ -1874,6 +1981,69 @@ func (o *UpdateOrchestrator) findDependentContainerNames(containers []docker.Con
 		}
 	}
 	return dependents
+}
+
+// RollbackContainers rolls back specific containers from an operation.
+// It filters the original operation's batch_details to only the requested container names,
+// then creates a new rollback operation for those containers.
+func (o *UpdateOrchestrator) RollbackContainers(ctx context.Context, operationID string, containerNames []string, force bool) (string, error) {
+	if o.storage == nil {
+		return "", fmt.Errorf("storage not available")
+	}
+
+	origOp, found, err := o.storage.GetUpdateOperation(ctx, operationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get operation: %w", err)
+	}
+	if !found {
+		return "", fmt.Errorf("operation %s not found", operationID)
+	}
+
+	// Build target versions from batch_details
+	targetVersions := make(map[string]string)
+	requestedNames := make(map[string]bool)
+	for _, name := range containerNames {
+		requestedNames[name] = true
+	}
+
+	if len(origOp.BatchDetails) > 0 {
+		for _, detail := range origOp.BatchDetails {
+			if requestedNames[detail.ContainerName] {
+				// Rollback: target is old_version (what we want to go back to)
+				targetVersions[detail.ContainerName] = detail.OldVersion
+			}
+		}
+	} else {
+		// Single operation — validate container name matches
+		if !requestedNames[origOp.ContainerName] {
+			return "", fmt.Errorf("container %s not found in operation %s", containerNames[0], operationID)
+		}
+		targetVersions[origOp.ContainerName] = origOp.OldVersion
+	}
+
+	if len(targetVersions) == 0 {
+		return "", fmt.Errorf("no matching containers found in operation %s for rollback", operationID)
+	}
+
+	// Get the names that we actually found
+	rollbackNames := make([]string, 0, len(targetVersions))
+	for name := range targetVersions {
+		rollbackNames = append(rollbackNames, name)
+	}
+
+	// Use updateBatchContainersInternal with rollback type
+	rollbackOpID, err := o.updateBatchContainersInternal(ctx, rollbackNames, targetVersions, "rollback", "", nil)
+	if err != nil {
+		return "", err
+	}
+
+	// Mark original operation as rolled back only after rollback successfully started
+	origOp.RollbackOccurred = true
+	if err := o.storage.SaveUpdateOperation(ctx, origOp); err != nil {
+		log.Printf("ROLLBACK: Failed to mark original operation as rolled back: %v", err)
+	}
+
+	return rollbackOpID, nil
 }
 
 // executeRollback performs the actual rollback process using the old version from database
