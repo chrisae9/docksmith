@@ -33,6 +33,8 @@ export interface ContainerInfo {
   pre_update_check_pass: boolean;
   health_status?: string; // Health status: "healthy", "unhealthy", "starting", "none"
   compose_image?: string; // Image specified in compose file (for COMPOSE_MISMATCH)
+  env_controlled?: boolean; // True if image is controlled by .env variable
+  env_var_name?: string; // Name of the controlling env var (e.g., "OPENCLAW_IMAGE")
   id: string;
   stack?: string;
   service?: string;

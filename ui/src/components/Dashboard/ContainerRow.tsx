@@ -11,8 +11,8 @@ interface ContainerRowProps {
 }
 
 export function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
-  const hasAction = isActionable(container.status);
-  const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || container.status === 'UP_TO_DATE_PINNABLE';
+  const hasAction = isActionable(container.status) && !(container.status === 'UP_TO_DATE_PINNABLE' && container.env_controlled);
+  const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || (container.status === 'UP_TO_DATE_PINNABLE' && !container.env_controlled);
   const isMismatchStatus = container.status === 'COMPOSE_MISMATCH';
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 
@@ -40,6 +40,9 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
       case 'UP_TO_DATE':
         return <span className="status-badge current" title="Up to date">CURRENT</span>;
       case 'UP_TO_DATE_PINNABLE': {
+        if (container.env_controlled) {
+          return <span className="status-badge current" title={`Image controlled by .env variable ${container.env_var_name || ''}`}>ENV</span>;
+        }
         const pinnableVersion = container.recommended_tag || container.current_version || (container.using_latest_tag ? 'latest' : '(no tag)');
         return <span className="status-badge pin" title={`No version tag specified. Pin to: ${container.image}:${pinnableVersion}`}>PIN</span>;
       }
@@ -58,6 +61,10 @@ export function ContainerRow({ container, selected, onToggle, onContainerClick, 
   };
 
   const getVersion = () => {
+    // For env-controlled pinnable containers, show the env var name
+    if (container.status === 'UP_TO_DATE_PINNABLE' && container.env_controlled) {
+      return `$${container.env_var_name || 'ENV'}`;
+    }
     // For pinnable containers, show the tag migration path (check this FIRST)
     if (container.status === 'UP_TO_DATE_PINNABLE' && container.recommended_tag) {
       const currentTag = container.using_latest_tag ? 'latest' : (container.current_tag || 'untagged');

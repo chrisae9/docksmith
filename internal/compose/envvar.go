@@ -13,6 +13,50 @@ func ContainsEnvVar(s string) bool {
 	return strings.Contains(s, "${")
 }
 
+// ExtractEnvVarName extracts the first environment variable name from a compose interpolation string.
+// For "${OPENCLAW_IMAGE:-openclaw:latest}" returns "OPENCLAW_IMAGE".
+// Returns empty string if no env var found.
+func ExtractEnvVarName(s string) string {
+	match := envVarPattern.FindStringSubmatch(s)
+	if match == nil || len(match) < 2 {
+		return ""
+	}
+	inner := match[1]
+	// Strip the default/error suffixes
+	for _, delim := range []string{":-", "-", ":?", "?", ":+"} {
+		if idx := strings.Index(inner, delim); idx != -1 {
+			return inner[:idx]
+		}
+	}
+	return inner
+}
+
+// LoadDotEnv reads a .env file and returns a map of key=value pairs.
+// Returns an empty map if the file doesn't exist or can't be read.
+func LoadDotEnv(dir string) map[string]string {
+	result := make(map[string]string)
+	data, err := os.ReadFile(dir + "/.env")
+	if err != nil {
+		return result
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx != -1 {
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			// Remove surrounding quotes
+			if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+				val = val[1 : len(val)-1]
+			}
+			result[key] = val
+		}
+	}
+	return result
+}
+
 // ReplaceTagInEnvVar updates the image tag inside a Docker Compose env var expression.
 // For example: "${OPENCLAW_IMAGE:-openclaw:latest}" with newTag "v2.0"
 // returns "${OPENCLAW_IMAGE:-openclaw:v2.0}".

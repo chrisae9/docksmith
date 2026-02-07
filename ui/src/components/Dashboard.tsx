@@ -154,7 +154,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
       } else {
         containersToUpdate.push({
           name,
-          target_version: container.latest_version || '',
+          target_version: container.recommended_tag || container.latest_version || '',
           stack: container.stack || '',
           change_type: container.change_type || 0,
           old_resolved_version: container.current_version || '',

@@ -41,6 +41,8 @@ type ContainerUpdate struct {
 	PreUpdateCheckPass bool                `json:"pre_update_check_pass"`           // True if pre-update check passed
 	HealthStatus       string              `json:"health_status,omitempty"`         // Current health status: "healthy", "unhealthy", "starting", "none"
 	ComposeImage       string              `json:"compose_image,omitempty"`         // Image specified in compose file (for COMPOSE_MISMATCH)
+	EnvControlled      bool                `json:"env_controlled,omitempty"`        // True if image is controlled by .env variable
+	EnvVarName         string              `json:"env_var_name,omitempty"`          // Name of the controlling env var (e.g., "OPENCLAW_IMAGE")
 }
 
 // CheckResult contains the results of checking for updates.

@@ -289,6 +289,65 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 	return false, ""
 }
 
+// checkEnvControlled checks if a container's image is controlled by a .env variable.
+// If the compose file uses ${VAR:-default} and the .env file defines VAR, sets EnvControlled=true.
+func (c *Checker) checkEnvControlled(container docker.Container, update *ContainerUpdate) {
+	composeFile, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok || composeFile == "" {
+		return
+	}
+
+	composePath := strings.TrimSpace(strings.Split(composeFile, ",")[0])
+	if composePath == "" {
+		return
+	}
+
+	// Load compose file and find this service's image spec
+	composeData, err := compose.LoadComposeFileOrIncluded(composePath, container.Name)
+	if err != nil {
+		return
+	}
+	// Try by container name first, then by compose service label
+	service, err := composeData.FindServiceByContainerName(container.Name)
+	if err != nil {
+		if serviceName, ok := container.Labels["com.docker.compose.service"]; ok && serviceName != "" {
+			service, err = composeData.FindServiceByContainerName(serviceName)
+		}
+		if err != nil {
+			return
+		}
+	}
+	if service.Node.Kind != yaml.MappingNode {
+		return
+	}
+
+	var imageSpec string
+	for i := 0; i < len(service.Node.Content); i += 2 {
+		if service.Node.Content[i].Value == "image" && i+1 < len(service.Node.Content) {
+			imageSpec = service.Node.Content[i+1].Value
+			break
+		}
+	}
+
+	if !compose.ContainsEnvVar(imageSpec) {
+		return
+	}
+
+	varName := compose.ExtractEnvVarName(imageSpec)
+	if varName == "" {
+		return
+	}
+
+	// Check if the variable is defined in the .env file
+	composeDir := filepath.Dir(composePath)
+	dotEnv := compose.LoadDotEnv(composeDir)
+	if _, exists := dotEnv[varName]; exists {
+		update.EnvControlled = true
+		update.EnvVarName = varName
+		log.Printf("Container %s: Image controlled by .env variable %s", container.Name, varName)
+	}
+}
+
 // checkContainer checks a single container for updates.
 func (c *Checker) checkContainer(ctx context.Context, container docker.Container) ContainerUpdate {
 	log.Printf("checkContainer: Starting check for %s (image: %s)", container.Name, container.Image)
@@ -306,6 +365,9 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		update.Error = fmt.Sprintf("Running image (%s) differs from compose specification (%s)", container.Image, expectedImage)
 		return update
 	}
+
+	// Check if image is controlled by a .env variable
+	c.checkEnvControlled(container, &update)
 
 	// Check if container explicitly allows :latest tag (only from labels)
 	allowLatest := false
