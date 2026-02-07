@@ -15,7 +15,8 @@ COPY go.mod go.sum ./
 ENV GOTOOLCHAIN=auto
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o docksmith ./cmd/docksmith
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
 
 # Stage 3: Runtime
 FROM alpine:3.23

@@ -243,6 +243,16 @@ func (c *Checker) checkComposeMismatch(container docker.Container) (bool, string
 		return false, ""
 	}
 
+	// Resolve environment variable syntax (e.g., ${OPENCLAW_IMAGE:-openclaw:latest})
+	if compose.ContainsEnvVar(imageSpec) {
+		imageSpec = compose.ResolveEnvVars(imageSpec)
+		if compose.ContainsEnvVar(imageSpec) {
+			// Still has unresolved env vars — can't determine mismatch
+			log.Printf("Container %s: Skipping mismatch check - image spec has unresolvable env vars", container.Name)
+			return false, ""
+		}
+	}
+
 	// SCENARIO 1: Check if container lost its tag reference (running with bare SHA)
 	// This happens when container.Image is "sha256:..." or just the digest
 	if strings.HasPrefix(container.Image, "sha256:") || (!strings.Contains(container.Image, ":") && len(container.Image) == 64) {

@@ -1332,11 +1332,23 @@ func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFileP
 		valueNode := service.Node.Content[i+1]
 
 		if keyNode.Value == "image" {
-			// Parse current image
 			currentImage := valueNode.Value
-			parts := strings.Split(currentImage, ":")
 
-			// Update tag
+			// Handle env var image specs (e.g., ${OPENCLAW_IMAGE:-openclaw:latest})
+			if compose.ContainsEnvVar(currentImage) {
+				updated, ok := compose.ReplaceTagInEnvVar(currentImage, newTag)
+				if !ok {
+					log.Printf("UPDATE: Cannot update env var image for %s (no default value): %s", serviceName, currentImage)
+					return nil
+				}
+				log.Printf("UPDATE: Updating env var image for %s: %s -> %s", serviceName, currentImage, updated)
+				valueNode.Value = updated
+				imageUpdated = true
+				break
+			}
+
+			// Parse current image and update tag
+			parts := strings.Split(currentImage, ":")
 			if len(parts) > 1 {
 				parts[len(parts)-1] = newTag
 			} else {

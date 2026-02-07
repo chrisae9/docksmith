@@ -48,34 +48,56 @@ func TestCheckComposeMismatch(t *testing.T) {
 
 	t.Run("lost tag reference with sha256 prefix", func(t *testing.T) {
 		// When container.Image starts with "sha256:" - container lost its tag reference
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  lost-tag-service:
+    container_name: lost-tag-container
+    image: nginx:1.25
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+
 		container := docker.Container{
 			ID:    "abc123",
 			Name:  "lost-tag-container",
 			Image: "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
 			Labels: map[string]string{
-				"com.docker.compose.project.config_files": "/some/path/docker-compose.yaml",
+				"com.docker.compose.project.config_files": composePath,
 			},
 		}
 
 		mismatch, expectedImage := checker.checkComposeMismatch(container)
 		assert.True(t, mismatch, "Container with sha256 prefix should be detected as mismatch")
-		assert.Contains(t, expectedImage, "lost tag reference", "Should indicate lost tag reference")
+		assert.Equal(t, "nginx:1.25", expectedImage)
 	})
 
 	t.Run("lost tag reference with 64-char hex digest only", func(t *testing.T) {
 		// When container.Image is exactly 64 hex chars (bare digest without prefix)
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  bare-digest-service:
+    container_name: bare-digest-container
+    image: redis:7.0
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+
 		container := docker.Container{
 			ID:    "abc123",
 			Name:  "bare-digest-container",
 			Image: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
 			Labels: map[string]string{
-				"com.docker.compose.project.config_files": "/some/path/docker-compose.yaml",
+				"com.docker.compose.project.config_files": composePath,
 			},
 		}
 
 		mismatch, expectedImage := checker.checkComposeMismatch(container)
 		assert.True(t, mismatch, "Container with bare 64-char digest should be detected as mismatch")
-		assert.Contains(t, expectedImage, "lost tag reference", "Should indicate lost tag reference")
+		assert.Equal(t, "redis:7.0", expectedImage)
 	})
 
 	t.Run("normal image name with 64 chars is not detected as bare digest", func(t *testing.T) {
@@ -533,6 +555,87 @@ services:
 		assert.True(t, mismatch, "Should detect mismatch after trimming whitespace from path")
 		assert.Equal(t, "nginx:1.26", expectedImage)
 	})
+
+	// Environment variable tests
+
+	t.Run("env var with default resolves correctly - no mismatch", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  app:
+    container_name: app
+    image: ${OPENCLAW_IMAGE:-openclaw:latest}
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+		os.Unsetenv("OPENCLAW_IMAGE")
+
+		container := docker.Container{
+			ID:    "abc123",
+			Name:  "app",
+			Image: "openclaw:latest",
+			Labels: map[string]string{
+				"com.docker.compose.project.config_files": composePath,
+			},
+		}
+
+		mismatch, _ := checker.checkComposeMismatch(container)
+		assert.False(t, mismatch, "Env var with default matching running image should not be mismatch")
+	})
+
+	t.Run("env var with default resolves correctly - mismatch detected", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  app:
+    container_name: app
+    image: ${APP_IMAGE:-myapp:v2.0}
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+		os.Unsetenv("APP_IMAGE")
+
+		container := docker.Container{
+			ID:    "abc123",
+			Name:  "app",
+			Image: "myapp:v1.0",
+			Labels: map[string]string{
+				"com.docker.compose.project.config_files": composePath,
+			},
+		}
+
+		mismatch, expectedImage := checker.checkComposeMismatch(container)
+		assert.True(t, mismatch, "Env var default differs from running image - should be mismatch")
+		assert.Equal(t, "myapp:v2.0", expectedImage)
+	})
+
+	t.Run("env var without default skips check", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  app:
+    container_name: app
+    image: ${UNRESOLVABLE_IMAGE}
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+		os.Unsetenv("UNRESOLVABLE_IMAGE")
+
+		container := docker.Container{
+			ID:    "abc123",
+			Name:  "app",
+			Image: "someapp:latest",
+			Labels: map[string]string{
+				"com.docker.compose.project.config_files": composePath,
+			},
+		}
+
+		mismatch, _ := checker.checkComposeMismatch(container)
+		assert.False(t, mismatch, "Unresolvable env var should skip mismatch check")
+	})
 }
 
 // TestComposeMismatchRealWorldScenarios tests specific real-world scenarios
@@ -599,18 +702,29 @@ services:
 	t.Run("scenario: container lost tag after garbage collection", func(t *testing.T) {
 		// Docker garbage collection removed the tag but kept the container running
 		// Container now shows sha256:... instead of nginx:1.25
+		tmpDir := t.TempDir()
+		composePath := filepath.Join(tmpDir, "docker-compose.yaml")
+		composeContent := `
+services:
+  web:
+    container_name: web
+    image: nginx:1.25
+`
+		err := os.WriteFile(composePath, []byte(composeContent), 0644)
+		require.NoError(t, err)
+
 		container := docker.Container{
 			ID:    "abc123",
 			Name:  "web",
 			Image: "sha256:e4720093a3c1381245b53a5a51b417963b3c50e8de2d5e2a61a62832c6ac5d7c",
 			Labels: map[string]string{
-				"com.docker.compose.project.config_files": "/path/to/docker-compose.yaml",
+				"com.docker.compose.project.config_files": composePath,
 			},
 		}
 
 		mismatch, expectedImage := checker.checkComposeMismatch(container)
 		assert.True(t, mismatch, "Should detect garbage-collection lost tag scenario")
-		assert.Contains(t, expectedImage, "lost tag reference")
+		assert.Equal(t, "nginx:1.25", expectedImage)
 	})
 
 	t.Run("scenario: image was force-replaced by different image", func(t *testing.T) {

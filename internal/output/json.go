@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Version is the docksmith version
-const Version = "dev"
+// Version is the docksmith version, set at build time via -ldflags
+var Version = "dev"
 
 // Response is a standardized JSON wrapper for all command outputs
 // Provides consistent structure with metadata for CLI, TUI, and future UI
