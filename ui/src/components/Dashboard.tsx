@@ -298,7 +298,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
   const selectAll = () => {
     if (!result) return;
     const actionableContainers = result.containers
-      .filter(c => isActionable(c.status))
+      .filter(c => isActionable(c))
       .filter(filterContainer)
       .map(c => c.container_name);
     setSelectedContainers(new Set(actionableContainers));
@@ -310,7 +310,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
 
   const toggleStackSelection = (containers: ContainerInfo[]) => {
     const actionableInStack = containers
-      .filter(c => isActionable(c.status))
+      .filter(c => isActionable(c))
       .map(c => c.container_name);
 
     if (actionableInStack.length === 0) return;
@@ -354,7 +354,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
     switch (filter) {
       case 'updates':
         // Show updatable containers, and mismatch containers if showMismatch is enabled
-        if (isUpdatable(container.status)) return true;
+        if (isUpdatable(container)) return true;
         if (showMismatch && isMismatch(container.status)) return true;
         return false;
       default:
@@ -555,7 +555,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
             </button>
           </div>
           <div className="toolbar-options">
-            {result && result.containers.some(c => isActionable(c.status)) && (
+            {result && result.containers.some(c => isActionable(c)) && (
               <button
                 onClick={selectedContainers.size > 0 ? deselectAll : selectAll}
                 className="icon-btn select-all-btn"
@@ -637,7 +637,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 const filteredContainers = stack.containers.filter(filterContainer);
                 if (filteredContainers.length === 0) return null;
 
-                const actionableInStack = filteredContainers.filter(c => isActionable(c.status));
+                const actionableInStack = filteredContainers.filter(c => isActionable(c));
                 const allStackSelected = actionableInStack.length > 0 &&
                   actionableInStack.every(c => selectedContainers.has(c.container_name));
 
@@ -676,7 +676,7 @@ export function Dashboard({ onNavigateToHistory: _onNavigateToHistory }: Dashboa
                 const standaloneFiltered = result.standalone_containers.filter(filterContainer);
                 if (standaloneFiltered.length === 0) return null;
 
-                const actionableStandalone = standaloneFiltered.filter(c => isActionable(c.status));
+                const actionableStandalone = standaloneFiltered.filter(c => isActionable(c));
                 const allStandaloneSelected = actionableStandalone.length > 0 &&
                   actionableStandalone.every(c => selectedContainers.has(c.container_name));
 

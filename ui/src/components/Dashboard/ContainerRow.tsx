@@ -1,6 +1,6 @@
 import type { ContainerInfo } from '../../types/api';
 import { ChangeType } from '../../types/api';
-import { isActionable } from '../../utils/status';
+import { isActionable, isUpdatable } from '../../utils/status';
 
 interface ContainerRowProps {
   container: ContainerInfo;
@@ -11,8 +11,8 @@ interface ContainerRowProps {
 }
 
 export function ContainerRow({ container, selected, onToggle, onContainerClick, allContainers }: ContainerRowProps) {
-  const hasAction = isActionable(container.status) && !(container.status === 'UP_TO_DATE_PINNABLE' && container.env_controlled);
-  const hasUpdate = container.status === 'UPDATE_AVAILABLE' || container.status === 'UPDATE_AVAILABLE_BLOCKED' || (container.status === 'UP_TO_DATE_PINNABLE' && !container.env_controlled);
+  const hasAction = isActionable(container);
+  const hasUpdate = isUpdatable(container);
   const isMismatchStatus = container.status === 'COMPOSE_MISMATCH';
   const isBlocked = container.status === 'UPDATE_AVAILABLE_BLOCKED';
 

@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -414,6 +415,65 @@ func TestUpdateComposeFile(t *testing.T) {
 
 	data, _ := os.ReadFile(composeFile)
 	assert.Contains(t, string(data), "nginx:1.21")
+}
+
+// Test: updateComposeFile correctly handles env var image syntax without corruption.
+// This was the exact bug: ${OPENCLAW_IMAGE:-openclaw:latest} was split by ":" naively,
+// destroying the closing "}" and producing invalid interpolation syntax.
+func TestUpdateComposeFile_EnvVarImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		image    string
+		newTag   string
+		expected string
+	}{
+		{
+			name:     "env var with colon-dash default",
+			image:    "${OPENCLAW_IMAGE:-openclaw:latest}",
+			newTag:   "2026.2.6",
+			expected: "${OPENCLAW_IMAGE:-openclaw:2026.2.6}",
+		},
+		{
+			name:     "env var with dash default",
+			image:    "${IMG-nginx:1.25}",
+			newTag:   "1.26",
+			expected: "${IMG-nginx:1.26}",
+		},
+		{
+			name:     "env var with registry port in default",
+			image:    "${IMG:-registry:5000/myapp:v1}",
+			newTag:   "v2",
+			expected: "${IMG:-registry:5000/myapp:v2}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			composeFile := filepath.Join(tmpDir, "docker-compose.yml")
+			composeContent := fmt.Sprintf("services:\n  gateway:\n    image: %s\n", tt.image)
+			os.WriteFile(composeFile, []byte(composeContent), 0644)
+
+			orch := &UpdateOrchestrator{}
+			container := &docker.Container{
+				Name: "gateway",
+				Labels: map[string]string{
+					"com.docker.compose.service": "gateway",
+				},
+			}
+
+			err := orch.updateComposeFile(context.Background(), composeFile, container, tt.newTag)
+			assert.NoError(t, err)
+
+			data, _ := os.ReadFile(composeFile)
+			content := string(data)
+			assert.Contains(t, content, tt.expected,
+				"compose file should contain properly updated env var, got: %s", content)
+			// Verify no corruption: closing brace must be present
+			assert.NotContains(t, content, "${"+tt.image[2:len(tt.image)-1],
+				"original image should not remain unchanged")
+		})
+	}
 }
 
 // Test: Auto-rollback policy resolution
