@@ -317,8 +317,8 @@
   font-size: var(--text-base);
 }
 
-/* Status Badges */
-.status-badge {
+/* Status Badges — scoped to modal context to avoid conflicts */
+.modal-overlay .status-badge {
   padding: var(--space-2) var(--space-5);
   border-radius: var(--radius-lg);
   font-size: var(--text-sm);
@@ -326,32 +326,32 @@
   white-space: nowrap;
 }
 
-.status-badge.update {
+.modal-overlay .status-badge.update {
   background: var(--color-badge-update-dim);
   color: var(--color-badge-update);
 }
 
-.status-badge.blocked {
+.modal-overlay .status-badge.blocked {
   background: var(--color-badge-blocked-dim);
   color: var(--color-badge-blocked);
 }
 
-.status-badge.current {
+.modal-overlay .status-badge.current {
   background: var(--color-badge-current-dim);
   color: var(--color-badge-current);
 }
 
-.status-badge.pinnable {
+.modal-overlay .status-badge.pinnable {
   background: var(--color-badge-pinnable-dim);
   color: var(--color-badge-pinnable);
 }
 
-.status-badge.local {
+.modal-overlay .status-badge.local {
   background: var(--color-badge-local-dim);
   color: var(--color-badge-local);
 }
 
-.status-badge.ignored {
+.modal-overlay .status-badge.ignored {
   background: var(--color-badge-ignored-dim);
   color: var(--color-badge-ignored);
 }
@@ -618,8 +618,8 @@
   }
 
   /* Badges */
-  .status-badge,
-  .change-badge {
+  .modal-overlay .status-badge,
+  .modal-overlay .change-badge {
     font-size: 11px;
     padding: 3px 8px;
   }

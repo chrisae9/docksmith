@@ -338,51 +338,51 @@
   grid-auto-rows: min-content;
 }
 
-.stat-card {
+.progress-page .stat-card {
   background: var(--color-bg-tertiary);
   border-radius: var(--radius-lg);
-  padding: 12px 8px;
+  padding: var(--space-6) var(--space-4);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   min-height: fit-content;
   max-height: 80px;
   border: 1px solid var(--color-border-subtle);
   transition: all var(--transition-fast);
 }
 
-.stat-card.success {
+.progress-page .stat-card.success {
   background: var(--color-success-faint);
   border-color: rgba(34, 197, 94, 0.2);
 }
 
-.stat-card.error {
+.progress-page .stat-card.error {
   background: var(--color-danger-faint);
   border-color: rgba(239, 68, 68, 0.2);
 }
 
-.stat-card .stat-label {
-  font-size: 11px;
+.progress-page .stat-card .stat-label {
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: var(--font-medium);
 }
 
-.stat-card .stat-value {
+.progress-page .stat-card .stat-value {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: var(--text-xl);
   font-weight: var(--font-bold);
   color: var(--color-text-primary);
 }
 
-.stat-card.success .stat-value {
+.progress-page .stat-card.success .stat-value {
   color: var(--color-success);
   text-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
 }
 
-.stat-card.error .stat-value {
+.progress-page .stat-card.error .stat-value {
   color: var(--color-danger);
   text-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
 }

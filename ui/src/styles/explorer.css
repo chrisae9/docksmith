@@ -501,11 +501,6 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
 /* Item content - base styles defined in page-layout.css (.list-item-content, .item-content, etc.) */
 
 /* Item badges */

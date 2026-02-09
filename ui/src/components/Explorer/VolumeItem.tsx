@@ -5,7 +5,7 @@ import {
   ActionMenuItem,
   ConfirmRemove,
 } from '../shared';
-import { formatSize } from './utils';
+import { formatSize, isAnonymousVolume, truncateVolumeName } from './utils';
 
 // Type fix for RefObject
 type RefCallback = React.RefObject<HTMLDivElement | null>;
@@ -33,12 +33,15 @@ export function VolumeItem({
 }: VolumeItemProps) {
   const containers = volume.containers || [];
   const inUse = containers.length > 0;
+  const anonymous = isAnonymousVolume(volume.name);
 
   return (
     <li className="explorer-item">
       <i className={`fa-solid fa-hard-drive item-icon ${inUse ? 'in-use' : ''} ${isLoading ? 'loading' : ''}`}></i>
       <div className="item-content">
-        <span className="item-name">{volume.name}</span>
+        <span className="item-name" title={anonymous ? volume.name : undefined}>
+          {truncateVolumeName(volume.name)}
+        </span>
         <span className="item-meta">
           {volume.driver}
           {volume.size >= 0 && ` \u2022 ${formatSize(volume.size)}`}

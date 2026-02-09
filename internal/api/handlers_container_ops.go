@@ -573,20 +573,56 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Generate operation ID and record operation start
+	operationID := uuid.New().String()
+	now := time.Now()
+
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerID:   ctr.ID,
+		ContainerName: containerName,
+		StackName:     ctr.Stack,
+		OperationType: "restart",
+		Status:        "in_progress",
+		StartedAt:     &now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if s.storageService != nil {
+		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("Failed to save restart operation to database: %v", err)
+		}
+	}
+
 	// Restart the container
 	restartOptions := container.StopOptions{
 		Timeout: &timeout,
 	}
 	err = s.dockerService.GetClient().ContainerRestart(ctx, ctr.ID, restartOptions)
 	if err != nil {
+		if s.storageService != nil {
+			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
+		}
 		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return
 	}
 
+	// Record success
+	if s.storageService != nil {
+		completedAt := time.Now()
+		op.Status = "complete"
+		op.CompletedAt = &completedAt
+		op.UpdatedAt = completedAt
+		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("Failed to save restart operation completion: %v", err)
+		}
+	}
+
 	RespondSuccess(w, map[string]any{
-		"container": containerName,
-		"status":    "restarted",
-		"message":   fmt.Sprintf("Container %s restarted successfully", containerName),
+		"container":    containerName,
+		"status":       "restarted",
+		"operation_id": operationID,
+		"message":      fmt.Sprintf("Container %s restarted successfully", containerName),
 	})
 }
 

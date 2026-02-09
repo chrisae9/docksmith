@@ -1171,9 +1171,28 @@ export function OperationProgressPage() {
         { status: 'failed', message: 'Error', error: errorMsg }
       );
       addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+      return;
     }
 
-    setStatus('success'); // Will show summary based on container statuses
+    // Determine final status based on individual container results
+    setContainers(prev => {
+      const failedCount = prev.filter(c => c.status === 'failed').length;
+      const successCount = prev.filter(c => c.status === 'success').length;
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`Update failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Update completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success'); // Partial success — individual failures visible in UI
+      } else {
+        addLog(`Update completed: ${successCount} container(s) updated successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+
+      return prev;
+    });
   };
 
   // Run rollback operation
@@ -1223,11 +1242,6 @@ export function OperationProgressPage() {
           while (!completed && pollCount < maxPolls) {
             await new Promise(resolve => setTimeout(resolve, 2000));
             pollCount++;
-
-            if (status !== 'in_progress') {
-              completed = true;
-              break;
-            }
 
             try {
               const opResponse = await fetch(`/api/operations/${newOpId}`);
@@ -1615,11 +1629,6 @@ export function OperationProgressPage() {
       while (!completed && pollCount < maxPolls) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         pollCount++;
-
-        if (status !== 'in_progress') {
-          completed = true;
-          break;
-        }
 
         try {
           const opResponse = await fetch(`/api/operations/${response.data.operation_id}`);

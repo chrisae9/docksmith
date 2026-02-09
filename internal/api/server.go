@@ -323,12 +323,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Returns middleware function compatible with ChainMiddleware.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow requests from common development ports
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			// Allow same-site origins (Tailscale domain) and local dev servers
+			if strings.HasSuffix(origin, ".ts.chis.dev") ||
+				strings.HasPrefix(origin, "http://localhost:") ||
+				strings.HasPrefix(origin, "http://127.0.0.1:") {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

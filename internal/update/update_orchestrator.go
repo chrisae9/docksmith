@@ -1395,32 +1395,41 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 			}
 			return fmt.Errorf("failed to pull image after %d attempts: %w", maxRetries, err)
 		}
-		defer reader.Close()
 
-		decoder := json.NewDecoder(reader)
-		for {
-			var event map[string]interface{}
-			if err := decoder.Decode(&event); err != nil {
-				if err == io.EOF {
-					break
+		err = func() error {
+			defer reader.Close()
+			decoder := json.NewDecoder(reader)
+			for {
+				var event map[string]interface{}
+				if err := decoder.Decode(&event); err != nil {
+					if err == io.EOF {
+						break
+					}
+					return fmt.Errorf("failed to decode pull progress: %w", err)
 				}
-				return fmt.Errorf("failed to decode pull progress: %w", err)
-			}
 
-			if status, ok := event["status"].(string); ok {
-				progress := PullProgress{Status: status}
-				if progressDetail, ok := event["progressDetail"].(map[string]interface{}); ok {
-					if current, ok := progressDetail["current"].(float64); ok {
-						if total, ok := progressDetail["total"].(float64); ok && total > 0 {
-							progress.Percent = int((current / total) * 100)
+				if status, ok := event["status"].(string); ok {
+					progress := PullProgress{Status: status}
+					if progressDetail, ok := event["progressDetail"].(map[string]interface{}); ok {
+						if current, ok := progressDetail["current"].(float64); ok {
+							if total, ok := progressDetail["total"].(float64); ok && total > 0 {
+								progress.Percent = int((current / total) * 100)
+							}
 						}
 					}
-				}
-				select {
-				case progressChan <- progress:
-				default:
+					select {
+					case progressChan <- progress:
+					default:
+					}
 				}
 			}
+			return nil
+		}()
+		if err != nil {
+			if attempt < maxRetries-1 {
+				continue
+			}
+			return err
 		}
 
 		return nil
@@ -1538,15 +1547,8 @@ func (o *UpdateOrchestrator) validateDependentPreChecks(ctx context.Context, con
 		Errors:     make(map[string]string),
 	}
 
-	// Get docker service
-	dockerService, err := docker.NewService()
-	if err != nil {
-		return result, fmt.Errorf("failed to create docker service: %w", err)
-	}
-	defer dockerService.Close()
-
 	// Get all containers to find those that depend on the container being restarted
-	containers, err := dockerService.ListContainers(ctx)
+	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
 		return result, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -1597,22 +1599,31 @@ func (o *UpdateOrchestrator) validateDependentPreChecks(ctx context.Context, con
 // listed in their docksmith.restart-after label.
 // If skipPreChecks is true, pre-update checks are skipped (used for rollback operations).
 // Returns a DependentRestartResult with information about which dependents were restarted or blocked.
-func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string, skipPreChecks bool) (*DependentRestartResult, error) {
+func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, containerName string, skipPreChecks bool, visited ...map[string]bool) (*DependentRestartResult, error) {
+	// Cycle guard: track visited containers to prevent infinite recursion from circular restart-after labels
+	var visitedSet map[string]bool
+	if len(visited) > 0 && visited[0] != nil {
+		visitedSet = visited[0]
+	} else {
+		visitedSet = make(map[string]bool)
+	}
+	if visitedSet[containerName] {
+		log.Printf("UPDATE: Skipping %s - already visited in this restart chain (cycle detected)", containerName)
+		return &DependentRestartResult{
+			Restarted: make([]string, 0),
+			Blocked:   make([]string, 0),
+			Errors:    make([]string, 0),
+		}, nil
+	}
+	visitedSet[containerName] = true
 	result := &DependentRestartResult{
 		Restarted: make([]string, 0),
 		Blocked:   make([]string, 0),
 		Errors:    make([]string, 0),
 	}
 
-	// Get docker service
-	dockerService, err := docker.NewService()
-	if err != nil {
-		return result, fmt.Errorf("failed to create docker service: %w", err)
-	}
-	defer dockerService.Close()
-
 	// Get all containers to find those that depend on the restarted container
-	containers, err := dockerService.ListContainers(ctx)
+	containers, err := o.dockerClient.ListContainers(ctx)
 	if err != nil {
 		return result, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -1687,7 +1698,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 		} else {
 			// Fallback to docker restart for non-compose containers
 			log.Printf("UPDATE: Using docker restart for dependent %s (no compose file)", depName)
-			restartErr = dockerService.GetClient().ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
+			restartErr = o.dockerSDK.ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
 		}
 
 		if restartErr != nil {
@@ -1707,7 +1718,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 		result.Restarted = append(result.Restarted, depName)
 
 		// Recursively restart this container's dependents (cascade the restart chain)
-		cascadeResult, cascadeErr := o.restartDependentContainers(ctx, depName, skipPreChecks)
+		cascadeResult, cascadeErr := o.restartDependentContainers(ctx, depName, skipPreChecks, visitedSet)
 		if cascadeErr != nil {
 			log.Printf("UPDATE: Warning - failed to restart cascaded dependents for %s: %v", depName, cascadeErr)
 			// Don't fail the parent operation if cascaded restarts fail

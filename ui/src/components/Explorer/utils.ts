@@ -24,3 +24,16 @@ export function truncateId(id: string): string {
   const cleanId = id.replace('sha256:', '');
   return cleanId.substring(0, 12);
 }
+
+// Check if a volume name is an anonymous SHA-256 hash
+export function isAnonymousVolume(name: string): boolean {
+  return /^[0-9a-f]{64}$/.test(name);
+}
+
+// Truncate volume name for display (shorten anonymous SHA-256 hashes)
+export function truncateVolumeName(name: string): string {
+  if (isAnonymousVolume(name)) {
+    return name.substring(0, 12) + '…';
+  }
+  return name;
+}

@@ -158,6 +158,8 @@ func (c *Checker) mapStatusToString(status UpdateStatus) string {
 		return "failed"
 	case MetadataUnavailable:
 		return "metadata_unavailable"
+	case Ignored:
+		return "ignored"
 	default:
 		return "unknown"
 	}

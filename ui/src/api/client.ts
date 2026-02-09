@@ -12,6 +12,8 @@ import type {
   SetLabelsResponse,
   ExplorerResponse,
   ContainerInfo,
+  UpdateOperation,
+  LabelOperationResult,
 } from '../types/api';
 
 const API_BASE = '/api';
@@ -86,7 +88,7 @@ export async function getOperations(params?: {
 }
 
 // Get single operation by ID
-export async function getOperation(operationId: string): Promise<APIResponse<unknown>> {
+export async function getOperation(operationId: string): Promise<APIResponse<UpdateOperation>> {
   return fetchAPI(`/operations/${operationId}`);
 }
 
@@ -258,18 +260,6 @@ export async function setAllowLatest(containerName: string, allowLatest: boolean
 }
 
 // Label management (atomic: compose + restart)
-export interface LabelOperationResult {
-  success: boolean;
-  container: string;
-  operation: string;
-  labels_modified?: Record<string, string>;
-  labels_removed?: string[];
-  compose_file: string;
-  restarted: boolean;
-  pre_check_ran: boolean;
-  pre_check_passed?: boolean;
-  message?: string;
-}
 
 // Get labels for a container
 export async function getContainerLabels(containerName: string): Promise<APIResponse<{

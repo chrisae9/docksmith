@@ -6,6 +6,7 @@ export type ImageGroupBy = 'none' | 'repository';
 export type NetworkSortBy = 'name' | 'driver' | 'containers' | 'created';
 export type NetworkGroupBy = 'none' | 'driver';
 export type VolumeSortBy = 'name' | 'size' | 'created' | 'driver';
+export type VolumeGroupBy = 'none' | 'type';
 
 export interface ExplorerSettings {
   containers: {
@@ -29,6 +30,7 @@ export interface ExplorerSettings {
   };
   volumes: {
     sortBy: VolumeSortBy;
+    groupBy: VolumeGroupBy;
     ascending: boolean;
     showUnusedOnly: boolean;
   };
@@ -44,7 +46,7 @@ export const DEFAULT_SETTINGS: ExplorerSettings = {
   },
   images: {
     sortBy: 'tags',
-    groupBy: 'none',
+    groupBy: 'repository',
     ascending: true,
     showDanglingOnly: false,
   },
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: ExplorerSettings = {
   },
   volumes: {
     sortBy: 'name',
+    groupBy: 'type',
     ascending: true,
     showUnusedOnly: false,
   },
@@ -357,6 +360,22 @@ export function ExplorerSettingsMenu({
 
       {activeTab === 'volumes' && (
         <div className="settings-menu-content">
+          <div className="settings-group">
+            <label className="settings-label">Group by</label>
+            <div className="settings-options">
+              {(['none', 'type'] as const).map(option => (
+                <button
+                  key={option}
+                  className={settings.volumes.groupBy === option ? 'active' : ''}
+                  onClick={() => updateVolumeSettings({ groupBy: option })}
+                >
+                  {option === 'none' && 'None'}
+                  {option === 'type' && 'Type'}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="settings-group">
             <label className="settings-label">Sort by</label>
             <div className="settings-options">

@@ -616,14 +616,14 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
       return { 'All Images': sorted };
     }
 
-    // Group by repository
+    // Group by repository, with dangling images in their own group
     const groups: Record<string, ImageInfo[]> = {};
     for (const image of sorted) {
-      const repo = getRepository(image);
-      if (!groups[repo]) {
-        groups[repo] = [];
+      const group = image.dangling ? 'Dangling' : getRepository(image);
+      if (!groups[group]) {
+        groups[group] = [];
       }
-      groups[repo].push(image);
+      groups[group].push(image);
     }
     return groups;
   }, [data, searchQuery, settings.images.showDanglingOnly, settings.images.sortBy, settings.images.ascending, settings.images.groupBy]);
@@ -671,9 +671,9 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
     return Object.values(networkGroups).flat();
   }, [networkGroups]);
 
-  // Memoize filtered volumes
-  const filteredVolumes = useMemo(() => {
-    if (!data) return [];
+  // Memoize volume groups - supports grouping by type (Named vs Anonymous)
+  const volumeGroups = useMemo(() => {
+    if (!data) return {};
     let volumes = filterItems(
       data.volumes || [],
       searchQuery,
@@ -682,8 +682,27 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
     if (settings.volumes.showUnusedOnly) {
       volumes = volumes.filter(v => !v.containers || v.containers.length === 0);
     }
-    return sortVolumes(volumes);
-  }, [data, searchQuery, settings.volumes.showUnusedOnly, settings.volumes.sortBy, settings.volumes.ascending]);
+    const sorted = sortVolumes(volumes);
+
+    if (settings.volumes.groupBy === 'none') {
+      return { 'All Volumes': sorted };
+    }
+
+    // Group by type: Named vs Anonymous (SHA-256 hashes)
+    const groups: Record<string, VolumeInfo[]> = {};
+    for (const volume of sorted) {
+      const isAnon = /^[0-9a-f]{64}$/.test(volume.name);
+      const group = isAnon ? 'Anonymous' : 'Named';
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(volume);
+    }
+    return groups;
+  }, [data, searchQuery, settings.volumes.showUnusedOnly, settings.volumes.sortBy, settings.volumes.ascending, settings.volumes.groupBy]);
+
+  // Memoize filtered volumes (flat list for backward compatibility)
+  const filteredVolumes = useMemo(() => {
+    return Object.values(volumeGroups).flat();
+  }, [volumeGroups]);
 
   if (loading) {
     return (
@@ -896,7 +915,12 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
   };
 
   const renderImagesTab = () => {
-    const groupEntries = Object.entries(imageGroups).sort(([a], [b]) => a.localeCompare(b));
+    const groupEntries = Object.entries(imageGroups).sort(([a], [b]) => {
+      // Dangling group always at end
+      if (a === 'Dangling') return 1;
+      if (b === 'Dangling') return -1;
+      return a.localeCompare(b);
+    });
     const showGroups = settings.images.groupBy !== 'none' && groupEntries.length > 0;
 
     if (!showGroups) {
@@ -934,7 +958,7 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
             isCollapsed={collapsedStacks.has(`img_${groupName}`)}
             onToggle={() => toggleStack(`img_${groupName}`)}
             count={images.length}
-            icon="fa-cube"
+            icon={groupName === 'Dangling' ? 'fa-ghost' : 'fa-cube'}
             isStandalone={false}
             listClassName="explorer-list"
           >
@@ -1031,29 +1055,66 @@ export function Explorer({ onBack: _onBack }: ExplorerProps) {
     );
   };
 
-  const renderVolumesTab = () => (
-    <ul className="explorer-list">
-      {filteredVolumes.map(volume => (
-        <VolumeItem
-          key={volume.name}
-          volume={volume}
-          isActive={activeVolumeMenu === volume.name}
-          isLoading={volumeLoading === volume.name}
-          confirmRemove={confirmVolumeRemove === volume.name}
-          onMenuToggle={() => {
-            setActiveVolumeMenu(activeVolumeMenu === volume.name ? null : volume.name);
-            setConfirmVolumeRemove(null);
-          }}
-          onRemove={(force?: boolean) => handleVolumeRemove(volume.name, force)}
-          onConfirmRemove={() => setConfirmVolumeRemove(volume.name)}
-          menuRef={menuRef}
-        />
-      ))}
-      {filteredVolumes.length === 0 && (
-        <li className="explorer-empty">No volumes found</li>
-      )}
-    </ul>
+  const renderVolumeItem = (volume: VolumeInfo) => (
+    <VolumeItem
+      key={volume.name}
+      volume={volume}
+      isActive={activeVolumeMenu === volume.name}
+      isLoading={volumeLoading === volume.name}
+      confirmRemove={confirmVolumeRemove === volume.name}
+      onMenuToggle={() => {
+        setActiveVolumeMenu(activeVolumeMenu === volume.name ? null : volume.name);
+        setConfirmVolumeRemove(null);
+      }}
+      onRemove={(force?: boolean) => handleVolumeRemove(volume.name, force)}
+      onConfirmRemove={() => setConfirmVolumeRemove(volume.name)}
+      menuRef={menuRef}
+    />
   );
+
+  const renderVolumesTab = () => {
+    const groupEntries = Object.entries(volumeGroups);
+    // Sort: Named first, Anonymous second
+    groupEntries.sort(([a], [b]) => {
+      if (a === 'Named') return -1;
+      if (b === 'Named') return 1;
+      return a.localeCompare(b);
+    });
+    const showGroups = settings.volumes.groupBy !== 'none' && groupEntries.length > 0;
+
+    if (!showGroups) {
+      return (
+        <ul className="explorer-list">
+          {filteredVolumes.map(renderVolumeItem)}
+          {filteredVolumes.length === 0 && (
+            <li className="explorer-empty">No volumes found</li>
+          )}
+        </ul>
+      );
+    }
+
+    return (
+      <div className="explorer-list-container">
+        {groupEntries.map(([groupName, volumes]) => (
+          <StackGroup
+            key={groupName}
+            name={groupName}
+            isCollapsed={collapsedStacks.has(`vol_${groupName}`)}
+            onToggle={() => toggleStack(`vol_${groupName}`)}
+            count={volumes.length}
+            icon={groupName === 'Anonymous' ? 'fa-fingerprint' : 'fa-hard-drive'}
+            isStandalone={false}
+            listClassName="explorer-list"
+          >
+            {volumes.map(renderVolumeItem)}
+          </StackGroup>
+        ))}
+        {groupEntries.length === 0 && (
+          <div className="explorer-empty">No volumes found</div>
+        )}
+      </div>
+    );
+  };
 
   const tabs: { id: ExplorerTab; label: string; icon: string; count: number }[] = [
     { id: 'containers', label: 'Containers', icon: 'fa-solid fa-box', count: counts.containers },

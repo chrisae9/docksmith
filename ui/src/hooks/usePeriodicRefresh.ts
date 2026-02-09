@@ -15,11 +15,16 @@ export function usePeriodicRefresh(
 ) {
   const intervalRef = useRef<number | null>(null);
   const refreshFnRef = useRef(refreshFn);
+  const shouldSkipRef = useRef(shouldSkip);
 
-  // Keep refreshFn ref up to date
+  // Keep refs up to date
   useEffect(() => {
     refreshFnRef.current = refreshFn;
   }, [refreshFn]);
+
+  useEffect(() => {
+    shouldSkipRef.current = shouldSkip;
+  }, [shouldSkip]);
 
   useEffect(() => {
     if (!enabled) {
@@ -33,7 +38,7 @@ export function usePeriodicRefresh(
     // Set up periodic refresh
     intervalRef.current = window.setInterval(() => {
       // Skip refresh if shouldSkip returns true
-      if (shouldSkip && shouldSkip()) {
+      if (shouldSkipRef.current && shouldSkipRef.current()) {
         return;
       }
 
@@ -48,5 +53,5 @@ export function usePeriodicRefresh(
         intervalRef.current = null;
       }
     };
-  }, [intervalMs, enabled, shouldSkip]);
+  }, [intervalMs, enabled]);
 }
