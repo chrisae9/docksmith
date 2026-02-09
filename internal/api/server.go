@@ -232,6 +232,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/labels/set", s.handleLabelsSet)
 	mux.HandleFunc("POST /api/labels/remove", s.handleLabelsRemove)
 	mux.HandleFunc("POST /api/labels/batch", s.handleBatchLabels)
+	mux.HandleFunc("POST /api/labels/rollback", s.handleLabelRollback)
 
 	// Registry tags (for regex testing UI)
 	mux.HandleFunc("GET /api/registry/tags/{imageRef...}", s.handleRegistryTags)
@@ -276,6 +277,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("GET /api/containers/{name}/logs", s.handleContainerLogs)
 	mux.HandleFunc("GET /api/containers/{name}/inspect", s.handleContainerInspect)
 	mux.HandleFunc("GET /api/containers/{name}/stats", s.handleContainerStats)
+	mux.HandleFunc("POST /api/containers/batch/stop", s.handleBatchStop)
+	mux.HandleFunc("POST /api/containers/batch/restart", s.handleBatchRestart)
 	mux.HandleFunc("POST /api/containers/{name}/stop", s.handleContainerStop)
 	mux.HandleFunc("POST /api/containers/{name}/start", s.handleContainerStart)
 	mux.HandleFunc("POST /api/containers/{name}/restart", s.handleContainerRestart)

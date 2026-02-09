@@ -180,13 +180,13 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 		}
 	}
 
-	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName)
+	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName, false)
 
 	return operationID, nil
 }
 
 // UpdateSingleContainerInGroup initiates an update for a single container as part of a batch group.
-func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, containerName, targetVersion, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
+func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, containerName, targetVersion, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail, forceContainers map[string]bool) (string, error) {
 	operationID := uuid.New().String()
 
 	containers, err := o.dockerClient.ListContainers(ctx)
@@ -262,22 +262,23 @@ func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, c
 		}
 	}
 
-	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName)
+	force := forceContainers[containerName]
+	go o.executeSingleUpdate(context.Background(), operationID, targetContainer, targetVersion, stackName, force)
 
 	return operationID, nil
 }
 
 // UpdateBatchContainers initiates batch updates for multiple containers.
 func (o *UpdateOrchestrator) UpdateBatchContainers(ctx context.Context, containerNames []string, targetVersions map[string]string) (string, error) {
-	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", "", nil)
+	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", "", nil, nil)
 }
 
 // UpdateBatchContainersInGroup initiates batch updates as part of a batch group.
-func (o *UpdateOrchestrator) UpdateBatchContainersInGroup(ctx context.Context, containerNames []string, targetVersions map[string]string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
-	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", batchGroupID, containerMeta)
+func (o *UpdateOrchestrator) UpdateBatchContainersInGroup(ctx context.Context, containerNames []string, targetVersions map[string]string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail, forceContainers map[string]bool) (string, error) {
+	return o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "batch", batchGroupID, containerMeta, forceContainers)
 }
 
-func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, containerNames []string, targetVersions map[string]string, operationType string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail) (string, error) {
+func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, containerNames []string, targetVersions map[string]string, operationType string, batchGroupID string, containerMeta map[string]storage.BatchContainerDetail, forceContainers map[string]bool) (string, error) {
 	operationID := uuid.New().String()
 
 	containers, err := o.dockerClient.ListContainers(ctx)
@@ -381,6 +382,15 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 				detail.NewResolvedVersion = meta.NewResolvedVersion
 			}
 		}
+
+		// Capture old image digest for rollback support
+		oldDigest, err := o.dockerClient.GetImageDigest(ctx, container.Image)
+		if err != nil {
+			log.Printf("UPDATE: Warning - could not capture old digest for %s: %v", container.Name, err)
+		} else {
+			detail.OldDigest = oldDigest
+		}
+
 		batchDetails = append(batchDetails, detail)
 	}
 	op.BatchDetails = batchDetails
@@ -402,7 +412,7 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 		return "", fmt.Errorf("failed to save operation: %w", err)
 	}
 
-	go o.executeBatchUpdate(context.Background(), operationID, orderedContainers, targetVersions, stackName)
+	go o.executeBatchUpdate(context.Background(), operationID, orderedContainers, targetVersions, stackName, forceContainers)
 
 	return operationID, nil
 }
@@ -477,13 +487,13 @@ func (o *UpdateOrchestrator) UpdateStack(ctx context.Context, stackName string) 
 		return "", fmt.Errorf("failed to save operation: %w", err)
 	}
 
-	go o.executeBatchUpdate(context.Background(), operationID, orderedContainers, targetVersions, stackName)
+	go o.executeBatchUpdate(context.Background(), operationID, orderedContainers, targetVersions, stackName, nil)
 
 	return operationID, nil
 }
 
 // executeSingleUpdate executes the update workflow for a single container.
-func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationID string, container *docker.Container, targetVersion, stackName string) {
+func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationID string, container *docker.Container, targetVersion, stackName string, force bool) {
 	defer o.releaseStackLock(stackName)
 
 	log.Printf("UPDATE: Starting executeSingleUpdate for operation=%s container=%s target=%s", operationID, container.Name, targetVersion)
@@ -506,15 +516,19 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 
 	// Run pre-update check if configured
 	if scriptPath, ok := container.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
-		log.Printf("UPDATE: Running pre-update check for container %s: %s", container.Name, scriptPath)
+		if !force {
+			log.Printf("UPDATE: Running pre-update check for container %s: %s", container.Name, scriptPath)
 
-		// NOTE: Do NOT translate the script path - the orchestrator runs inside the container
-		// where the script path (e.g., /scripts/...) is already valid
-		if err := runPreUpdateCheck(ctx, container, scriptPath); err != nil {
-			o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Pre-update check failed: %v", err))
-			return
+			// NOTE: Do NOT translate the script path - the orchestrator runs inside the container
+			// where the script path (e.g., /scripts/...) is already valid
+			if err := runPreUpdateCheck(ctx, container, scriptPath); err != nil {
+				o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Pre-update check failed: %v", err))
+				return
+			}
+			log.Printf("UPDATE: Pre-update check passed for container %s", container.Name)
+		} else {
+			log.Printf("UPDATE: Skipping pre-update check (force=true) for %s", container.Name)
 		}
-		log.Printf("UPDATE: Pre-update check passed for container %s", container.Name)
 	}
 
 	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
@@ -845,7 +859,7 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 }
 
 // executeBatchUpdate executes batch update workflow.
-func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string) {
+func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string, forceContainers map[string]bool) {
 	defer o.releaseStackLock(stackName)
 
 	// Check if Docker SDK is initialized (required for container operations)
@@ -1863,6 +1877,26 @@ func (o *UpdateOrchestrator) shouldAutoRollback(ctx context.Context, containerNa
 	return false, nil
 }
 
+// resolveRollbackVersion determines the rollback strategy and target version for a container.
+// Returns the version/digest to roll back to and the strategy used.
+// Priority: tag > resolved > digest > none
+func resolveRollbackVersion(detail storage.BatchContainerDetail) (version string, strategy string) {
+	// Priority 1: Tag differs — standard tag-based rollback
+	if detail.OldVersion != detail.NewVersion {
+		return detail.OldVersion, "tag"
+	}
+	// Priority 2: Resolved version differs — pin to old resolved version
+	if detail.OldResolvedVersion != "" && detail.OldResolvedVersion != detail.NewResolvedVersion {
+		return detail.OldResolvedVersion, "resolved"
+	}
+	// Priority 3: Has old digest — digest-based rollback
+	if detail.OldDigest != "" {
+		return detail.OldDigest, "digest"
+	}
+	// Not rollbackable
+	return "", "none"
+}
+
 // RollbackOperation performs a rollback of a previous update operation.
 // Creates a new rollback operation, updates the compose file, and recreates the container.
 func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOperationID string, force bool) (string, error) {
@@ -1879,23 +1913,84 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 	if len(origOp.BatchDetails) > 0 {
 		log.Printf("ROLLBACK: Rolling back batch operation %s with %d containers", originalOperationID, len(origOp.BatchDetails))
 
-		// Build target versions map from batch details (roll back to old versions)
+		// Use resolveRollbackVersion to determine strategy per container
 		targetVersions := make(map[string]string)
 		containerNames := make([]string, 0, len(origOp.BatchDetails))
+		digestRollbacks := make(map[string]storage.BatchContainerDetail) // containers needing digest-based rollback
+		var skippedContainers []string
 
 		for _, detail := range origOp.BatchDetails {
-			if detail.OldVersion == "" {
-				return "", fmt.Errorf("no old version found for container %s", detail.ContainerName)
+			version, strategy := resolveRollbackVersion(detail)
+			log.Printf("ROLLBACK: %s strategy=%s version=%s (old=%s new=%s)", detail.ContainerName, strategy, version, detail.OldVersion, detail.NewVersion)
+
+			switch strategy {
+			case "tag", "resolved":
+				targetVersions[detail.ContainerName] = version
+				containerNames = append(containerNames, detail.ContainerName)
+			case "digest":
+				digestRollbacks[detail.ContainerName] = detail
+			case "none":
+				log.Printf("ROLLBACK: Skipping %s — identical tags with no saved digest", detail.ContainerName)
+				skippedContainers = append(skippedContainers, detail.ContainerName)
 			}
-			targetVersions[detail.ContainerName] = detail.OldVersion
-			containerNames = append(containerNames, detail.ContainerName)
-			log.Printf("ROLLBACK: %s from %s to %s", detail.ContainerName, detail.NewVersion, detail.OldVersion)
 		}
 
-		// Use updateBatchContainersInternal to roll back all containers with operation_type = "rollback"
-		rollbackOpID, err := o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "rollback", "", nil)
-		if err != nil {
-			return "", err
+		if len(containerNames) == 0 && len(digestRollbacks) == 0 {
+			return "", fmt.Errorf("no containers can be rolled back — all use identical tags with no saved digest (skipped: %s)", strings.Join(skippedContainers, ", "))
+		}
+
+		// Handle tag/resolved rollbacks via batch pipeline
+		var rollbackOpID string
+		if len(containerNames) > 0 {
+			rollbackOpID, err = o.updateBatchContainersInternal(ctx, containerNames, targetVersions, "rollback", "", nil, nil)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		// Handle digest rollbacks via single-container rollback path
+		if len(digestRollbacks) > 0 {
+			containers, listErr := o.dockerClient.ListContainers(ctx)
+			if listErr != nil {
+				return "", fmt.Errorf("failed to list containers for digest rollback: %w", listErr)
+			}
+			containerMap := make(map[string]*docker.Container)
+			for i := range containers {
+				containerMap[containers[i].Name] = &containers[i]
+			}
+
+			for name, detail := range digestRollbacks {
+				targetContainer := containerMap[name]
+				if targetContainer == nil {
+					log.Printf("ROLLBACK: Container %s not found for digest rollback, skipping", name)
+					continue
+				}
+
+				digestOpID := uuid.New().String()
+				if rollbackOpID == "" {
+					rollbackOpID = digestOpID // Use first digest rollback ID if no batch rollback
+				}
+
+				digestOp := storage.UpdateOperation{
+					OperationID:   digestOpID,
+					ContainerID:   targetContainer.ID,
+					ContainerName: name,
+					StackName:     detail.StackName,
+					OperationType: "rollback",
+					Status:        "in_progress",
+					OldVersion:    detail.NewVersion,
+					NewVersion:    detail.OldVersion + " (digest)",
+					CreatedAt:     time.Now(),
+					UpdatedAt:     time.Now(),
+					StartedAt:     func() *time.Time { t := time.Now(); return &t }(),
+				}
+				if saveErr := o.storage.SaveUpdateOperation(ctx, digestOp); saveErr != nil {
+					log.Printf("ROLLBACK: Failed to save digest rollback operation for %s: %v", name, saveErr)
+					continue
+				}
+
+				go o.executeDigestRollback(context.Background(), digestOpID, targetContainer, detail)
+			}
 		}
 
 		// Mark original operation as rolled back
@@ -2022,18 +2117,33 @@ func (o *UpdateOrchestrator) RollbackContainers(ctx context.Context, operationID
 		return "", fmt.Errorf("operation %s not found", operationID)
 	}
 
-	// Build target versions from batch_details
+	// Build target versions from batch_details using smart resolution
 	targetVersions := make(map[string]string)
 	requestedNames := make(map[string]bool)
 	for _, name := range containerNames {
 		requestedNames[name] = true
 	}
 
+	digestRollbacks := make(map[string]storage.BatchContainerDetail)
+	var skippedContainers []string
+	rollbackNames := make([]string, 0, len(containerNames))
+
 	if len(origOp.BatchDetails) > 0 {
 		for _, detail := range origOp.BatchDetails {
-			if requestedNames[detail.ContainerName] {
-				// Rollback: target is old_version (what we want to go back to)
-				targetVersions[detail.ContainerName] = detail.OldVersion
+			if !requestedNames[detail.ContainerName] {
+				continue
+			}
+			version, strategy := resolveRollbackVersion(detail)
+			log.Printf("ROLLBACK-CONTAINERS: %s strategy=%s version=%s", detail.ContainerName, strategy, version)
+
+			switch strategy {
+			case "tag", "resolved":
+				targetVersions[detail.ContainerName] = version
+				rollbackNames = append(rollbackNames, detail.ContainerName)
+			case "digest":
+				digestRollbacks[detail.ContainerName] = detail
+			case "none":
+				skippedContainers = append(skippedContainers, detail.ContainerName)
 			}
 		}
 	} else {
@@ -2042,22 +2152,68 @@ func (o *UpdateOrchestrator) RollbackContainers(ctx context.Context, operationID
 			return "", fmt.Errorf("container %s not found in operation %s", containerNames[0], operationID)
 		}
 		targetVersions[origOp.ContainerName] = origOp.OldVersion
+		rollbackNames = append(rollbackNames, origOp.ContainerName)
 	}
 
-	if len(targetVersions) == 0 {
+	if len(rollbackNames) == 0 && len(digestRollbacks) == 0 {
+		if len(skippedContainers) > 0 {
+			return "", fmt.Errorf("no containers can be rolled back — all use identical tags with no saved digest (skipped: %s)", strings.Join(skippedContainers, ", "))
+		}
 		return "", fmt.Errorf("no matching containers found in operation %s for rollback", operationID)
 	}
 
-	// Get the names that we actually found
-	rollbackNames := make([]string, 0, len(targetVersions))
-	for name := range targetVersions {
-		rollbackNames = append(rollbackNames, name)
+	// Handle tag/resolved rollbacks via batch pipeline
+	var rollbackOpID string
+	if len(rollbackNames) > 0 {
+		rollbackOpID, err = o.updateBatchContainersInternal(ctx, rollbackNames, targetVersions, "rollback", "", nil, nil)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	// Use updateBatchContainersInternal with rollback type
-	rollbackOpID, err := o.updateBatchContainersInternal(ctx, rollbackNames, targetVersions, "rollback", "", nil)
-	if err != nil {
-		return "", err
+	// Handle digest rollbacks via single-container path
+	if len(digestRollbacks) > 0 {
+		containers, listErr := o.dockerClient.ListContainers(ctx)
+		if listErr != nil {
+			return "", fmt.Errorf("failed to list containers for digest rollback: %w", listErr)
+		}
+		containerMap := make(map[string]*docker.Container)
+		for i := range containers {
+			containerMap[containers[i].Name] = &containers[i]
+		}
+
+		for name, detail := range digestRollbacks {
+			targetContainer := containerMap[name]
+			if targetContainer == nil {
+				log.Printf("ROLLBACK-CONTAINERS: Container %s not found for digest rollback, skipping", name)
+				continue
+			}
+
+			digestOpID := uuid.New().String()
+			if rollbackOpID == "" {
+				rollbackOpID = digestOpID
+			}
+
+			digestOp := storage.UpdateOperation{
+				OperationID:   digestOpID,
+				ContainerID:   targetContainer.ID,
+				ContainerName: name,
+				StackName:     detail.StackName,
+				OperationType: "rollback",
+				Status:        "in_progress",
+				OldVersion:    detail.NewVersion,
+				NewVersion:    detail.OldVersion + " (digest)",
+				CreatedAt:     time.Now(),
+				UpdatedAt:     time.Now(),
+				StartedAt:     func() *time.Time { t := time.Now(); return &t }(),
+			}
+			if saveErr := o.storage.SaveUpdateOperation(ctx, digestOp); saveErr != nil {
+				log.Printf("ROLLBACK-CONTAINERS: Failed to save digest rollback operation for %s: %v", name, saveErr)
+				continue
+			}
+
+			go o.executeDigestRollback(context.Background(), digestOpID, targetContainer, detail)
+		}
 	}
 
 	// Mark original operation as rolled back only after rollback successfully started
@@ -2191,6 +2347,112 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 	}
 
 	log.Printf("ROLLBACK: Successfully completed rollback for container %s", container.Name)
+}
+
+// executeDigestRollback performs a digest-based rollback for a container.
+// This is used when the tag hasn't changed (e.g., :latest, REBUILD) but we have the old digest.
+// It pulls the old image by digest, re-tags it as the current tag, then recreates the container.
+func (o *UpdateOrchestrator) executeDigestRollback(ctx context.Context, rollbackOpID string, container *docker.Container, detail storage.BatchContainerDetail) {
+	stackName := container.Labels["com.docker.compose.project"]
+
+	// Extract repo from image (e.g., "ghcr.io/user/repo" from "ghcr.io/user/repo:latest")
+	imageParts := strings.Split(container.Image, ":")
+	repo := imageParts[0]
+	currentTag := "latest"
+	if len(imageParts) > 1 {
+		currentTag = imageParts[len(imageParts)-1]
+	}
+
+	// Stage 1: Pull old image by digest (10-50%)
+	digestRef := repo + "@" + detail.OldDigest
+	digestShort := detail.OldDigest
+	if len(digestShort) > 19 {
+		digestShort = digestShort[:19]
+	}
+	o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", 10, fmt.Sprintf("Pulling old image by digest: %s", digestShort))
+	log.Printf("DIGEST ROLLBACK: Pulling %s for container %s", digestRef, container.Name)
+
+	progressChan := make(chan PullProgress, 10)
+	pullDone := make(chan error, 1)
+
+	go func() {
+		pullDone <- o.pullImage(ctx, digestRef, progressChan)
+		close(progressChan)
+	}()
+
+	for progress := range progressChan {
+		percent := 10
+		if progress.Percent > 0 {
+			percent = 10 + int(float64(progress.Percent)*0.4) // 10-50%
+		}
+		o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", percent, progress.Status)
+	}
+
+	if err := <-pullDone; err != nil {
+		o.failOperation(ctx, rollbackOpID, "pulling_image", fmt.Sprintf("Old image digest no longer available in registry: %v", err))
+		return
+	}
+
+	// Stage 2: Re-tag the digest image as the current tag (50-60%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", 55, fmt.Sprintf("Re-tagging as %s:%s", repo, currentTag))
+	log.Printf("DIGEST ROLLBACK: Re-tagging %s as %s:%s", digestRef, repo, currentTag)
+
+	if err := o.dockerSDK.ImageTag(ctx, digestRef, repo+":"+currentTag); err != nil {
+		o.failOperation(ctx, rollbackOpID, "pulling_image", fmt.Sprintf("Failed to re-tag image: %v", err))
+		return
+	}
+
+	// Stage 3: Recreate container (60-80%) — compose sees the local image with the right tag
+	o.publishProgress(rollbackOpID, container.Name, stackName, "recreating", 60, "Recreating container with old image")
+
+	if _, err := o.restartContainerWithDependents(ctx, rollbackOpID, container.Name, stackName, container.Image); err != nil {
+		o.failOperation(ctx, rollbackOpID, "recreating", fmt.Sprintf("Failed to recreate container: %v", err))
+		return
+	}
+
+	// Stage 4: Health check (80-95%)
+	o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 80, "Verifying container health")
+
+	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
+		log.Printf("DIGEST ROLLBACK: Warning - health check failed: %v", err)
+		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 90, fmt.Sprintf("Health check warning: %v", err))
+	} else {
+		o.publishProgress(rollbackOpID, container.Name, stackName, "health_check", 95, "Health check passed")
+	}
+
+	// Restart dependent containers
+	depResult, depErr := o.restartDependentContainers(ctx, container.Name, true)
+	if depErr != nil {
+		log.Printf("DIGEST ROLLBACK: Warning - failed to restart dependent containers for %s: %v", container.Name, depErr)
+	} else if depResult != nil && len(depResult.Restarted) > 0 {
+		log.Printf("DIGEST ROLLBACK: Restarted dependents for %s: %v", container.Name, depResult.Restarted)
+	}
+
+	// Stage 5: Complete (100%)
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, rollbackOpID)
+	if found {
+		op.Status = "complete"
+		op.CompletedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	o.publishProgress(rollbackOpID, container.Name, stackName, "complete", 100, "Digest-based rollback completed successfully")
+
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"operation_id":   rollbackOpID,
+				"container_id":   container.ID,
+				"container_name": container.Name,
+				"stack_name":     stackName,
+				"status":         "complete",
+			},
+		})
+	}
+
+	log.Printf("DIGEST ROLLBACK: Successfully completed digest-based rollback for container %s", container.Name)
 }
 
 // FixComposeMismatch fixes a container where the running image doesn't match the compose file.
@@ -2656,9 +2918,9 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 						// Use context.Background() for operations so they complete even if orchestrator shuts down
 						// This is consistent with non-queued operations (see UpdateSingleContainer, etc.)
 						if len(targetContainers) == 1 {
-							go o.executeSingleUpdate(context.Background(), q.OperationID, targetContainers[0], "latest", q.StackName)
+							go o.executeSingleUpdate(context.Background(), q.OperationID, targetContainers[0], "latest", q.StackName, false)
 						} else {
-							go o.executeBatchUpdate(context.Background(), q.OperationID, targetContainers, nil, q.StackName)
+							go o.executeBatchUpdate(context.Background(), q.OperationID, targetContainers, nil, q.StackName, nil)
 						}
 					}
 				}

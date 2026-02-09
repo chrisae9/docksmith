@@ -284,6 +284,7 @@ type BatchContainerDetail struct {
 	ChangeType         *int   `json:"change_type,omitempty"`          // version.ChangeType (0=rebuild, 1=patch, 2=minor, 3=major)
 	OldResolvedVersion string `json:"old_resolved_version,omitempty"` // Resolved version at time of update
 	NewResolvedVersion string `json:"new_resolved_version,omitempty"` // Resolved version at time of update
+	OldDigest          string `json:"old_digest,omitempty"`           // Image digest at time of update (for digest-based rollback)
 }
 
 type UpdateOperation struct {

@@ -678,23 +678,24 @@ export function ContainerPage() {
                     return latestTag;
                   })()}</span>
                 </div>
-                {!hasChanges && docksmithData.status === 'UPDATE_AVAILABLE' && (
+                {!hasChanges && (docksmithData.status === 'UPDATE_AVAILABLE' || docksmithData.status === 'UPDATE_AVAILABLE_BLOCKED') && (
                   <button
-                    className={`update-btn ${getUpdateButtonClass(docksmithData.change_type)}`}
+                    className={`update-btn ${docksmithData.status === 'UPDATE_AVAILABLE_BLOCKED' ? 'force' : getUpdateButtonClass(docksmithData.change_type)}`}
                     onClick={() => navigate('/operation', {
                       state: {
                         update: {
                           containers: [{
                             name: docksmithData.container_name,
                             target_version: docksmithData.latest_version || docksmithData.recommended_tag || '',
-                            stack: docksmithData.stack || ''
+                            stack: docksmithData.stack || '',
+                            force: docksmithData.status === 'UPDATE_AVAILABLE_BLOCKED',
                           }]
                         }
                       }
                     })}
                   >
                     <i className="fa-solid fa-arrow-up"></i>
-                    {getUpdateButtonLabel(docksmithData.change_type)}
+                    {docksmithData.status === 'UPDATE_AVAILABLE_BLOCKED' ? 'Force' : getUpdateButtonLabel(docksmithData.change_type)}
                   </button>
                 )}
               </section>

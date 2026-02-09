@@ -10,7 +10,6 @@ import {
   pruneImages,
   pruneNetworks,
   pruneVolumes,
-  batchSetLabels,
 } from '../api/client';
 import type {
   UnifiedContainerItem,
@@ -167,7 +166,6 @@ export function Containers() {
 
   // Bulk action state
   const [showBulkActions, setShowBulkActions] = useState(false);
-  const [bulkLabelLoading, setBulkLabelLoading] = useState(false);
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
@@ -393,7 +391,7 @@ export function Containers() {
     if (selectedContainers.size === 0) return;
     const selected = containers.filter(c => selectedContainers.has(c.name) && c.has_update_data);
     const mismatchContainers: string[] = [];
-    const containersToUpdate: Array<{ name: string; target_version: string; stack: string; change_type: number; old_resolved_version: string; new_resolved_version: string }> = [];
+    const containersToUpdate: Array<{ name: string; target_version: string; stack: string; force?: boolean; change_type: number; old_resolved_version: string; new_resolved_version: string }> = [];
 
     for (const c of selected) {
       if (isMismatch(c.update_status || '')) {
@@ -403,6 +401,7 @@ export function Containers() {
           name: c.name,
           target_version: c.recommended_tag || c.latest_version || '',
           stack: c.stack || '',
+          force: c.update_status === 'UPDATE_AVAILABLE_BLOCKED' || undefined,
           change_type: c.change_type || 0,
           old_resolved_version: c.current_version || '',
           new_resolved_version: c.latest_resolved_version || c.latest_version || '',
@@ -430,15 +429,15 @@ export function Containers() {
     setSelectedContainers(new Set());
     setShowBulkActions(false);
 
-    // Navigate each one through the operation page
+    // Navigate through the operation page
     if (names.length === 1) {
       navigate('/operation', { state: { [action]: { containerName: names[0] } } });
     } else {
-      // For multi-container ops, use stackRestart/stackStop pattern
+      // For multi-container ops, use batch endpoints
       if (action === 'restart') {
-        navigate('/operation', { state: { stackRestart: { stackName: 'Selected', containers: names } } });
+        navigate('/operation', { state: { batchRestart: { containers: names } } });
       } else if (action === 'stop') {
-        navigate('/operation', { state: { stackStop: { stackName: 'Selected', containers: names } } });
+        navigate('/operation', { state: { batchStop: { containers: names } } });
       } else {
         // For start/remove, process first one (could extend later)
         navigate('/operation', { state: { [action]: { containerName: names[0] } } });
@@ -446,30 +445,11 @@ export function Containers() {
     }
   };
 
-  const handleBulkLabel = async (labelOp: { ignore?: boolean; allow_latest?: boolean; version_pin_major?: boolean; version_pin_minor?: boolean; tag_regex?: string; script?: string }) => {
+  const handleBulkLabel = (labelOp: { ignore?: boolean; allow_latest?: boolean; version_pin_major?: boolean; version_pin_minor?: boolean; tag_regex?: string; script?: string }) => {
     const names = Array.from(selectedContainers);
-    setBulkLabelLoading(true);
-    try {
-      const operations = names.map(name => ({ container: name, ...labelOp }));
-      const result = await batchSetLabels(operations);
-      if (result.success && result.data) {
-        const successes = result.data.results.filter(r => r.success).length;
-        const failures = result.data.results.filter(r => !r.success);
-        if (failures.length > 0) {
-          toast.error(`${failures.length} container(s) failed: ${failures[0].error}`);
-        } else {
-          toast.success(`Labels applied to ${successes} container(s)`);
-        }
-      } else {
-        toast.error(result.error || 'Failed to apply labels');
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to apply labels');
-    } finally {
-      setBulkLabelLoading(false);
-      setSelectedContainers(new Set());
-      setShowBulkActions(false);
-    }
+    setSelectedContainers(new Set());
+    setShowBulkActions(false);
+    navigate('/operation', { state: { batchLabel: { containers: names, labelOp } } });
   };
 
   // === Resource actions (images/networks/volumes) ===
@@ -768,9 +748,9 @@ export function Containers() {
             ) : (
               <ActionMenuItem icon="fa-play" label="Start" onClick={() => handleContainerAction(c.name, 'start')} />
             )}
-            {hasUpdate && <ActionMenuItem icon="fa-arrow-up" label="Update" onClick={() => {
+            {hasUpdate && <ActionMenuItem icon="fa-arrow-up" label={c.update_status === 'UPDATE_AVAILABLE_BLOCKED' ? 'Force Update' : 'Update'} onClick={() => {
               setActiveActionMenu(null);
-              navigate('/operation', { state: { update: { containers: [{ name: c.name, target_version: c.recommended_tag || c.latest_version || '', stack: c.stack || '', change_type: c.change_type || 0, old_resolved_version: c.current_version || '', new_resolved_version: c.latest_resolved_version || c.latest_version || '' }] } } });
+              navigate('/operation', { state: { update: { containers: [{ name: c.name, target_version: c.recommended_tag || c.latest_version || '', stack: c.stack || '', force: c.update_status === 'UPDATE_AVAILABLE_BLOCKED', change_type: c.change_type || 0, old_resolved_version: c.current_version || '', new_resolved_version: c.latest_resolved_version || c.latest_version || '' }] } } });
             }} />}
             {hasMismatch && <ActionMenuItem icon="fa-arrows-rotate" label="Fix Mismatch" onClick={() => {
               setActiveActionMenu(null);
@@ -1240,25 +1220,15 @@ export function Containers() {
             <div className="selection-buttons">
               <button className="cancel-btn" onClick={deselectAll}>Cancel</button>
 
-              {/* Actions dropdown */}
+              {/* Actions dropdown (secondary) */}
               <div className="bulk-actions-wrapper">
-                <button className="update-btn" onClick={() => setShowBulkActions(!showBulkActions)}>
+                <button className="actions-dropdown-btn" onClick={() => setShowBulkActions(!showBulkActions)}>
                   Actions <i className="fa-solid fa-chevron-down" style={{ fontSize: '0.75em', marginLeft: '4px' }}></i>
                 </button>
                 {showBulkActions && (
                   <>
                     <div className="settings-menu-backdrop" onClick={() => setShowBulkActions(false)} />
                     <div className="bulk-actions-menu">
-                      {selectedAnalysis.hasUpdates && (
-                        <button onClick={handleBulkUpdate}><i className="fa-solid fa-arrow-up"></i> Update</button>
-                      )}
-                      {selectedAnalysis.hasMismatches && (
-                        <button onClick={() => {
-                          const mismatches = containers.filter(c => selectedContainers.has(c.name) && isMismatch(c.update_status || '')).map(c => c.name);
-                          setSelectedContainers(new Set()); setShowBulkActions(false);
-                          navigate('/operation', { state: { batchFixMismatch: { containerNames: mismatches } } });
-                        }}><i className="fa-solid fa-arrows-rotate"></i> Fix Mismatch</button>
-                      )}
                       {selectedAnalysis.hasStopped && (
                         <button onClick={() => handleBulkAction('start')}><i className="fa-solid fa-play"></i> Start</button>
                       )}
@@ -1268,23 +1238,30 @@ export function Containers() {
                       <button onClick={() => handleBulkAction('restart')}><i className="fa-solid fa-rotate"></i> Restart</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Labels</span>
-                      <button onClick={() => handleBulkLabel({ ignore: true })} disabled={bulkLabelLoading}><i className="fa-solid fa-eye-slash"></i> Ignore</button>
-                      <button onClick={() => handleBulkLabel({ ignore: false })} disabled={bulkLabelLoading}><i className="fa-solid fa-eye"></i> Unignore</button>
-                      <button onClick={() => handleBulkLabel({ allow_latest: true })} disabled={bulkLabelLoading}><i className="fa-solid fa-tag"></i> Allow :latest</button>
-                      <button onClick={() => handleBulkLabel({ allow_latest: false })} disabled={bulkLabelLoading}><i className="fa-solid fa-tag"></i> Disallow :latest</button>
+                      <button onClick={() => handleBulkLabel({ ignore: true })}><i className="fa-solid fa-eye-slash"></i> Ignore</button>
+                      <button onClick={() => handleBulkLabel({ ignore: false })}><i className="fa-solid fa-eye"></i> Unignore</button>
+                      <button onClick={() => handleBulkLabel({ allow_latest: true })}><i className="fa-solid fa-tag"></i> Allow :latest</button>
+                      <button onClick={() => handleBulkLabel({ allow_latest: false })}><i className="fa-solid fa-tag"></i> Disallow :latest</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Pinning</span>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false })} disabled={bulkLabelLoading}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Unpin</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false })} disabled={bulkLabelLoading}><i className="fa-solid fa-thumbtack"></i> Pin Major</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false })} disabled={bulkLabelLoading}><i className="fa-solid fa-thumbtack"></i> Pin Minor</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false })}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Unpin</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false })}><i className="fa-solid fa-thumbtack"></i> Pin Major</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false })}><i className="fa-solid fa-thumbtack"></i> Pin Minor</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Clear</span>
-                      <button onClick={() => handleBulkLabel({ tag_regex: '' })} disabled={bulkLabelLoading}><i className="fa-solid fa-filter-circle-xmark"></i> Clear Tag Filter</button>
-                      <button onClick={() => handleBulkLabel({ script: '' })} disabled={bulkLabelLoading}><i className="fa-solid fa-terminal"></i> Clear Script</button>
+                      <button onClick={() => handleBulkLabel({ tag_regex: '' })}><i className="fa-solid fa-filter-circle-xmark"></i> Clear Tag Filter</button>
+                      <button onClick={() => handleBulkLabel({ script: '' })}><i className="fa-solid fa-terminal"></i> Clear Script</button>
                     </div>
                   </>
                 )}
               </div>
+
+              {/* Standalone Update button (primary) */}
+              {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
+                <button className="update-btn" onClick={handleBulkUpdate}>
+                  Update
+                </button>
+              )}
             </div>
           </div>
         </div>

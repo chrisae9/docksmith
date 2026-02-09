@@ -277,6 +277,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			Name               string `json:"name"`
 			TargetVersion      string `json:"target_version"`
 			Stack              string `json:"stack"`
+			Force              bool   `json:"force,omitempty"`
 			ChangeType         *int   `json:"change_type,omitempty"`
 			OldResolvedVersion string `json:"old_resolved_version"`
 			NewResolvedVersion string `json:"new_resolved_version"`
@@ -296,6 +297,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	stackGroups := make(map[string][]string)
 	targetVersions := make(map[string]string)
 	containerMeta := make(map[string]storage.BatchContainerDetail)
+	forceContainers := make(map[string]bool)
 
 	for _, c := range req.Containers {
 		stack := c.Stack
@@ -311,6 +313,9 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			OldResolvedVersion: c.OldResolvedVersion,
 			NewResolvedVersion: c.NewResolvedVersion,
 		}
+		if c.Force {
+			forceContainers[c.Name] = true
+		}
 	}
 
 	// Generate a batch group ID to link all operations from this user action
@@ -322,7 +327,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 	for stack, containerNames := range stackGroups {
 		if len(containerNames) == 1 {
 			// Single container - use regular update with group ID
-			opID, err := s.updateOrchestrator.UpdateSingleContainerInGroup(ctx, containerNames[0], targetVersions[containerNames[0]], batchGroupID, containerMeta)
+			opID, err := s.updateOrchestrator.UpdateSingleContainerInGroup(ctx, containerNames[0], targetVersions[containerNames[0]], batchGroupID, containerMeta, forceContainers)
 			if err != nil {
 				log.Printf("Failed to start update for %s: %v", containerNames[0], err)
 				operations = append(operations, map[string]any{
@@ -341,7 +346,7 @@ func (s *Server) handleBatchUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Multiple containers in same stack - use batch update with group ID
-			opID, err := s.updateOrchestrator.UpdateBatchContainersInGroup(ctx, containerNames, targetVersions, batchGroupID, containerMeta)
+			opID, err := s.updateOrchestrator.UpdateBatchContainersInGroup(ctx, containerNames, targetVersions, batchGroupID, containerMeta, forceContainers)
 			if err != nil {
 				log.Printf("Failed to start batch update for stack %s: %v", stack, err)
 				operations = append(operations, map[string]any{

@@ -186,6 +186,7 @@ type labelOperationConfig struct {
 	operationType string // "set" or "remove"
 	noRestart     bool
 	force         bool
+	batchGroupID  string // Links operations from a single batch action
 }
 
 // labelModifier is a function that applies label changes to a service and returns the modified/removed labels
@@ -243,6 +244,7 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 		OperationType: "label_change",
 		Status:        "in_progress",
 		OldVersion:    string(oldLabelsJSON),
+		BatchGroupID:  cfg.batchGroupID,
 		StartedAt:     &now,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -351,11 +353,22 @@ func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID str
 
 // setLabels implements the label setting logic (atomic: compose update + restart)
 func (s *Server) setLabels(ctx context.Context, req *SetLabelsRequest) (*LabelOperationResult, error) {
+	return s.setLabelsWithConfig(ctx, req, "")
+}
+
+// setLabelsInGroup implements label setting with a batch group ID for linking related operations
+func (s *Server) setLabelsInGroup(ctx context.Context, req *SetLabelsRequest, batchGroupID string) (*LabelOperationResult, error) {
+	return s.setLabelsWithConfig(ctx, req, batchGroupID)
+}
+
+// setLabelsWithConfig is the common implementation for setLabels and setLabelsInGroup
+func (s *Server) setLabelsWithConfig(ctx context.Context, req *SetLabelsRequest, batchGroupID string) (*LabelOperationResult, error) {
 	return s.executeLabelOperation(ctx, labelOperationConfig{
 		containerName: req.Container,
 		operationType: "set",
 		noRestart:     req.NoRestart,
 		force:         req.Force,
+		batchGroupID:  batchGroupID,
 	}, func(service *compose.Service) (map[string]string, []string, error) {
 		modified := make(map[string]string)
 
@@ -606,6 +619,217 @@ func applyStringLabel(service *compose.Service, labelKey string, value *string) 
 	return *value, nil
 }
 
+// LabelRollbackRequest represents a request to rollback label changes
+type LabelRollbackRequest struct {
+	BatchGroupID   string   `json:"batch_group_id,omitempty"`    // Rollback all operations in this batch
+	OperationIDs   []string `json:"operation_ids,omitempty"`     // Rollback specific operations
+	ContainerNames []string `json:"container_names,omitempty"`   // Rollback specific containers within a batch
+	Force          bool     `json:"force,omitempty"`
+}
+
+// handleLabelRollback reverses label changes from a previous operation or batch
+// POST /api/labels/rollback
+func (s *Server) handleLabelRollback(w http.ResponseWriter, r *http.Request) {
+	var req LabelRollbackRequest
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	if req.BatchGroupID == "" && len(req.OperationIDs) == 0 {
+		RespondBadRequest(w, fmt.Errorf("batch_group_id or operation_ids required"))
+		return
+	}
+
+	// Collect operations to rollback
+	var operations []storage.UpdateOperation
+	ctx := r.Context()
+
+	if req.BatchGroupID != "" {
+		ops, err := s.storageService.GetUpdateOperationsByBatchGroup(ctx, req.BatchGroupID)
+		if err != nil {
+			RespondInternalError(w, fmt.Errorf("failed to fetch batch operations: %w", err))
+			return
+		}
+		operations = ops
+	} else {
+		for _, opID := range req.OperationIDs {
+			op, found, err := s.storageService.GetUpdateOperation(ctx, opID)
+			if err != nil {
+				RespondInternalError(w, fmt.Errorf("failed to fetch operation %s: %w", opID, err))
+				return
+			}
+			if found {
+				operations = append(operations, op)
+			}
+		}
+	}
+
+	// Filter to only label_change operations that completed successfully
+	var labelOps []storage.UpdateOperation
+	for _, op := range operations {
+		if op.OperationType != "label_change" || op.Status != "complete" {
+			continue
+		}
+		// If specific containers requested, filter by name
+		if len(req.ContainerNames) > 0 {
+			found := false
+			for _, name := range req.ContainerNames {
+				if op.ContainerName == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		labelOps = append(labelOps, op)
+	}
+
+	if len(labelOps) == 0 {
+		RespondBadRequest(w, fmt.Errorf("no rollbackable label operations found"))
+		return
+	}
+
+	// Generate a new batch group ID for the rollback operations
+	rollbackBatchGroupID := uuid.New().String()
+	results := make([]BatchLabelResult, 0, len(labelOps))
+
+	for _, op := range labelOps {
+		// Parse old and new labels
+		var oldLabels map[string]string
+		var newLabels map[string]string
+
+		if op.OldVersion != "" {
+			if err := json.Unmarshal([]byte(op.OldVersion), &oldLabels); err != nil {
+				results = append(results, BatchLabelResult{
+					Container: op.ContainerName,
+					Success:   false,
+					Error:     fmt.Sprintf("failed to parse old labels: %v", err),
+				})
+				continue
+			}
+		} else {
+			oldLabels = make(map[string]string)
+		}
+
+		if op.NewVersion != "" {
+			if err := json.Unmarshal([]byte(op.NewVersion), &newLabels); err != nil {
+				results = append(results, BatchLabelResult{
+					Container: op.ContainerName,
+					Success:   false,
+					Error:     fmt.Sprintf("failed to parse new labels: %v", err),
+				})
+				continue
+			}
+		} else {
+			newLabels = make(map[string]string)
+		}
+
+		// Build the inverse label operation
+		// For each label that was changed: restore its old value or remove it
+		rollbackReq := &SetLabelsRequest{
+			Container: op.ContainerName,
+			Force:     req.Force,
+		}
+
+		hasChanges := false
+		for labelKey, newVal := range newLabels {
+			oldVal, hadOldVal := oldLabels[labelKey]
+
+			if newVal == "" {
+				// Label was removed — restore it if it had a value
+				if hadOldVal && oldVal != "" {
+					hasChanges = true
+					s.setRollbackLabel(rollbackReq, labelKey, oldVal)
+				}
+			} else if hadOldVal && oldVal != "" {
+				// Label was changed — restore old value
+				if oldVal != newVal {
+					hasChanges = true
+					s.setRollbackLabel(rollbackReq, labelKey, oldVal)
+				}
+			} else {
+				// Label was added (didn't exist before) — remove it
+				hasChanges = true
+				s.setRollbackLabel(rollbackReq, labelKey, "")
+			}
+		}
+
+		if !hasChanges {
+			results = append(results, BatchLabelResult{
+				Container: op.ContainerName,
+				Success:   true,
+			})
+			continue
+		}
+
+		opCtx, cancel := context.WithTimeout(ctx, LabelOperationTimeout)
+		result, err := s.setLabelsInGroup(opCtx, rollbackReq, rollbackBatchGroupID)
+		cancel()
+
+		if err != nil {
+			results = append(results, BatchLabelResult{
+				Container: op.ContainerName,
+				Success:   false,
+				Error:     err.Error(),
+			})
+			continue
+		}
+
+		// Mark the original operation as rolled back
+		op.RollbackOccurred = true
+		s.storageService.SaveUpdateOperation(ctx, op)
+
+		results = append(results, BatchLabelResult{
+			Container:   op.ContainerName,
+			Success:     result.Success,
+			OperationID: result.OperationID,
+		})
+	}
+
+	// Trigger background check after rollback
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.TriggerCheck()
+	}
+
+	RespondSuccess(w, map[string]any{
+		"results":        results,
+		"batch_group_id": rollbackBatchGroupID,
+	})
+}
+
+// setRollbackLabel sets a label field on the rollback request based on the label key and target value
+func (s *Server) setRollbackLabel(req *SetLabelsRequest, labelKey, value string) {
+	switch labelKey {
+	case scripts.IgnoreLabel:
+		v := value == "true"
+		req.Ignore = &v
+	case scripts.AllowLatestLabel:
+		v := value == "true"
+		req.AllowLatest = &v
+	case scripts.AllowPrereleaseLabel:
+		v := value == "true"
+		req.AllowPrerelease = &v
+	case scripts.VersionPinMajorLabel:
+		v := value == "true"
+		req.VersionPinMajor = &v
+	case scripts.VersionPinMinorLabel:
+		v := value == "true"
+		req.VersionPinMinor = &v
+	case scripts.TagRegexLabel:
+		req.TagRegex = &value
+	case scripts.VersionMinLabel:
+		req.VersionMin = &value
+	case scripts.VersionMaxLabel:
+		req.VersionMax = &value
+	case scripts.PreUpdateCheckLabel:
+		req.Script = &value
+	case scripts.RestartAfterLabel:
+		req.RestartAfter = &value
+	}
+}
+
 // BatchLabelsRequest represents a batch label operation
 type BatchLabelsRequest struct {
 	Operations []SetLabelsRequest `json:"operations"`
@@ -632,6 +856,9 @@ func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate a batch group ID to link all operations from this user action
+	batchGroupID := uuid.New().String()
+
 	results := make([]BatchLabelResult, 0, len(req.Operations))
 
 	for _, op := range req.Operations {
@@ -644,10 +871,10 @@ func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Reuse the existing setLabels logic
+		// Reuse the existing setLabels logic with batch group ID
 		opCopy := op
 		ctx, cancel := context.WithTimeout(r.Context(), LabelOperationTimeout)
-		result, err := s.setLabels(ctx, &opCopy)
+		result, err := s.setLabelsInGroup(ctx, &opCopy, batchGroupID)
 		cancel()
 
 		if err != nil {
@@ -672,6 +899,7 @@ func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	RespondSuccess(w, map[string]any{
-		"results": results,
+		"results":        results,
+		"batch_group_id": batchGroupID,
 	})
 }

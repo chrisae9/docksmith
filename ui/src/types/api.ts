@@ -83,6 +83,7 @@ export interface BatchContainerDetail {
   change_type?: number;
   old_resolved_version?: string;
   new_resolved_version?: string;
+  old_digest?: string;
 }
 
 // Update Operation (matches storage.UpdateOperation)

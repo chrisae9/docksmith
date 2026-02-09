@@ -128,6 +128,7 @@ export async function triggerBatchUpdate(containers: Array<{
   name: string;
   target_version: string;
   stack: string;
+  force?: boolean;
   change_type?: number;
   old_resolved_version?: string;
   new_resolved_version?: string;
@@ -523,10 +524,70 @@ export async function batchSetLabels(
     error?: string;
     operation_id?: string;
   }>;
+  batch_group_id: string;
 }>> {
   return fetchAPI('/labels/batch', {
     method: 'POST',
     body: JSON.stringify({ operations }),
+  });
+}
+
+// Rollback label changes from a previous operation or batch
+export async function rollbackLabels(params: {
+  batch_group_id?: string;
+  operation_ids?: string[];
+  container_names?: string[];
+  force?: boolean;
+}): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    error?: string;
+    operation_id?: string;
+  }>;
+  batch_group_id: string;
+}>> {
+  return fetchAPI('/labels/rollback', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// Batch stop - stop multiple containers with a shared batch_group_id
+export async function batchStopContainers(
+  containers: string[],
+  timeout?: number
+): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    operation_id?: string;
+    error?: string;
+  }>;
+  batch_group_id: string;
+}>> {
+  return fetchAPI('/containers/batch/stop', {
+    method: 'POST',
+    body: JSON.stringify({ containers, timeout }),
+  });
+}
+
+// Batch restart - restart multiple containers with a shared batch_group_id
+export async function batchRestartContainers(
+  containers: string[],
+  timeout?: number
+): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    operation_id?: string;
+    error?: string;
+  }>;
+  batch_group_id: string;
+}>> {
+  return fetchAPI('/containers/batch/restart', {
+    method: 'POST',
+    body: JSON.stringify({ containers, timeout }),
   });
 }
 

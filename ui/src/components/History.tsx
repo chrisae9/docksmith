@@ -18,11 +18,15 @@ interface RollbackConfirmation {
   oldVersion?: string;
   newVersion?: string;
   force?: boolean;
+  operationType?: string; // 'label_change' for label rollbacks
+  batchGroupId?: string;
 }
 
 interface BatchRollbackConfirmation {
   // Map of operationId -> container names for that operation
   selections: Map<string, { name: string; oldVersion: string; newVersion: string }[]>;
+  isLabelChange?: boolean;
+  batchGroupId?: string;
 }
 
 // A display item: either a single operation or a batch group
@@ -41,8 +45,29 @@ interface DisplayItem {
   containerCount?: number;
 }
 
-// Operation types that support rollback (not restart, rollback, or label_change)
-const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack'];
+// Operation types that support rollback
+const ROLLBACK_SUPPORTED_TYPES = ['single', 'batch', 'stack', 'label_change'];
+
+// Rollback strategy per container
+type RollbackStrategy = 'tag' | 'resolved' | 'digest' | 'none';
+
+function getRollbackStrategy(detail: BatchContainerDetail): RollbackStrategy {
+  if (detail.old_version !== detail.new_version) return 'tag';
+  if (detail.old_resolved_version && detail.old_resolved_version !== detail.new_resolved_version) return 'resolved';
+  if (detail.old_digest) return 'digest';
+  return 'none';
+}
+
+function getRollbackStrategyNote(strategy: RollbackStrategy, detail: BatchContainerDetail): string | null {
+  switch (strategy) {
+    case 'resolved': return `Will pin to ${detail.old_resolved_version}`;
+    case 'digest': return 'Will restore exact image by digest';
+    case 'none': return detail.old_version === detail.new_version
+      ? 'Same tag — no digest saved, cannot rollback'
+      : 'Cannot rollback';
+    default: return null;
+  }
+}
 
 // Filter options for operation types
 // Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
@@ -182,24 +207,39 @@ export function History({ onBack: _onBack }: HistoryProps) {
       containerName: op.container_name,
       oldVersion: op.old_version,
       newVersion: op.new_version,
+      operationType: op.operation_type,
+      batchGroupId: op.batch_group_id,
     });
   };
 
   const executeRollback = (force = false) => {
     if (!rollbackConfirm) return;
 
-    // Navigate to operation progress page with rollback info
-    navigate('/operation', {
-      state: {
-        rollback: {
-          operationId: rollbackConfirm.operationId,
-          containerName: rollbackConfirm.containerName,
-          oldVersion: rollbackConfirm.oldVersion,
-          newVersion: rollbackConfirm.newVersion,
-          force,
+    if (rollbackConfirm.operationType === 'label_change') {
+      // Label rollback — navigate with labelRollback state
+      navigate('/operation', {
+        state: {
+          labelRollback: {
+            batchGroupId: rollbackConfirm.batchGroupId || rollbackConfirm.operationId,
+            containers: [rollbackConfirm.containerName],
+            containerNames: [rollbackConfirm.containerName],
+          }
         }
-      }
-    });
+      });
+    } else {
+      // Update rollback — navigate with rollback state
+      navigate('/operation', {
+        state: {
+          rollback: {
+            operationId: rollbackConfirm.operationId,
+            containerName: rollbackConfirm.containerName,
+            oldVersion: rollbackConfirm.oldVersion,
+            newVersion: rollbackConfirm.newVersion,
+            force,
+          }
+        }
+      });
+    }
     setRollbackConfirm(null);
   };
 
@@ -240,11 +280,37 @@ export function History({ onBack: _onBack }: HistoryProps) {
     }
 
     if (selections.size === 0) return;
-    setBatchRollbackConfirm({ selections });
+    const isLabelChange = item.operations?.every(op => op.operation_type === 'label_change') || false;
+    setBatchRollbackConfirm({ selections, isLabelChange, batchGroupId: item.groupId });
   };
 
   const executeBatchRollback = async (force = false) => {
     if (!batchRollbackConfirm) return;
+
+    // Check if these are label operations (all operations are label_change)
+    const isLabelRollback = batchRollbackConfirm.isLabelChange;
+
+    if (isLabelRollback && batchRollbackConfirm.batchGroupId) {
+      // Label rollback — navigate to operation page with labelRollback state
+      const allNames: string[] = [];
+      for (const [, containers] of batchRollbackConfirm.selections) {
+        allNames.push(...containers.map(c => c.name));
+      }
+
+      setBatchRollbackConfirm(null);
+      setSelectedForRollback(new Set());
+
+      navigate('/operation', {
+        state: {
+          labelRollback: {
+            batchGroupId: batchRollbackConfirm.batchGroupId,
+            containers: allNames,
+            containerNames: allNames,
+          }
+        }
+      });
+      return;
+    }
 
     const errors: string[] = [];
     const rollbackOpIds: string[] = [];
@@ -546,27 +612,41 @@ export function History({ onBack: _onBack }: HistoryProps) {
               <div className="batch-details-list">
                 {op.batch_details.map((detail, idx) => {
                   const hasRollback = op.batch_details!.length > 1 && canRollback(op);
+                  const strategy = getRollbackStrategy(detail);
+                  const strategyNote = getRollbackStrategyNote(strategy, detail);
+                  const isNonRollbackable = strategy === 'none';
                   return (
                     <div
                       key={idx}
-                      className={`batch-detail-item ${hasRollback ? 'selectable' : ''}`}
-                      onClick={hasRollback ? () => toggleContainerRollback(detail.container_name) : undefined}
+                      className={`batch-detail-item ${hasRollback && !isNonRollbackable ? 'selectable' : ''} ${isNonRollbackable ? 'non-rollbackable' : ''}`}
+                      onClick={hasRollback && !isNonRollbackable ? () => toggleContainerRollback(detail.container_name) : undefined}
                     >
                       {hasRollback && (
                         <input
                           type="checkbox"
                           className="batch-rollback-checkbox"
                           checked={selectedForRollback.has(detail.container_name)}
+                          disabled={isNonRollbackable}
                           readOnly
                         />
                       )}
-                      <span className="batch-container-name">
-                        {detail.container_name}
-                      </span>
-                      <span className="batch-version-change">
-                        {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
-                      </span>
-                      {renderChangeTypeBadge(detail)}
+                      <div className="batch-detail-content">
+                        <div className="batch-detail-row">
+                          <span className="batch-container-name">
+                            {detail.container_name}
+                          </span>
+                          <span className="batch-version-change">
+                            {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
+                          </span>
+                          {renderChangeTypeBadge(detail)}
+                        </div>
+                        {strategyNote && (
+                          <div className={`rollback-strategy-note ${strategy}`}>
+                            <i className={`fa-solid ${isNonRollbackable ? 'fa-triangle-exclamation' : 'fa-circle-info'}`}></i>
+                            {strategyNote}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -648,7 +728,10 @@ export function History({ onBack: _onBack }: HistoryProps) {
               {getStatusIcon(item.aggregateStatus || 'complete', anyRolledBack)}
             </span>
             <span className="op-container">
-              Batch Update <span className="op-type-badge batch">BATCH</span>
+              {item.operations?.[0]?.operation_type === 'label_change'
+                ? <>Label Change <span className="op-type-badge label">LABELS</span></>
+                : <>Batch Update <span className="op-type-badge batch">BATCH</span></>
+              }
             </span>
             <span className="op-container-count">{item.containerCount} containers</span>
             {anyRolledBack && (
@@ -701,29 +784,43 @@ export function History({ onBack: _onBack }: HistoryProps) {
                     op.container_name === detail.container_name
                   );
                   const opCanRollback = ownerOp ? canRollback(ownerOp) : false;
+                  const strategy = getRollbackStrategy(detail);
+                  const strategyNote = getRollbackStrategyNote(strategy, detail);
+                  const isNonRollbackable = strategy === 'none';
+                  const isSelectable = canGroupRollback(item) && opCanRollback && !isNonRollbackable;
 
                   return (
                     <div
                       key={idx}
-                      className={`batch-detail-item ${canGroupRollback(item) && opCanRollback ? 'selectable' : ''}`}
-                      onClick={canGroupRollback(item) && opCanRollback ? () => toggleContainerRollback(detail.container_name) : undefined}
+                      className={`batch-detail-item ${isSelectable ? 'selectable' : ''} ${isNonRollbackable ? 'non-rollbackable' : ''}`}
+                      onClick={isSelectable ? () => toggleContainerRollback(detail.container_name) : undefined}
                     >
                       {canGroupRollback(item) && (
                         <input
                           type="checkbox"
                           className="batch-rollback-checkbox"
                           checked={selectedForRollback.has(detail.container_name)}
-                          disabled={!opCanRollback}
+                          disabled={!opCanRollback || isNonRollbackable}
                           readOnly
                         />
                       )}
-                      <span className="batch-container-name">
-                        {detail.container_name}
-                      </span>
-                      <span className="batch-version-change">
-                        {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
-                      </span>
-                      {renderChangeTypeBadge(detail)}
+                      <div className="batch-detail-content">
+                        <div className="batch-detail-row">
+                          <span className="batch-container-name">
+                            {detail.container_name}
+                          </span>
+                          <span className="batch-version-change">
+                            {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
+                          </span>
+                          {renderChangeTypeBadge(detail)}
+                        </div>
+                        {strategyNote && (
+                          <div className={`rollback-strategy-note ${strategy}`}>
+                            <i className={`fa-solid ${isNonRollbackable ? 'fa-triangle-exclamation' : 'fa-circle-info'}`}></i>
+                            {strategyNote}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -748,6 +845,48 @@ export function History({ onBack: _onBack }: HistoryProps) {
                   }}
                 >
                   <i className="fa-solid fa-rotate-left"></i> Rollback Selected ({selectedForRollback.size})
+                </button>
+              )}
+              {!hasSelections && canGroupRollback(item) && (
+                <button
+                  className="rollback-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Select all rollbackable containers (exclude 'none' strategy)
+                    const allNames = new Set<string>();
+                    for (const detail of item.allContainers || []) {
+                      if (getRollbackStrategy(detail) === 'none') continue;
+                      const ownerOp = item.operations?.find(op =>
+                        op.batch_details?.some(d => d.container_name === detail.container_name) ||
+                        op.container_name === detail.container_name
+                      );
+                      if (ownerOp && canRollback(ownerOp)) {
+                        allNames.add(detail.container_name);
+                      }
+                    }
+                    setSelectedForRollback(allNames);
+                    // Build confirmation directly
+                    const selections = new Map<string, { name: string; oldVersion: string; newVersion: string }[]>();
+                    for (const containerName of allNames) {
+                      for (const op of item.operations || []) {
+                        const detail = op.batch_details?.find(d => d.container_name === containerName);
+                        if (detail) {
+                          if (!selections.has(op.operation_id)) selections.set(op.operation_id, []);
+                          selections.get(op.operation_id)!.push({ name: detail.container_name, oldVersion: detail.old_version, newVersion: detail.new_version });
+                          break;
+                        }
+                        if (op.container_name === containerName) {
+                          if (!selections.has(op.operation_id)) selections.set(op.operation_id, []);
+                          selections.get(op.operation_id)!.push({ name: op.container_name, oldVersion: op.old_version || '', newVersion: op.new_version || '' });
+                          break;
+                        }
+                      }
+                    }
+                    const isLabelChange = item.operations?.every(op => op.operation_type === 'label_change') || false;
+                    setBatchRollbackConfirm({ selections, isLabelChange, batchGroupId: item.groupId });
+                  }}
+                >
+                  <i className="fa-solid fa-rotate-left"></i> Rollback All
                 </button>
               )}
               <span className="op-id">Group: {item.groupId?.slice(0, 12)}</span>
@@ -881,15 +1020,24 @@ export function History({ onBack: _onBack }: HistoryProps) {
               <h3 id="rollback-dialog-title">Confirm Rollback</h3>
             </div>
             <div className="confirm-dialog-body">
-              <p>Roll back <strong>{rollbackConfirm.containerName}</strong> to its previous version?</p>
-              {rollbackConfirm.newVersion && rollbackConfirm.oldVersion && (
-                <div className="confirm-version-change">
-                  <span className="version-current">{rollbackConfirm.newVersion}</span>
-                  <span className="version-arrow">→</span>
-                  <span className="version-target">{rollbackConfirm.oldVersion}</span>
-                </div>
+              {rollbackConfirm.operationType === 'label_change' ? (
+                <>
+                  <p>Restore previous labels for <strong>{rollbackConfirm.containerName}</strong>?</p>
+                  <p className="confirm-warning">This will reverse the label changes and restart the container.</p>
+                </>
+              ) : (
+                <>
+                  <p>Roll back <strong>{rollbackConfirm.containerName}</strong> to its previous version?</p>
+                  {rollbackConfirm.newVersion && rollbackConfirm.oldVersion && (
+                    <div className="confirm-version-change">
+                      <span className="version-current">{rollbackConfirm.newVersion}</span>
+                      <span className="version-arrow">→</span>
+                      <span className="version-target">{rollbackConfirm.oldVersion}</span>
+                    </div>
+                  )}
+                  <p className="confirm-warning">This will recreate the container with the previous image.</p>
+                </>
               )}
-              <p className="confirm-warning">This will recreate the container with the previous image.</p>
             </div>
             <div className="confirm-dialog-actions">
               <button className="confirm-cancel" onClick={cancelRollback}>Cancel</button>

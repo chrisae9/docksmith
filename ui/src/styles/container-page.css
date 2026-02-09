@@ -352,6 +352,10 @@
   background: var(--color-accent);
   color: white;
 }
+.container-page .update-btn.force {
+  background: var(--color-warning);
+  color: white;
+}
 
 .container-page .update-btn:hover {
   filter: brightness(1.1);

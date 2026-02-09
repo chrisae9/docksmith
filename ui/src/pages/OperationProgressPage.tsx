@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup } from '../api/client';
+import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup, batchSetLabels, batchStopContainers, batchRestartContainers, rollbackLabels } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -10,7 +10,7 @@ import '../styles/progress-common.css';
 import './OperationProgressPage.css';
 
 // Operation types
-type OperationType = 'restart' | 'update' | 'rollback' | 'start' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed';
+type OperationType = 'restart' | 'update' | 'rollback' | 'start' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed' | 'batchLabel' | 'batchStop' | 'batchRestart' | 'labelRollback';
 
 // Restart operation info (includes save settings)
 interface RestartOperation {
@@ -112,7 +112,41 @@ interface MixedOperation {
   mismatches: string[];
 }
 
-type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StartOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation;
+// Batch label operation info (apply label changes to multiple containers)
+interface BatchLabelOperation {
+  type: 'batchLabel';
+  containers: string[];
+  labelOp: {
+    ignore?: boolean;
+    allow_latest?: boolean;
+    version_pin_major?: boolean;
+    version_pin_minor?: boolean;
+    tag_regex?: string;
+    script?: string;
+  };
+}
+
+// Batch stop operation info (stop multiple containers via batch endpoint)
+interface BatchStopOperation {
+  type: 'batchStop';
+  containers: string[];
+}
+
+// Batch restart operation info (restart multiple containers via batch endpoint)
+interface BatchRestartOperation {
+  type: 'batchRestart';
+  containers: string[];
+}
+
+// Label rollback operation info (reverse label changes from a previous batch)
+interface LabelRollbackOperation {
+  type: 'labelRollback';
+  batchGroupId: string;
+  containers: string[];
+  containerNames?: string[]; // Optional: rollback specific containers only
+}
+
+type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StartOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation | BatchLabelOperation | BatchStopOperation | BatchRestartOperation | LabelRollbackOperation;
 
 export function OperationProgressPage() {
   const navigate = useNavigate();
@@ -159,6 +193,18 @@ export function OperationProgressPage() {
     }
     if (state.mixed) {
       return { type: 'mixed', ...state.mixed };
+    }
+    if (state.batchLabel) {
+      return { type: 'batchLabel', ...state.batchLabel };
+    }
+    if (state.batchStop) {
+      return { type: 'batchStop', ...state.batchStop };
+    }
+    if (state.batchRestart) {
+      return { type: 'batchRestart', ...state.batchRestart };
+    }
+    if (state.labelRollback) {
+      return { type: 'labelRollback', ...state.labelRollback };
     }
     return null;
   };
@@ -894,6 +940,18 @@ export function OperationProgressPage() {
       case 'mixed':
         runMixed(operationInfo as MixedOperation);
         break;
+      case 'batchLabel':
+        runBatchLabel(operationInfo as BatchLabelOperation);
+        break;
+      case 'batchStop':
+        runBatchStop(operationInfo as BatchStopOperation);
+        break;
+      case 'batchRestart':
+        runBatchRestart(operationInfo as BatchRestartOperation);
+        break;
+      case 'labelRollback':
+        runLabelRollback(operationInfo as LabelRollbackOperation);
+        break;
     }
 
     return () => {
@@ -1597,6 +1655,288 @@ export function OperationProgressPage() {
     }
   };
 
+  // Describe label changes for display
+  const describeLabelOp = (labelOp: BatchLabelOperation['labelOp']): string => {
+    if (labelOp.ignore === true) return 'Ignore';
+    if (labelOp.ignore === false) return 'Unignore';
+    if (labelOp.allow_latest === true) return 'Allow :latest';
+    if (labelOp.allow_latest === false) return 'Disallow :latest';
+    if (labelOp.version_pin_major) return 'Pin Major';
+    if (labelOp.version_pin_minor) return 'Pin Minor';
+    if (labelOp.version_pin_major === false && labelOp.version_pin_minor === false) return 'Unpin';
+    if (labelOp.tag_regex === '') return 'Clear Tag Filter';
+    if (labelOp.tag_regex) return `Set Tag Filter: ${labelOp.tag_regex}`;
+    if (labelOp.script === '') return 'Clear Script';
+    if (labelOp.script) return `Set Script: ${labelOp.script}`;
+    return 'Apply Labels';
+  };
+
+  // Run batch label operation (apply label changes to multiple containers)
+  const runBatchLabel = async (info: BatchLabelOperation) => {
+    const { containers: containerNames, labelOp } = info;
+    const opDescription = describeLabelOp(labelOp);
+
+    // Initialize container list
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Applying label changes...',
+    })));
+
+    addLog(`Applying "${opDescription}" to ${containerNames.length} container(s)`, 'info', 'fa-tags');
+
+    try {
+      const operations = containerNames.map(name => ({ container: name, ...labelOp }));
+      const response = await batchSetLabels(operations);
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Batch label operation failed' });
+        addLog(`Batch label operation failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      // Save batch group ID to URL for recovery
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      // Process per-container results
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: opDescription, percent: 100 });
+          if (result.operation_id) {
+            containerToOpIdRef.current.set(result.container, result.operation_id);
+          }
+          addLog(`${result.container}: ${opDescription} applied`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      // Final summary
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`Labels applied to ${successCount} container(s) successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
+  // Run batch stop operation (stop multiple containers via batch endpoint)
+  const runBatchStop = async (info: BatchStopOperation) => {
+    const { containers: containerNames } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Stopping...',
+    })));
+
+    addLog(`Stopping ${containerNames.length} container(s)`, 'info', 'fa-stop');
+
+    try {
+      const response = await batchStopContainers(containerNames);
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Batch stop failed' });
+        addLog(`Batch stop failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: 'Stopped successfully', percent: 100 });
+          if (result.operation_id) containerToOpIdRef.current.set(result.container, result.operation_id);
+          addLog(`${result.container}: Stopped successfully`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed to stop`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Stop completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`${successCount} container(s) stopped successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
+  // Run batch restart operation (restart multiple containers via batch endpoint)
+  const runBatchRestart = async (info: BatchRestartOperation) => {
+    const { containers: containerNames } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Restarting...',
+    })));
+
+    addLog(`Restarting ${containerNames.length} container(s)`, 'info', 'fa-rotate');
+
+    try {
+      const response = await batchRestartContainers(containerNames);
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Batch restart failed' });
+        addLog(`Batch restart failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: 'Restarted successfully', percent: 100 });
+          if (result.operation_id) containerToOpIdRef.current.set(result.container, result.operation_id);
+          addLog(`${result.container}: Restarted successfully`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed to restart`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Restart completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`${successCount} container(s) restarted successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
+  // Run label rollback operation (reverse label changes from a previous batch)
+  const runLabelRollback = async (info: LabelRollbackOperation) => {
+    const { batchGroupId, containers: containerNames, containerNames: specificContainers } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Rolling back label changes...',
+    })));
+
+    const targetDesc = specificContainers?.length
+      ? `${specificContainers.length} container(s)`
+      : `${containerNames.length} container(s)`;
+    addLog(`Rolling back label changes for ${targetDesc}`, 'info', 'fa-rotate-left');
+
+    try {
+      const response = await rollbackLabels({
+        batch_group_id: batchGroupId,
+        container_names: specificContainers,
+      });
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Label rollback failed' });
+        addLog(`Label rollback failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      const rollbackGroupId = response.data?.batch_group_id;
+      if (rollbackGroupId) {
+        setSearchParams({ group: rollbackGroupId }, { replace: true });
+      }
+
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: 'Labels restored', percent: 100 });
+          if (result.operation_id) containerToOpIdRef.current.set(result.container, result.operation_id);
+          addLog(`${result.container}: Labels restored`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed to rollback`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Rollback completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`Labels restored for ${successCount} container(s) successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
   // Run fix mismatch operation
   const runFixMismatch = async (info: FixMismatchOperation) => {
     const { containerName } = info;
@@ -2039,6 +2379,7 @@ export function OperationProgressPage() {
         case 'start': return 'Starting Container';
         case 'stop': return 'Stopping Container';
         case 'remove': return 'Removing Container';
+        case 'label_change': return 'Applying Labels';
         default: return 'Operation Progress';
       }
     }
@@ -2054,6 +2395,10 @@ export function OperationProgressPage() {
       case 'fixMismatch': return 'Fixing Compose Mismatch';
       case 'batchFixMismatch': return 'Fixing Compose Mismatches';
       case 'mixed': return 'Processing Containers';
+      case 'batchLabel': return 'Applying Labels';
+      case 'batchStop': return 'Stopping Containers';
+      case 'batchRestart': return 'Restarting Containers';
+      case 'labelRollback': return 'Rolling Back Labels';
       default: return 'Progress';
     }
   };
@@ -2095,6 +2440,10 @@ export function OperationProgressPage() {
         case 'fixMismatch': return 'Compose mismatch fixed successfully!';
         case 'batchFixMismatch': return 'All compose mismatches fixed successfully!';
         case 'mixed': return 'All operations completed successfully!';
+        case 'batchLabel': return 'Labels applied successfully!';
+        case 'batchStop': return 'All containers stopped successfully!';
+        case 'batchRestart': return 'All containers restarted successfully!';
+        case 'labelRollback': return 'Labels restored successfully!';
         default: return 'Completed successfully!';
       }
     }
@@ -2125,6 +2474,10 @@ export function OperationProgressPage() {
       case 'fixMismatch': return `Fixing ${(operationInfo as FixMismatchOperation).containerName}...`;
       case 'batchFixMismatch': return `Fixing ${(operationInfo as BatchFixMismatchOperation).containerNames.length} compose mismatch(es)...`;
       case 'mixed': return `Processing ${(operationInfo as MixedOperation).updates.length + (operationInfo as MixedOperation).mismatches.length} container(s)...`;
+      case 'batchLabel': return `Applying labels to ${(operationInfo as BatchLabelOperation).containers.length} container(s)...`;
+      case 'batchStop': return `Stopping ${(operationInfo as BatchStopOperation).containers.length} container(s)...`;
+      case 'batchRestart': return `Restarting ${(operationInfo as BatchRestartOperation).containers.length} container(s)...`;
+      case 'labelRollback': return `Rolling back labels for ${(operationInfo as LabelRollbackOperation).containers.length} container(s)...`;
       default: return 'Processing...';
     }
   };
@@ -2179,7 +2532,7 @@ export function OperationProgressPage() {
           <div className="current-progress-section">
             <div className="progress-bar-container">
               <div
-                className={`progress-bar-fill ${operationType === 'rollback' ? 'warning' : 'accent'}`}
+                className={`progress-bar-fill ${operationType === 'rollback' || operationType === 'labelRollback' ? 'warning' : 'accent'}`}
                 style={{ width: `${currentPercent}%` }}
               />
               <span className="progress-bar-text">{currentPercent}%</span>
@@ -2274,6 +2627,36 @@ export function OperationProgressPage() {
             >
               <i className="fa-solid fa-triangle-exclamation"></i>
               {getForceButtonLabel()}
+            </button>
+          </div>
+        ) : isComplete && operationType === 'batchLabel' && successCount > 0 ? (
+          <div className="footer-buttons">
+            <button
+              className="button button-secondary"
+              onClick={() => {
+                const groupId = searchParams.get('group');
+                if (!groupId) return;
+                const successfulContainers = containers.filter(c => c.status === 'success').map(c => c.name);
+                navigate('/operation', {
+                  state: {
+                    labelRollback: {
+                      batchGroupId: groupId,
+                      containers: successfulContainers,
+                    }
+                  },
+                  replace: true,
+                });
+                window.location.reload();
+              }}
+            >
+              <i className="fa-solid fa-rotate-left"></i>
+              Rollback
+            </button>
+            <button
+              className="button button-primary"
+              onClick={() => navigate(-1)}
+            >
+              Done
             </button>
           </div>
         ) : (
