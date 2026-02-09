@@ -507,6 +507,31 @@ export class APIHelper {
   }
 
   /**
+   * Batch set labels on multiple containers
+   */
+  async batchSetLabels(operations: Array<{
+    container: string;
+    ignore?: boolean;
+    allow_latest?: boolean;
+    version_pin_major?: boolean;
+    version_pin_minor?: boolean;
+    tag_regex?: string;
+    script?: string;
+    no_restart?: boolean;
+    force?: boolean;
+  }>): Promise<{
+    success: boolean;
+    data?: { results: Array<{ container: string; success: boolean; error?: string; operation_id?: string }> };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.post(`${this.baseUrl}/api/labels/batch`, {
+        data: { operations },
+      })
+    );
+  }
+
+  /**
    * Remove labels from a container
    */
   async removeLabels(containerName: string, labelNames: string[], options?: { force?: boolean; no_restart?: boolean }): Promise<{

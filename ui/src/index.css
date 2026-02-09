@@ -15,8 +15,14 @@
 /* Shared component styles */
 @import './styles/components.css';
 
-/* Dashboard styles */
+/* Shared UI primitives (tab bar, icon buttons, selection bar, filter toolbar, etc.) */
 @import './styles/dashboard.css';
+
+/* Containers page styles (unified) */
+@import './styles/containers.css';
+
+/* Explorer sub-component styles (images, networks, volumes) */
+@import './styles/explorer.css';
 
 /* History page styles */
 @import './styles/history.css';
@@ -30,9 +36,6 @@
 /* Progress/update styles */
 @import './styles/progress-update.css';
 @import './styles/progress-common.css';
-
-/* Explorer page styles */
-@import './styles/explorer.css';
 
 /* Container detail page styles */
 @import './styles/container-page.css';

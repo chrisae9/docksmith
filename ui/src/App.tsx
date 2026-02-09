@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
-import { Dashboard } from './components/Dashboard'
-import { Explorer } from './components/Explorer'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { Containers } from './components/Containers'
 import { History } from './components/History'
 import { Settings } from './components/Settings'
 import { TagFilterPage } from './pages/TagFilterPage'
@@ -20,9 +19,10 @@ function AppContent() {
   const location = useLocation();
 
   const [activeTab, setActiveTab] = useState<TabId>(() => {
-    // Restore last active tab from localStorage
     const saved = localStorage.getItem(STORAGE_KEY_TAB);
-    return (saved as TabId) || 'updates';
+    // Migrate old tab IDs
+    if (saved === 'updates' || saved === 'explorer') return 'containers';
+    return (saved as TabId) || 'containers';
   });
   const [updateCount, setUpdateCount] = useState(0);
   const { lastEvent, containerUpdated } = useEventStream(true);
@@ -36,10 +36,8 @@ function AppContent() {
   // Sync activeTab state with URL for tab highlighting
   useEffect(() => {
     const path = location.pathname;
-    if (path === '/' || path === '/updates') {
-      setActiveTab('updates');
-    } else if (path === '/explorer') {
-      setActiveTab('explorer');
+    if (path === '/' || path === '/containers') {
+      setActiveTab('containers');
     } else if (path === '/history') {
       setActiveTab('history');
     } else if (path === '/settings') {
@@ -69,7 +67,6 @@ function AppContent() {
   // Fetch update count for badge
   useEffect(() => {
     fetchUpdateCount();
-    // Refresh count every 5 minutes
     const interval = setInterval(fetchUpdateCount, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchUpdateCount]);
@@ -77,43 +74,28 @@ function AppContent() {
   // Refresh badge count when update completes
   useEffect(() => {
     if (lastEvent && (lastEvent.stage === 'complete' || lastEvent.stage === 'failed')) {
-      // Delay slightly to let API update
       setTimeout(fetchUpdateCount, 1000);
     }
   }, [lastEvent, fetchUpdateCount]);
 
-  // Refresh badge count when container status changes (from background check, rollback, etc.)
+  // Refresh badge count when container status changes
   useEffect(() => {
     if (containerUpdated) {
-      // Delay slightly to ensure cache is updated
       setTimeout(fetchUpdateCount, 500);
     }
   }, [containerUpdated, fetchUpdateCount]);
-
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case 'updates':
-        return <Dashboard onNavigateToHistory={() => setActiveTab('history')} />;
-      case 'explorer':
-        return <Explorer />;
-      case 'history':
-        return <History onBack={() => setActiveTab('updates')} />;
-      case 'settings':
-        return <Settings onBack={() => setActiveTab('updates')} />;
-      default:
-        return null;
-    }
-  };
 
   return (
     <div className="app">
       <div className="tab-content">
         <Routes>
-          <Route path="/" element={renderTabContent()} />
-          <Route path="/updates" element={<Dashboard onNavigateToHistory={() => setActiveTab('history')} />} />
-          <Route path="/explorer" element={<Explorer />} />
-          <Route path="/history" element={<History onBack={() => setActiveTab('updates')} />} />
-          <Route path="/settings" element={<Settings onBack={() => setActiveTab('updates')} />} />
+          <Route path="/" element={<Containers />} />
+          <Route path="/containers" element={<Containers />} />
+          {/* Redirects from old routes */}
+          <Route path="/updates" element={<Navigate to="/" replace />} />
+          <Route path="/explorer" element={<Navigate to="/" replace />} />
+          <Route path="/history" element={<History onBack={() => setActiveTab('containers')} />} />
+          <Route path="/settings" element={<Settings onBack={() => setActiveTab('containers')} />} />
           <Route path="/container/:containerName" element={<ContainerPage />} />
           <Route path="/container/:containerName/tag-filter" element={<TagFilterPage />} />
           <Route path="/container/:containerName/script-selection" element={<ScriptSelectionPage />} />

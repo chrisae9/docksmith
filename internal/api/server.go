@@ -231,6 +231,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("GET /api/labels/{container}", s.handleLabelsGet)
 	mux.HandleFunc("POST /api/labels/set", s.handleLabelsSet)
 	mux.HandleFunc("POST /api/labels/remove", s.handleLabelsRemove)
+	mux.HandleFunc("POST /api/labels/batch", s.handleBatchLabels)
 
 	// Registry tags (for regex testing UI)
 	mux.HandleFunc("GET /api/registry/tags/{imageRef...}", s.handleRegistryTags)

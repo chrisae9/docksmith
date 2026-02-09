@@ -605,3 +605,73 @@ func applyStringLabel(service *compose.Service, labelKey string, value *string) 
 	}
 	return *value, nil
 }
+
+// BatchLabelsRequest represents a batch label operation
+type BatchLabelsRequest struct {
+	Operations []SetLabelsRequest `json:"operations"`
+}
+
+// BatchLabelResult represents a per-container result
+type BatchLabelResult struct {
+	Container   string `json:"container"`
+	Success     bool   `json:"success"`
+	Error       string `json:"error,omitempty"`
+	OperationID string `json:"operation_id,omitempty"`
+}
+
+// handleBatchLabels applies label changes to multiple containers
+// POST /api/labels/batch
+func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
+	var req BatchLabelsRequest
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	if len(req.Operations) == 0 {
+		RespondBadRequest(w, fmt.Errorf("no operations specified"))
+		return
+	}
+
+	results := make([]BatchLabelResult, 0, len(req.Operations))
+
+	for _, op := range req.Operations {
+		if op.Container == "" {
+			results = append(results, BatchLabelResult{
+				Container: op.Container,
+				Success:   false,
+				Error:     "container name required",
+			})
+			continue
+		}
+
+		// Reuse the existing setLabels logic
+		opCopy := op
+		ctx, cancel := context.WithTimeout(r.Context(), LabelOperationTimeout)
+		result, err := s.setLabels(ctx, &opCopy)
+		cancel()
+
+		if err != nil {
+			results = append(results, BatchLabelResult{
+				Container: op.Container,
+				Success:   false,
+				Error:     err.Error(),
+			})
+			continue
+		}
+
+		results = append(results, BatchLabelResult{
+			Container:   op.Container,
+			Success:     result.Success,
+			OperationID: result.OperationID,
+		})
+	}
+
+	// Trigger background check once after all label changes
+	if s.backgroundChecker != nil {
+		s.backgroundChecker.TriggerCheck()
+	}
+
+	RespondSuccess(w, map[string]any{
+		"results": results,
+	})
+}

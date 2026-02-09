@@ -2014,7 +2014,7 @@ export function OperationProgressPage() {
             <i className="fa-solid fa-exclamation-circle"></i>
             <p>No operation information provided</p>
             <button className="button button-primary" onClick={() => navigate('/')}>
-              Return to Dashboard
+              Return to Containers
             </button>
           </div>
         </main>

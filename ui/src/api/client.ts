@@ -513,6 +513,23 @@ export async function systemPrune(
   return fetchAPI(`/prune/system${query ? `?${query}` : ''}`, { method: 'POST' });
 }
 
+// Batch label operations - apply labels to multiple containers
+export async function batchSetLabels(
+  operations: Array<Omit<SetLabelsRequest, 'no_restart' | 'force'>>
+): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    error?: string;
+    operation_id?: string;
+  }>;
+}>> {
+  return fetchAPI('/labels/batch', {
+    method: 'POST',
+    body: JSON.stringify({ operations }),
+  });
+}
+
 // Fix compose mismatch - sync container to compose file specification
 export async function fixComposeMismatch(containerName: string): Promise<APIResponse<{
   operation_id: string;

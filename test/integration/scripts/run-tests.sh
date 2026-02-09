@@ -17,6 +17,7 @@ show_help() {
     echo "  api          Run basic API tests only"
     echo "  advanced     Run advanced API tests (scripts, policies, SSE, etc.)"
     echo "  labels       Run label tests only"
+    echo "  batchlabels  Run batch labels API tests only"
     echo "  constraints  Run constraint tests only"
     echo "  selfupdate   Run self-update resume tests only"
     echo "  all          Run all tests (default)"
@@ -34,6 +35,7 @@ show_help() {
 RUN_API=false
 RUN_ADVANCED=false
 RUN_LABELS=false
+RUN_BATCH_LABELS=false
 RUN_CONSTRAINTS=false
 RUN_SELFUPDATE=false
 
@@ -42,6 +44,7 @@ if [ $# -eq 0 ]; then
     RUN_API=true
     RUN_ADVANCED=true
     RUN_LABELS=true
+    RUN_BATCH_LABELS=true
     RUN_CONSTRAINTS=true
     RUN_SELFUPDATE=true
 else
@@ -56,6 +59,9 @@ else
             labels)
                 RUN_LABELS=true
                 ;;
+            batchlabels)
+                RUN_BATCH_LABELS=true
+                ;;
             constraints)
                 RUN_CONSTRAINTS=true
                 ;;
@@ -66,6 +72,7 @@ else
                 RUN_API=true
                 RUN_ADVANCED=true
                 RUN_LABELS=true
+                RUN_BATCH_LABELS=true
                 RUN_CONSTRAINTS=true
                 RUN_SELFUPDATE=true
                 ;;
@@ -123,6 +130,17 @@ main() {
         total_suites=$((total_suites + 1))
         echo ""
         if "$SCRIPT_DIR/test-labels.sh"; then
+            passed_suites=$((passed_suites + 1))
+        else
+            failed_suites=$((failed_suites + 1))
+        fi
+    fi
+
+    # Run batch labels tests
+    if [ "$RUN_BATCH_LABELS" = true ]; then
+        total_suites=$((total_suites + 1))
+        echo ""
+        if "$SCRIPT_DIR/test-batch-labels.sh"; then
             passed_suites=$((passed_suites + 1))
         else
             failed_suites=$((failed_suites + 1))

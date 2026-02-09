@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 
-export type TabId = 'updates' | 'explorer' | 'history' | 'settings';
+export type TabId = 'containers' | 'history' | 'settings';
 
 interface Tab {
   id: TabId;
@@ -23,19 +23,12 @@ export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCo
 
   const tabs: Tab[] = [
     {
-      id: 'updates',
-      label: 'Updates',
-      icon: 'fa-solid fa-arrow-down',
-      activeIcon: 'fa-solid fa-arrow-down',
+      id: 'containers',
+      label: 'Containers',
+      icon: 'fa-solid fa-cubes',
+      activeIcon: 'fa-solid fa-cubes',
       badge: updateCount > 0 ? updateCount : undefined,
       path: '/',
-    },
-    {
-      id: 'explorer',
-      label: 'Explorer',
-      icon: 'fa-solid fa-layer-group',
-      activeIcon: 'fa-solid fa-layer-group',
-      path: '/explorer',
     },
     {
       id: 'history',

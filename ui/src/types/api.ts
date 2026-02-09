@@ -413,6 +413,45 @@ export interface ContainerOperationResponse {
   volumes?: boolean;
 }
 
+// Unified container item — merges ContainerExplorerItem (live Docker state)
+// with ContainerInfo (update checker cache) for the unified Containers tab
+export interface UnifiedContainerItem {
+  // From ContainerExplorerItem (live Docker state)
+  id: string;
+  name: string;
+  image: string;
+  state: string;          // running, paused, exited, dead, created
+  health_status: string;
+  stack?: string;
+  created: number;
+  networks: string[];
+
+  // From ContainerInfo (update checker cache) — all optional
+  container_name?: string;
+  current_tag?: string;
+  current_version?: string;
+  latest_version?: string;
+  latest_resolved_version?: string;
+  change_type?: number;
+  update_status?: string;
+  recommended_tag?: string;
+  using_latest_tag?: boolean;
+  env_controlled?: boolean;
+  env_var_name?: string;
+  compose_image?: string;
+  pre_update_check_pass?: boolean;
+  pre_update_check_fail?: string;
+  is_local?: boolean;
+  error?: string;
+  labels?: Record<string, string>;
+  compose_labels?: Record<string, string>;
+  labels_out_of_sync?: boolean;
+  dependencies?: string[];
+  service?: string;
+
+  has_update_data: boolean;  // true if matched in /api/status
+}
+
 // API Response types
 export type CheckResponse = APIResponse<DiscoveryResult>;
 export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number }>;
