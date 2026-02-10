@@ -21,13 +21,13 @@ func (s *SQLiteStorage) QueueUpdate(ctx context.Context, queue UpdateQueue) erro
 
 		query := `
 			INSERT INTO update_queue
-			(operation_id, stack_name, containers, priority, queued_at, estimated_start_time)
-			VALUES (?, ?, ?, ?, ?, ?)
+			(operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 		`
 
 		_, err = s.db.ExecContext(ctx, query,
 			queue.OperationID, queue.StackName, string(containersJSON),
-			queue.Priority, queue.QueuedAt, queue.EstimatedStartTime)
+			queue.OperationType, queue.Priority, queue.QueuedAt, queue.EstimatedStartTime)
 		if err != nil {
 			log.Printf("Failed to queue update for operation %s: %v", queue.OperationID, err)
 			return fmt.Errorf("failed to queue update: %w", err)
@@ -54,7 +54,7 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 
 		// Find oldest queued operation for this stack
 		query := `
-			SELECT id, operation_id, stack_name, containers, priority, queued_at, estimated_start_time
+			SELECT id, operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time
 			FROM update_queue
 			WHERE stack_name = ?
 			ORDER BY priority DESC, queued_at ASC
@@ -66,7 +66,7 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 
 		err = tx.QueryRowContext(ctx, query, stackName).Scan(
 			&queue.ID, &queue.OperationID, &queue.StackName, &containersJSON,
-			&queue.Priority, &queue.QueuedAt, &estimatedStartTime,
+			&queue.OperationType, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
 		)
 
 		if err == sql.ErrNoRows {
@@ -122,7 +122,7 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 // Retrieves all queued operations ordered by queued_at.
 func (s *SQLiteStorage) GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, error) {
 	query := `
-		SELECT id, operation_id, stack_name, containers, priority, queued_at, estimated_start_time
+		SELECT id, operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time
 		FROM update_queue
 		ORDER BY priority DESC, queued_at ASC
 	`
@@ -142,7 +142,7 @@ func (s *SQLiteStorage) GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, er
 
 		err := rows.Scan(
 			&queue.ID, &queue.OperationID, &queue.StackName, &containersJSON,
-			&queue.Priority, &queue.QueuedAt, &estimatedStartTime,
+			&queue.OperationType, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan queued update: %w", err)

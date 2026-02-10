@@ -329,6 +329,7 @@ type UpdateQueue struct {
 	OperationID        string     `json:"operation_id"`
 	StackName          string     `json:"stack_name"`
 	Containers         []string   `json:"containers"` // JSON array of container names
+	OperationType      string     `json:"operation_type"`
 	Priority           int        `json:"priority"`
 	QueuedAt           time.Time  `json:"queued_at"`
 	EstimatedStartTime *time.Time `json:"estimated_start_time,omitempty"`

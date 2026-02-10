@@ -250,11 +250,12 @@ func TestQueueAndDequeueUpdate(t *testing.T) {
 
 	// Queue an update
 	queue := UpdateQueue{
-		OperationID: "queued-op-001",
-		StackName:   "test-stack",
-		Containers:  []string{"container-1", "container-2"},
-		Priority:    0,
-		QueuedAt:    time.Now(),
+		OperationID:   "queued-op-001",
+		StackName:     "test-stack",
+		Containers:    []string{"container-1", "container-2"},
+		OperationType: "single",
+		Priority:      0,
+		QueuedAt:      time.Now(),
 	}
 
 	err = storage.QueueUpdate(ctx, queue)
@@ -281,6 +282,9 @@ func TestQueueAndDequeueUpdate(t *testing.T) {
 	}
 	if dequeued.OperationID != "queued-op-001" {
 		t.Errorf("Expected operation ID 'queued-op-001', got %s", dequeued.OperationID)
+	}
+	if dequeued.OperationType != "single" {
+		t.Errorf("Expected operation type 'single', got %s", dequeued.OperationType)
 	}
 	if len(dequeued.Containers) != 2 {
 		t.Errorf("Expected 2 containers, got %d", len(dequeued.Containers))
@@ -309,11 +313,12 @@ func TestQueuePersistenceAcrossRestart(t *testing.T) {
 
 	ctx := context.Background()
 	queue := UpdateQueue{
-		OperationID: "persistent-op-001",
-		StackName:   "test-stack",
-		Containers:  []string{"container-1"},
-		Priority:    0,
-		QueuedAt:    time.Now(),
+		OperationID:   "persistent-op-001",
+		StackName:     "test-stack",
+		Containers:    []string{"container-1"},
+		OperationType: "restart",
+		Priority:      0,
+		QueuedAt:      time.Now(),
 	}
 
 	err = storage1.QueueUpdate(ctx, queue)
@@ -341,6 +346,9 @@ func TestQueuePersistenceAcrossRestart(t *testing.T) {
 	}
 	if queued[0].OperationID != "persistent-op-001" {
 		t.Errorf("Expected operation ID 'persistent-op-001', got %s", queued[0].OperationID)
+	}
+	if queued[0].OperationType != "restart" {
+		t.Errorf("Expected operation type 'restart', got %s", queued[0].OperationType)
 	}
 }
 

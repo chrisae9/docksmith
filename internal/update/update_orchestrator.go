@@ -2848,10 +2848,11 @@ func (o *UpdateOrchestrator) cleanupStaleLocks(ctx context.Context) {
 // queueOperation adds an operation to the queue.
 func (o *UpdateOrchestrator) queueOperation(ctx context.Context, operationID, stackName string, containers []string, operationType string) error {
 	queue := storage.UpdateQueue{
-		OperationID: operationID,
-		StackName:   stackName,
-		Containers:  containers,
-		QueuedAt:    time.Now(),
+		OperationID:   operationID,
+		StackName:     stackName,
+		Containers:    containers,
+		OperationType: operationType,
+		QueuedAt:      time.Now(),
 	}
 
 	if err := o.storage.QueueUpdate(ctx, queue); err != nil {
@@ -2916,18 +2917,76 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 							}
 						}
 
-						// Use context.Background() for operations so they complete even if orchestrator shuts down
-						// This is consistent with non-queued operations (see UpdateSingleContainer, etc.)
-						if len(targetContainers) == 1 {
-							go o.executeSingleUpdate(context.Background(), q.OperationID, targetContainers[0], "latest", q.StackName, false)
-						} else {
-							go o.executeBatchUpdate(context.Background(), q.OperationID, targetContainers, nil, q.StackName, nil)
+						if len(targetContainers) == 0 {
+							log.Printf("QUEUE: No matching containers found for operation %s, releasing lock", q.OperationID)
+							o.releaseStackLock(q.StackName)
+							o.failOperation(ctx, q.OperationID, "queued", "Queued containers no longer exist")
+							continue
+						}
+
+						// Dispatch based on the stored operation type
+						opCtx := context.Background()
+						switch q.OperationType {
+						case "restart":
+							if len(targetContainers) == 1 {
+								go o.executeRestart(opCtx, q.OperationID, targetContainers[0], q.StackName, false)
+							} else {
+								levels := o.computeStackRestartLevels(targetContainers)
+								go o.executeStackRestart(opCtx, q.OperationID, targetContainers, levels, q.StackName, false)
+							}
+						case "fix_mismatch":
+							if len(targetContainers) == 1 {
+								expectedImage, err := o.deriveExpectedImage(targetContainers[0])
+								if err != nil {
+									log.Printf("QUEUE: Failed to derive expected image for fix_mismatch %s: %v", q.OperationID, err)
+									o.releaseStackLock(q.StackName)
+									o.failOperation(ctx, q.OperationID, "queued", fmt.Sprintf("Failed to derive expected image: %v", err))
+									continue
+								}
+								go o.executeFixMismatch(opCtx, q.OperationID, targetContainers[0], expectedImage, q.StackName)
+							} else {
+								log.Printf("QUEUE: fix_mismatch with multiple containers not supported, operation %s", q.OperationID)
+								o.releaseStackLock(q.StackName)
+								o.failOperation(ctx, q.OperationID, "queued", "fix_mismatch only supports single containers")
+							}
+						default: // "single", "batch", "stack"
+							if len(targetContainers) == 1 {
+								go o.executeSingleUpdate(opCtx, q.OperationID, targetContainers[0], "latest", q.StackName, false)
+							} else {
+								go o.executeBatchUpdate(opCtx, q.OperationID, targetContainers, nil, q.StackName, nil)
+							}
 						}
 					}
 				}
 			}
 		}
 	}
+}
+
+// deriveExpectedImage reads the compose file for a container and returns the expected image reference.
+// Used by processQueue to reconstruct fix_mismatch parameters from a queued operation.
+func (o *UpdateOrchestrator) deriveExpectedImage(container *docker.Container) (string, error) {
+	composeFilePath := o.getComposeFilePath(container)
+	if composeFilePath == "" {
+		return "", fmt.Errorf("no compose file found for container %s", container.Name)
+	}
+
+	resolvedPath, err := o.resolveComposeFile(composeFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve compose file: %w", err)
+	}
+
+	serviceName := container.Labels["com.docker.compose.service"]
+	if serviceName == "" {
+		return "", fmt.Errorf("container %s has no compose service label", container.Name)
+	}
+
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read compose file: %w", err)
+	}
+
+	return extractImageFromCompose(content, serviceName)
 }
 
 // CancelQueuedOperation cancels a queued operation.
@@ -3009,7 +3068,9 @@ func (o *UpdateOrchestrator) RestartSingleContainer(ctx context.Context, contain
 
 // executeRestart performs the actual restart process with SSE progress events.
 func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID string, container *docker.Container, stackName string, force bool) {
-	defer o.releaseStackLock(stackName)
+	if stackName != "" {
+		defer o.releaseStackLock(stackName)
+	}
 
 	log.Printf("RESTART: Starting executeRestart for operation=%s container=%s", operationID, container.Name)
 

@@ -1,0 +1,3 @@
+-- SQLite doesn't support DROP COLUMN directly, but golang-migrate
+-- handles this by recreating the table if needed.
+-- For simplicity, this is a no-op since the column has a default.
