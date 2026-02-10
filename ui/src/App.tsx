@@ -55,7 +55,7 @@ function AppContent() {
       const result = await getContainerStatus();
       if (result.success && result.data) {
         const pinnableCount = result.data.containers.filter(
-          c => c.status === 'UP_TO_DATE_PINNABLE' && !c.env_controlled
+          c => c.status === 'UP_TO_DATE_PINNABLE'
         ).length;
         setUpdateCount(result.data.updates_found + pinnableCount);
       }

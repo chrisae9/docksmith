@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -109,6 +110,98 @@ func ReplaceTagInEnvVar(s string, newTag string) (string, bool) {
 	_ = fullMatch
 
 	return result, true
+}
+
+// IsFullImageRef returns true if the value looks like a full image reference (contains
+// a registry/repo path) rather than just a bare tag. Examples:
+//   - "ghcr.io/openclaw/openclaw:latest" → true
+//   - "nginx:1.25" → true (has image name)
+//   - "v1.2.3" → false (just a tag)
+//   - "latest" → false (just a tag)
+func IsFullImageRef(value string) bool {
+	return strings.Contains(value, "/") || strings.Contains(value, ":")
+}
+
+// ReplaceTagInValue replaces the tag portion of an image reference or bare tag value.
+// For full image refs like "ghcr.io/openclaw/openclaw:latest", replaces only the tag.
+// For bare tags like "v1.2.3" or "latest", replaces the entire value.
+func ReplaceTagInValue(value, newTag string) string {
+	if strings.Contains(value, "/") {
+		// Full image ref — replace tag after last colon
+		if lastColon := strings.LastIndex(value, ":"); lastColon != -1 {
+			return value[:lastColon+1] + newTag
+		}
+		// No tag, append one
+		return value + ":" + newTag
+	}
+	if strings.Contains(value, ":") {
+		// image:tag without registry path (e.g., "nginx:1.25")
+		if lastColon := strings.LastIndex(value, ":"); lastColon != -1 {
+			return value[:lastColon+1] + newTag
+		}
+	}
+	// Bare tag — replace entirely
+	return newTag
+}
+
+// UpdateDotEnvVar reads the .env file in dir, finds the line with varName=...,
+// replaces the tag portion of its value with newTag, and writes the file back.
+// Preserves all other lines, comments, blank lines, and ordering.
+func UpdateDotEnvVar(dir, varName, newTag string) error {
+	envPath := dir + "/.env"
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return fmt.Errorf("failed to read .env file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		idx := strings.Index(trimmed, "=")
+		if idx == -1 {
+			continue
+		}
+		key := strings.TrimSpace(trimmed[:idx])
+		if key != varName {
+			continue
+		}
+
+		// Found the variable — figure out the prefix (preserving indentation)
+		eqIdx := strings.Index(line, "=")
+		prefix := line[:eqIdx+1]
+		rawVal := line[eqIdx+1:]
+
+		// Detect and strip quotes
+		stripped := strings.TrimSpace(rawVal)
+		var quoteChar byte
+		unquoted := stripped
+		if len(stripped) >= 2 && ((stripped[0] == '"' && stripped[len(stripped)-1] == '"') || (stripped[0] == '\'' && stripped[len(stripped)-1] == '\'')) {
+			quoteChar = stripped[0]
+			unquoted = stripped[1 : len(stripped)-1]
+		}
+
+		// Replace the tag
+		updated := ReplaceTagInValue(unquoted, newTag)
+
+		// Re-apply quotes if they were present
+		if quoteChar != 0 {
+			updated = string(quoteChar) + updated + string(quoteChar)
+		}
+
+		lines[i] = prefix + updated
+		found = true
+		break
+	}
+
+	if !found {
+		return fmt.Errorf("variable %s not found in .env file", varName)
+	}
+
+	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 // ResolveEnvVars resolves Docker Compose environment variable syntax in a string.

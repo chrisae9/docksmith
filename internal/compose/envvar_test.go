@@ -2,6 +2,7 @@ package compose
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -166,6 +167,176 @@ func TestReplaceTagInEnvVar(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("ReplaceTagInEnvVar(%q, %q) = %q, want %q", tt.input, tt.newTag, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsFullImageRef(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"ghcr.io/openclaw/openclaw:latest", true},
+		{"nginx:1.25", true},
+		{"registry.example.com:5000/myapp:v1", true},
+		{"v1.2.3", false},
+		{"latest", false},
+		{"sha-abc123", false},
+	}
+	for _, tt := range tests {
+		if got := IsFullImageRef(tt.value); got != tt.want {
+			t.Errorf("IsFullImageRef(%q) = %v, want %v", tt.value, got, tt.want)
+		}
+	}
+}
+
+func TestReplaceTagInValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  string
+		newTag string
+		want   string
+	}{
+		{
+			name:   "full image ref with registry",
+			value:  "ghcr.io/openclaw/openclaw:latest",
+			newTag: "v2.0",
+			want:   "ghcr.io/openclaw/openclaw:v2.0",
+		},
+		{
+			name:   "full image ref without tag",
+			value:  "ghcr.io/openclaw/openclaw",
+			newTag: "v2.0",
+			want:   "ghcr.io/openclaw/openclaw:v2.0",
+		},
+		{
+			name:   "image with port in registry",
+			value:  "registry.example.com:5000/myapp:v1",
+			newTag: "v2",
+			want:   "registry.example.com:5000/myapp:v2",
+		},
+		{
+			name:   "simple image:tag",
+			value:  "nginx:1.25",
+			newTag: "1.26",
+			want:   "nginx:1.26",
+		},
+		{
+			name:   "bare tag",
+			value:  "v1.2.3",
+			newTag: "v1.3.0",
+			want:   "v1.3.0",
+		},
+		{
+			name:   "bare latest",
+			value:  "latest",
+			newTag: "v2.0",
+			want:   "v2.0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ReplaceTagInValue(tt.value, tt.newTag)
+			if got != tt.want {
+				t.Errorf("ReplaceTagInValue(%q, %q) = %q, want %q", tt.value, tt.newTag, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateDotEnvVar(t *testing.T) {
+	tests := []struct {
+		name        string
+		envContent  string
+		varName     string
+		newTag      string
+		wantContent string
+		wantErr     bool
+	}{
+		{
+			name:        "full image ref with registry",
+			envContent:  "OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest\n",
+			varName:     "OPENCLAW_IMAGE",
+			newTag:      "v2.0",
+			wantContent: "OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:v2.0\n",
+		},
+		{
+			name:        "bare tag value",
+			envContent:  "APP_VERSION=v1.2.3\n",
+			varName:     "APP_VERSION",
+			newTag:      "v1.3.0",
+			wantContent: "APP_VERSION=v1.3.0\n",
+		},
+		{
+			name:        "preserves comments and other vars",
+			envContent:  "# This is a comment\nOTHER_VAR=hello\nMY_IMAGE=ghcr.io/user/app:v1.0\nANOTHER=world\n",
+			varName:     "MY_IMAGE",
+			newTag:      "v2.0",
+			wantContent: "# This is a comment\nOTHER_VAR=hello\nMY_IMAGE=ghcr.io/user/app:v2.0\nANOTHER=world\n",
+		},
+		{
+			name:        "preserves blank lines",
+			envContent:  "FOO=bar\n\nMY_IMAGE=nginx:1.25\n\nBAZ=qux\n",
+			varName:     "MY_IMAGE",
+			newTag:      "1.26",
+			wantContent: "FOO=bar\n\nMY_IMAGE=nginx:1.26\n\nBAZ=qux\n",
+		},
+		{
+			name:        "double quoted value",
+			envContent:  "MY_IMAGE=\"ghcr.io/user/app:v1.0\"\n",
+			varName:     "MY_IMAGE",
+			newTag:      "v3.0",
+			wantContent: "MY_IMAGE=\"ghcr.io/user/app:v3.0\"\n",
+		},
+		{
+			name:        "single quoted value",
+			envContent:  "MY_IMAGE='ghcr.io/user/app:v1.0'\n",
+			varName:     "MY_IMAGE",
+			newTag:      "v3.0",
+			wantContent: "MY_IMAGE='ghcr.io/user/app:v3.0'\n",
+		},
+		{
+			name:    "variable not found",
+			envContent: "OTHER=value\n",
+			varName: "MISSING",
+			newTag:  "v1.0",
+			wantErr: true,
+		},
+		{
+			name:        "registry with port",
+			envContent:  "MY_IMAGE=registry.example.com:5000/myapp:v1\n",
+			varName:     "MY_IMAGE",
+			newTag:      "v2",
+			wantContent: "MY_IMAGE=registry.example.com:5000/myapp:v2\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			envPath := filepath.Join(dir, ".env")
+			if err := os.WriteFile(envPath, []byte(tt.envContent), 0644); err != nil {
+				t.Fatalf("failed to write .env: %v", err)
+			}
+
+			err := UpdateDotEnvVar(dir, tt.varName, tt.newTag)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, err := os.ReadFile(envPath)
+			if err != nil {
+				t.Fatalf("failed to read .env: %v", err)
+			}
+			if string(got) != tt.wantContent {
+				t.Errorf("got:\n%s\nwant:\n%s", string(got), tt.wantContent)
 			}
 		})
 	}

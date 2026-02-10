@@ -438,9 +438,6 @@ export function ContainerPage() {
       case 'UP_TO_DATE':
         return <span className="docksmith-badge current">Up to Date</span>;
       case 'UP_TO_DATE_PINNABLE':
-        if (docksmithData?.env_controlled) {
-          return <span className="docksmith-badge current" title={`Image controlled by .env variable ${docksmithData.env_var_name || ''}`}>Env Controlled</span>;
-        }
         return <span className="docksmith-badge pinnable">Pinnable</span>;
       case 'LOCAL_IMAGE':
         return <span className="docksmith-badge local">Local Image</span>;

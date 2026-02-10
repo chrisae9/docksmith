@@ -251,8 +251,7 @@ export function Containers() {
     if (viewSettings.filter === 'updates') {
       if (!c.has_update_data) return false;
       // Build a pseudo-ContainerInfo to use existing status helpers
-      const ci = { status: c.update_status || '', env_controlled: c.env_controlled };
-      if (isUpdatable(ci)) return true;
+      if (isUpdatable(c.update_status || '')) return true;
       if (viewSettings.showMismatch && isMismatch(c.update_status || '')) return true;
       return false;
     }
@@ -439,7 +438,7 @@ export function Containers() {
     for (const c of selected) {
       if (isMismatch(c.update_status || '')) {
         mismatchContainers.push(c.name);
-      } else if (isUpdatable({ status: c.update_status || '', env_controlled: c.env_controlled })) {
+      } else if (isUpdatable(c.update_status || '')) {
         containersToUpdate.push({
           name: c.name,
           target_version: c.recommended_tag || c.latest_version || '',
@@ -653,14 +652,12 @@ export function Containers() {
   const getVersion = (c: UnifiedContainerItem): string => {
     if (!c.has_update_data) return c.image;
 
-    if (c.update_status === 'UP_TO_DATE_PINNABLE' && c.env_controlled) return `$${c.env_var_name || 'ENV'}`;
     if (c.update_status === 'UP_TO_DATE_PINNABLE' && c.recommended_tag) {
       const currentTag = c.using_latest_tag ? 'latest' : (c.current_tag || 'untagged');
       return `${currentTag} \u2192 ${c.recommended_tag}`;
     }
 
-    const ci = { status: c.update_status || '', env_controlled: c.env_controlled };
-    if (isUpdatable(ci) && c.latest_version) {
+    if (isUpdatable(c.update_status || '') && c.latest_version) {
       const currentTag = c.current_tag || '';
       const currentResolved = c.current_version || '';
       let currentDisplay: string;
@@ -707,7 +704,6 @@ export function Containers() {
         if (c.state !== 'running') return <span className="status-badge stopped">{c.state.toUpperCase()}</span>;
         return <span className="status-badge current" title="Up to date">CURRENT</span>;
       case 'UP_TO_DATE_PINNABLE':
-        if (c.env_controlled) return <span className="status-badge current" title={`Controlled by .env ${c.env_var_name || ''}`}>ENV</span>;
         return <span className="status-badge pin" title="No version tag specified">PIN</span>;
       case 'LOCAL_IMAGE': return <span className="status-badge local" title="Local image">LOCAL</span>;
       case 'COMPOSE_MISMATCH': return <span className="status-badge mismatch" title="Running image differs from compose">MISMATCH</span>;
@@ -732,9 +728,8 @@ export function Containers() {
   const renderContainerRow = (c: UnifiedContainerItem) => {
     const isActive = activeActionMenu === c.name;
     const isRunning = c.state === 'running';
-    const ci = c.has_update_data ? { status: c.update_status || '', env_controlled: c.env_controlled } : null;
-    const hasUpdate = ci && isUpdatable(ci);
-    const hasMismatch = ci && isMismatch(c.update_status || '');
+    const hasUpdate = c.has_update_data && isUpdatable(c.update_status || '');
+    const hasMismatch = c.has_update_data && isMismatch(c.update_status || '');
 
     // Label indicators
     const hasTagRegex = !!c.labels?.['docksmith.tag-regex'];
@@ -1035,7 +1030,7 @@ export function Containers() {
   // === Selected containers analysis ===
   const selectedAnalysis = useMemo(() => {
     const selected = containers.filter(c => selectedContainers.has(c.name));
-    const updatable = selected.filter(c => c.has_update_data && isUpdatable({ status: c.update_status || '', env_controlled: c.env_controlled }));
+    const updatable = selected.filter(c => c.has_update_data && isUpdatable(c.update_status || ''));
     const mismatches = selected.filter(c => c.has_update_data && isMismatch(c.update_status || ''));
 
     const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange).length;

@@ -1359,6 +1359,20 @@ func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFileP
 				log.Printf("UPDATE: Updating env var image for %s: %s -> %s", serviceName, currentImage, updated)
 				valueNode.Value = updated
 				imageUpdated = true
+
+				// Also update the .env file if the variable is defined there
+				envVarName := compose.ExtractEnvVarName(currentImage)
+				if envVarName != "" {
+					composeDir := filepath.Dir(composeFile.Path)
+					envVars := compose.LoadDotEnv(composeDir)
+					if _, exists := envVars[envVarName]; exists {
+						if err := compose.UpdateDotEnvVar(composeDir, envVarName, newTag); err != nil {
+							log.Printf("UPDATE: Warning: failed to update .env file for %s: %v", envVarName, err)
+						} else {
+							log.Printf("UPDATE: Updated .env variable %s with new tag %s", envVarName, newTag)
+						}
+					}
+				}
 				break
 			}
 
