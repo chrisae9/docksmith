@@ -137,6 +137,7 @@ export function Containers() {
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
+  const [blockedExcluded, setBlockedExcluded] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeActionMenu, setActiveActionMenu] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
@@ -312,14 +313,27 @@ export function Containers() {
       if (next.has(name)) next.delete(name); else next.add(name);
       return next;
     });
+    setBlockedExcluded(false);
   };
 
   const selectAll = () => {
-    const names = containers.filter(filterContainer).map(c => c.name);
-    setSelectedContainers(new Set(names));
+    const visible = containers.filter(filterContainer);
+    const blocked = visible.filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED');
+    const nonBlocked = visible.filter(c => c.update_status !== 'UPDATE_AVAILABLE_BLOCKED');
+    setSelectedContainers(new Set(nonBlocked.map(c => c.name)));
+    setBlockedExcluded(blocked.length > 0);
   };
 
-  const deselectAll = () => setSelectedContainers(new Set());
+  const includeBlocked = () => {
+    const visible = containers.filter(filterContainer);
+    setSelectedContainers(new Set(visible.map(c => c.name)));
+    setBlockedExcluded(false);
+  };
+
+  const deselectAll = () => {
+    setSelectedContainers(new Set());
+    setBlockedExcluded(false);
+  };
 
   const toggleStackSelection = (stackContainers: UnifiedContainerItem[]) => {
     const names = stackContainers.map(c => c.name);
@@ -965,13 +979,30 @@ export function Containers() {
   // === Selected containers analysis ===
   const selectedAnalysis = useMemo(() => {
     const selected = containers.filter(c => selectedContainers.has(c.name));
+    const updatable = selected.filter(c => c.has_update_data && isUpdatable({ status: c.update_status || '', env_controlled: c.env_controlled }));
+    const mismatches = selected.filter(c => c.has_update_data && isMismatch(c.update_status || ''));
+
+    const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange).length;
+    const minorCount = updatable.filter(c => c.change_type === ChangeType.MinorChange).length;
+    const majorCount = updatable.filter(c => c.change_type === ChangeType.MajorChange).length;
+    const blockedCount = updatable.filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED').length;
+    const rebuildCount = updatable.filter(c => (c.change_type === ChangeType.NoChange || c.change_type === ChangeType.UnknownChange) && c.update_status !== 'UPDATE_AVAILABLE_BLOCKED').length;
+
     return {
       count: selected.length,
-      hasUpdates: selected.some(c => c.has_update_data && isUpdatable({ status: c.update_status || '', env_controlled: c.env_controlled })),
-      hasMismatches: selected.some(c => c.has_update_data && isMismatch(c.update_status || '')),
+      hasUpdates: updatable.length > 0,
+      hasMismatches: mismatches.length > 0,
       hasRunning: selected.some(c => c.state === 'running'),
       hasStopped: selected.some(c => c.state !== 'running'),
       hasSelfUpdate: selected.some(c => c.name.toLowerCase().includes('docksmith') || c.image.toLowerCase().includes('docksmith')),
+      hasBlocked: blockedCount > 0,
+      patchCount,
+      minorCount,
+      majorCount,
+      blockedCount,
+      rebuildCount,
+      mismatchCount: mismatches.length,
+      updateTotal: updatable.length,
     };
   }, [containers, selectedContainers]);
 
@@ -1202,7 +1233,7 @@ export function Containers() {
         </div>
       )}
 
-      <main className="containers-content" ref={mainRef}>
+      <main className={`containers-content ${selectedContainers.size > 0 ? 'has-selection' : ''}`} ref={mainRef}>
         {activeSubTab === 'containers' && renderContainersTab()}
         {activeSubTab === 'images' && renderImagesTab()}
         {activeSubTab === 'networks' && renderNetworksTab()}
@@ -1211,12 +1242,41 @@ export function Containers() {
 
       {/* Selection bar */}
       {selectedContainers.size > 0 && (
-        <div className="selection-bar">
+        <div className={`selection-bar ${selectedAnalysis.hasBlocked ? 'has-force' : ''}`}>
+          {/* Blocked containers excluded banner */}
+          {blockedExcluded && (
+            <div className="blocked-excluded-info">
+              <i className="fa-solid fa-circle-info"></i>
+              <span>{containers.filter(filterContainer).filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED').length} blocked container(s) excluded</span>
+              <button className="include-blocked-btn" onClick={includeBlocked}>Include anyway</button>
+            </div>
+          )}
+
+          {/* Force update warning when blocked containers are selected */}
+          {selectedAnalysis.hasBlocked && (
+            <div className="force-update-warning">
+              <i className="fa-solid fa-triangle-exclamation"></i>
+              <span>{selectedAnalysis.blockedCount} container(s) will skip pre-update checks</span>
+            </div>
+          )}
+
           {selectedAnalysis.hasSelfUpdate && (
             <div className="self-update-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Docksmith will restart to apply the update</span></div>
           )}
           <div className="selection-actions">
-            <span>{selectedAnalysis.count} selected</span>
+            <div className="selection-summary">
+              <span className="selection-count">{selectedAnalysis.count} selected</span>
+              {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
+                <div className="update-type-badges">
+                  {selectedAnalysis.patchCount > 0 && <span className="update-type-badge patch">{selectedAnalysis.patchCount} Patch</span>}
+                  {selectedAnalysis.minorCount > 0 && <span className="update-type-badge minor">{selectedAnalysis.minorCount} Minor</span>}
+                  {selectedAnalysis.majorCount > 0 && <span className="update-type-badge major">{selectedAnalysis.majorCount} Major</span>}
+                  {selectedAnalysis.rebuildCount > 0 && <span className="update-type-badge rebuild">{selectedAnalysis.rebuildCount} Rebuild</span>}
+                  {selectedAnalysis.blockedCount > 0 && <span className="update-type-badge blocked">{selectedAnalysis.blockedCount} Blocked</span>}
+                  {selectedAnalysis.mismatchCount > 0 && <span className="update-type-badge mismatch">{selectedAnalysis.mismatchCount} Mismatch</span>}
+                </div>
+              )}
+            </div>
             <div className="selection-buttons">
               <button className="cancel-btn" onClick={deselectAll}>Cancel</button>
 
@@ -1256,10 +1316,11 @@ export function Containers() {
                 )}
               </div>
 
-              {/* Standalone Update button (primary) */}
+              {/* Update button - contextual */}
               {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
-                <button className="update-btn" onClick={handleBulkUpdate}>
-                  Update
+                <button className={`update-btn ${selectedAnalysis.hasBlocked ? 'force' : ''}`} onClick={handleBulkUpdate}>
+                  {selectedAnalysis.hasBlocked && <i className="fa-solid fa-bolt"></i>}
+                  {selectedAnalysis.hasBlocked ? 'Force Update' : 'Update'}
                 </button>
               )}
             </div>

@@ -53,6 +53,11 @@
   contain: layout;
 }
 
+/* Extra bottom space when selection bar is visible */
+.containers-content.has-selection {
+  padding-bottom: 200px;
+}
+
 /* Unified container row — grid layout, zero dead zones */
 .unified-row {
   display: grid;
@@ -226,6 +231,99 @@
   z-index: var(--z-dropdown);
 }
 
+/* Blocked exclusion info banner */
+.blocked-excluded-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-accent-bright);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.include-blocked-btn {
+  background: none;
+  border: none;
+  color: var(--color-accent-bright);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  padding: 0;
+  margin-left: auto;
+}
+
+.include-blocked-btn:hover {
+  color: var(--color-accent);
+}
+
+/* Force update warning banner */
+.force-update-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-warning-dim);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.force-update-warning i {
+  font-size: var(--text-base);
+  flex-shrink: 0;
+}
+
+/* Update type badges in selection summary */
+.containers-page .selection-bar .selection-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.containers-page .selection-bar .update-type-badges {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+  padding-left: var(--space-5);
+  border-left: 1px solid var(--color-border);
+}
+
+.containers-page .selection-bar .update-type-badge {
+  font-size: var(--badge-font-size-lg);
+  padding: var(--badge-pad-y) var(--badge-pad-x);
+  border-radius: var(--radius-full);
+  font-weight: var(--font-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wider);
+  white-space: nowrap;
+}
+
+.update-type-badge.patch { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); }
+.update-type-badge.minor { background: var(--color-badge-minor-dim); color: var(--color-badge-minor); }
+.update-type-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
+.update-type-badge.rebuild { background: var(--color-slate-dim); color: var(--color-slate); }
+.update-type-badge.blocked { background: var(--color-badge-blocked-dim); color: var(--color-badge-blocked); }
+.update-type-badge.mismatch { background: var(--color-warning-dim); color: var(--color-warning); }
+
+/* Force variant of update button */
+.update-btn.force {
+  background: var(--color-warning);
+}
+
+/* Glow change when force is active */
+.selection-bar.has-force {
+  border-color: var(--color-warning-border);
+  box-shadow: var(--shadow-floating), 0 0 20px rgba(251, 146, 60, 0.15);
+}
+
 /* Responsive */
 @media (max-width: 640px) {
   .containers-header h1 {
@@ -239,6 +337,22 @@
 
   .unified-row .checkbox-zone {
     padding-left: var(--space-5);
+  }
+
+  .containers-page .selection-bar .selection-summary {
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .containers-page .selection-bar .update-type-badges {
+    border-left: none;
+    padding-left: 0;
+    gap: var(--space-1);
+  }
+
+  .containers-page .selection-bar .update-type-badge {
+    font-size: var(--badge-font-size);
+    padding: 1px var(--space-3);
   }
 }
 

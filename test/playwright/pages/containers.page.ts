@@ -12,6 +12,12 @@ export class ContainersPage {
   readonly actionsButton: Locator;
   readonly bulkActionsMenu: Locator;
   readonly subTabButtons: Locator;
+  readonly blockedExcludedBanner: Locator;
+  readonly includeBlockedButton: Locator;
+  readonly forceUpdateWarning: Locator;
+  readonly updateTypeBadges: Locator;
+  readonly updateButton: Locator;
+  readonly forceUpdateButton: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -26,10 +32,17 @@ export class ContainersPage {
     // Selection bar at bottom
     this.selectionBar = page.locator('.selection-bar');
     // Actions dropdown button in selection bar
-    this.actionsButton = this.selectionBar.locator('.update-btn');
+    this.actionsButton = this.selectionBar.locator('.actions-dropdown-btn');
     this.bulkActionsMenu = page.locator('.bulk-actions-menu');
     // Sub-tab buttons (Containers | Images | Networks | Volumes)
     this.subTabButtons = page.locator('.explorer-tabs button');
+    // Smart selection bar elements
+    this.blockedExcludedBanner = this.selectionBar.locator('.blocked-excluded-info');
+    this.includeBlockedButton = this.selectionBar.locator('.include-blocked-btn');
+    this.forceUpdateWarning = this.selectionBar.locator('.force-update-warning');
+    this.updateTypeBadges = this.selectionBar.locator('.update-type-badges');
+    this.updateButton = this.selectionBar.locator('.update-btn');
+    this.forceUpdateButton = this.selectionBar.locator('.update-btn.force');
   }
 
   async navigate() {
@@ -134,9 +147,26 @@ export class ContainersPage {
   }
 
   async getSelectedCount(): Promise<number> {
-    const text = await this.selectionBar.locator('span').first().textContent();
-    const match = text?.match(/(\d+)/);
-    return match ? parseInt(match[1], 10) : 0;
+    // Try plain "{N} selected" text in .selection-summary first
+    const summarySpan = this.selectionBar.locator('.selection-summary > span');
+    if (await summarySpan.count() > 0) {
+      const text = await summarySpan.first().textContent();
+      const match = text?.match(/(\d+)/);
+      if (match) return parseInt(match[1], 10);
+    }
+    // Fall back to summing badge counts from .update-type-badge spans
+    const badges = this.selectionBar.locator('.update-type-badge');
+    const count = await badges.count();
+    if (count > 0) {
+      let total = 0;
+      for (let i = 0; i < count; i++) {
+        const text = await badges.nth(i).textContent();
+        const match = text?.match(/(\d+)/);
+        if (match) total += parseInt(match[1], 10);
+      }
+      return total;
+    }
+    return 0;
   }
 
   async clickCancel() {
@@ -149,6 +179,47 @@ export class ContainersPage {
 
   async clickBulkAction(actionText: string) {
     await this.bulkActionsMenu.getByRole('button', { name: actionText }).click();
+  }
+
+  async getUpdateTypeBadges(): Promise<{ patch: number; minor: number; major: number; rebuild: number; blocked: number; mismatch: number }> {
+    const result = { patch: 0, minor: 0, major: 0, rebuild: 0, blocked: 0, mismatch: 0 };
+    const badges = this.selectionBar.locator('.update-type-badge');
+    const count = await badges.count();
+    for (let i = 0; i < count; i++) {
+      const text = (await badges.nth(i).textContent()) || '';
+      const numMatch = text.match(/(\d+)/);
+      const num = numMatch ? parseInt(numMatch[1], 10) : 0;
+      const lower = text.toLowerCase();
+      if (lower.includes('patch')) result.patch = num;
+      else if (lower.includes('minor')) result.minor = num;
+      else if (lower.includes('major')) result.major = num;
+      else if (lower.includes('rebuild')) result.rebuild = num;
+      else if (lower.includes('blocked')) result.blocked = num;
+      else if (lower.includes('mismatch')) result.mismatch = num;
+    }
+    return result;
+  }
+
+  async isBlockedExcludedBannerVisible(): Promise<boolean> {
+    return this.blockedExcludedBanner.isVisible();
+  }
+
+  async clickIncludeBlocked() {
+    await this.includeBlockedButton.click();
+  }
+
+  async isForceUpdateWarningVisible(): Promise<boolean> {
+    return this.forceUpdateWarning.isVisible();
+  }
+
+  async isForceUpdateButton(): Promise<boolean> {
+    return this.forceUpdateButton.isVisible();
+  }
+
+  async getBlockedExcludedCount(): Promise<number> {
+    const text = await this.blockedExcludedBanner.textContent();
+    const match = text?.match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
   }
 }
 

@@ -238,8 +238,8 @@ test.describe('Containers UI', () => {
     await secondRow.locator('.checkbox-zone').click();
     await expect(secondRow.locator('input[type="checkbox"]')).toBeChecked();
 
-    // Selection bar should show "2 selected"
-    await expect(containers.selectionBar).toContainText('2 selected');
+    // Selection bar should be visible
+    await expect(containers.selectionBar).toBeVisible();
 
     // Deselect both
     await firstRow.locator('.checkbox-zone').click();
@@ -324,7 +324,6 @@ test.describe('Containers UI', () => {
 
     // Selection bar should appear
     await expect(containers.selectionBar).toBeVisible();
-    await expect(containers.selectionBar).toContainText('1 selected');
 
     // Actions button should be visible
     await expect(containers.actionsButton).toBeVisible();
