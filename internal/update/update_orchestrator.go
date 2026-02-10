@@ -41,6 +41,7 @@ type UpdateOrchestrator struct {
 	healthCheckCfg HealthCheckConfig
 	stackLocks     map[string]*stackLockEntry
 	locksMu        sync.Mutex
+	batchDetailMu  sync.Mutex // protects read-modify-write on BatchDetails
 	pathTranslator *docker.PathTranslator
 	ctx            context.Context    // orchestrator lifecycle context
 	cancelFn       context.CancelFunc // cancels ctx on shutdown
@@ -3572,11 +3573,15 @@ func (o *UpdateOrchestrator) executeStackRestart(ctx context.Context, operationI
 }
 
 // updateBatchDetailStatus updates a single container's status within the operation's BatchDetails.
+// Uses batchDetailMu to serialize read-modify-write cycles when called from concurrent goroutines.
 func (o *UpdateOrchestrator) updateBatchDetailStatus(ctx context.Context, operationID, containerName, status, message string) {
+	o.batchDetailMu.Lock()
 	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
 	if !found {
+		o.batchDetailMu.Unlock()
 		return
 	}
+	var stackName string
 	for i, d := range op.BatchDetails {
 		if d.ContainerName == containerName {
 			op.BatchDetails[i].Status = status
@@ -3584,10 +3589,12 @@ func (o *UpdateOrchestrator) updateBatchDetailStatus(ctx context.Context, operat
 			break
 		}
 	}
+	stackName = op.StackName
 	o.storage.SaveUpdateOperation(ctx, op)
+	o.batchDetailMu.Unlock()
 
-	// Also publish an SSE event so the frontend gets real-time updates
-	o.publishProgress(operationID, containerName, op.StackName, status, 0, message)
+	// Publish SSE event outside the lock
+	o.publishProgress(operationID, containerName, stackName, status, 0, message)
 }
 
 // runPreUpdateCheck runs a pre-update check script for a container

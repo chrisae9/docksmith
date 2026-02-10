@@ -124,7 +124,7 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil && req.VersionPinPatch == nil &&
+	if req.Ignore == nil && req.AllowLatest == nil && req.AllowPrerelease == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil && req.VersionPinPatch == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
 		req.Script == nil && req.RestartAfter == nil {
 		RespondBadRequest(w, fmt.Errorf("no labels specified"))
@@ -384,7 +384,7 @@ func (s *Server) setLabelsWithConfig(ctx context.Context, req *SetLabelsRequest,
 			{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
 			{req.VersionPinMajor, scripts.VersionPinMajorLabel},
 			{req.VersionPinMinor, scripts.VersionPinMinorLabel},
-		{req.VersionPinPatch, scripts.VersionPinPatchLabel},
+			{req.VersionPinPatch, scripts.VersionPinPatchLabel},
 		}
 
 		for _, bl := range boolLabels {
