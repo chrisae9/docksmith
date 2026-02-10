@@ -26,6 +26,7 @@ type SetLabelsRequest struct {
 	AllowPrerelease  *bool   `json:"allow_prerelease,omitempty"`
 	VersionPinMajor  *bool   `json:"version_pin_major,omitempty"`
 	VersionPinMinor  *bool   `json:"version_pin_minor,omitempty"`
+	VersionPinPatch  *bool   `json:"version_pin_patch,omitempty"`
 	TagRegex         *string `json:"tag_regex,omitempty"`
 	VersionMin       *string `json:"version_min,omitempty"`
 	VersionMax       *string `json:"version_max,omitempty"`
@@ -65,6 +66,7 @@ var docksmithLabels = []string{
 	scripts.AllowPrereleaseLabel,
 	scripts.VersionPinMajorLabel,
 	scripts.VersionPinMinorLabel,
+	scripts.VersionPinPatchLabel,
 	scripts.TagRegexLabel,
 	scripts.VersionMinLabel,
 	scripts.VersionMaxLabel,
@@ -122,7 +124,7 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil &&
+	if req.Ignore == nil && req.AllowLatest == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil && req.VersionPinPatch == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
 		req.Script == nil && req.RestartAfter == nil {
 		RespondBadRequest(w, fmt.Errorf("no labels specified"))
@@ -382,6 +384,7 @@ func (s *Server) setLabelsWithConfig(ctx context.Context, req *SetLabelsRequest,
 			{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
 			{req.VersionPinMajor, scripts.VersionPinMajorLabel},
 			{req.VersionPinMinor, scripts.VersionPinMinorLabel},
+		{req.VersionPinPatch, scripts.VersionPinPatchLabel},
 		}
 
 		for _, bl := range boolLabels {
@@ -817,6 +820,9 @@ func (s *Server) setRollbackLabel(req *SetLabelsRequest, labelKey, value string)
 	case scripts.VersionPinMinorLabel:
 		v := value == "true"
 		req.VersionPinMinor = &v
+	case scripts.VersionPinPatchLabel:
+		v := value == "true"
+		req.VersionPinPatch = &v
 	case scripts.TagRegexLabel:
 		req.TagRegex = &value
 	case scripts.VersionMinLabel:

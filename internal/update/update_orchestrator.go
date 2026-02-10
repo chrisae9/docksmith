@@ -3185,6 +3185,411 @@ func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID str
 	}
 }
 
+// RestartStack initiates a restart for all containers in a stack as a single operation.
+// It builds a dependency graph to determine restart order, groups containers into
+// parallelizable levels, and restarts level by level.
+func (o *UpdateOrchestrator) RestartStack(ctx context.Context, stackName string, containerNames []string, force bool) (string, error) {
+	operationID := uuid.New().String()
+
+	containers, err := o.dockerClient.ListContainers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Filter to requested containers
+	var stackContainers []*docker.Container
+	for i := range containers {
+		for _, name := range containerNames {
+			if containers[i].Name == name {
+				stackContainers = append(stackContainers, &containers[i])
+				break
+			}
+		}
+	}
+
+	if len(stackContainers) == 0 {
+		return "", fmt.Errorf("no matching containers found in stack %s", stackName)
+	}
+
+	// Build dependency graph and compute restart levels
+	levels := o.computeStackRestartLevels(stackContainers)
+
+	// Create batch details for all containers
+	batchDetails := make([]storage.BatchContainerDetail, 0, len(stackContainers))
+	for _, c := range stackContainers {
+		batchDetails = append(batchDetails, storage.BatchContainerDetail{
+			ContainerName: c.Name,
+			StackName:     stackName,
+			Status:        "pending",
+			Message:       "Waiting to restart",
+		})
+	}
+
+	// Create a single operation for the entire stack restart
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		ContainerName: stackName,
+		StackName:     stackName,
+		OperationType: "restart",
+		Status:        "validating",
+		BatchDetails:  batchDetails,
+		CreatedAt:     time.Now(),
+	}
+
+	if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+		return "", fmt.Errorf("failed to save operation: %w", err)
+	}
+
+	// Acquire stack lock
+	if !o.acquireStackLock(stackName) {
+		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "restart"); err != nil {
+			return "", fmt.Errorf("failed to queue operation: %w", err)
+		}
+		o.publishProgress(operationID, "", stackName, "queued", 0, "Operation queued - stack is busy")
+		return operationID, nil
+	}
+
+	go o.executeStackRestart(context.Background(), operationID, stackContainers, levels, stackName, force)
+
+	return operationID, nil
+}
+
+// computeStackRestartLevels builds a dependency graph for the stack containers and
+// returns them grouped into levels. Containers in the same level can restart in parallel.
+// Level 0 has no dependencies (within the set), level 1 depends on level 0, etc.
+func (o *UpdateOrchestrator) computeStackRestartLevels(stackContainers []*docker.Container) [][]string {
+	// Build service-to-container name map for this stack
+	serviceToContainer := make(map[string]string)
+	stackSet := make(map[string]bool)
+	for _, c := range stackContainers {
+		stackSet[c.Name] = true
+		if svc, ok := c.Labels[graph.ServiceLabel]; ok {
+			serviceToContainer[svc] = c.Name
+		}
+	}
+
+	// Build dependency map: container name -> list of container names it depends on (within the stack)
+	deps := make(map[string][]string)
+	for _, c := range stackContainers {
+		var containerDeps []string
+
+		// Parse compose depends_on (uses service names, need translation)
+		if dependsOn, ok := c.Labels[graph.DependsOnLabel]; ok && dependsOn != "" {
+			for _, svc := range graph.ParseDependsOn(dependsOn) {
+				if depName, ok := serviceToContainer[svc]; ok && stackSet[depName] {
+					containerDeps = append(containerDeps, depName)
+				}
+			}
+		}
+
+		// Parse network_mode dependency
+		if networkMode, ok := c.Labels[graph.NetworkModeLabel]; ok && strings.HasPrefix(networkMode, "service:") {
+			svc := strings.TrimPrefix(networkMode, "service:")
+			if depName, ok := serviceToContainer[svc]; ok && stackSet[depName] {
+				// Avoid duplicates
+				isDup := false
+				for _, d := range containerDeps {
+					if d == depName {
+						isDup = true
+						break
+					}
+				}
+				if !isDup {
+					containerDeps = append(containerDeps, depName)
+				}
+			}
+		}
+
+		// Parse docksmith.restart-after label (already container names)
+		if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+			for _, dep := range strings.Split(restartAfter, ",") {
+				dep = strings.TrimSpace(dep)
+				if stackSet[dep] {
+					isDup := false
+					for _, d := range containerDeps {
+						if d == dep {
+							isDup = true
+							break
+						}
+					}
+					if !isDup {
+						containerDeps = append(containerDeps, dep)
+					}
+				}
+			}
+		}
+
+		deps[c.Name] = containerDeps
+	}
+
+	// Compute levels via iterative in-degree reduction (similar to Kahn's algorithm)
+	assigned := make(map[string]int) // container name -> level
+	remaining := make(map[string]bool)
+	for _, c := range stackContainers {
+		remaining[c.Name] = true
+	}
+
+	var levels [][]string
+	for len(remaining) > 0 {
+		// Find containers whose dependencies are all already assigned
+		var level []string
+		for name := range remaining {
+			allDepsAssigned := true
+			for _, dep := range deps[name] {
+				if remaining[dep] {
+					allDepsAssigned = false
+					break
+				}
+			}
+			if allDepsAssigned {
+				level = append(level, name)
+			}
+		}
+
+		if len(level) == 0 {
+			// Circular dependency - just add all remaining to break the cycle
+			log.Printf("STACK-RESTART: Circular dependency detected, adding remaining containers to current level")
+			for name := range remaining {
+				level = append(level, name)
+			}
+		}
+
+		for _, name := range level {
+			assigned[name] = len(levels)
+			delete(remaining, name)
+		}
+		levels = append(levels, level)
+	}
+
+	// Log the computed levels
+	for i, level := range levels {
+		log.Printf("STACK-RESTART: Level %d: %v", i, level)
+	}
+
+	return levels
+}
+
+// executeStackRestart runs the stack restart in background, level by level.
+func (o *UpdateOrchestrator) executeStackRestart(ctx context.Context, operationID string, containers []*docker.Container, levels [][]string, stackName string, force bool) {
+	defer o.releaseStackLock(stackName)
+
+	log.Printf("STACK-RESTART: Starting stack restart for %s with %d container(s) in %d level(s)", stackName, len(containers), len(levels))
+
+	// Build container map for quick lookup
+	containerMap := make(map[string]*docker.Container)
+	for _, c := range containers {
+		containerMap[c.Name] = c
+	}
+
+	// Stage 1: Validate (0-10%)
+	o.publishProgress(operationID, "", stackName, "validating", 0, "Validating permissions")
+
+	if err := o.checkDockerAccess(ctx); err != nil {
+		o.failOperation(ctx, operationID, "validating", fmt.Sprintf("Permission check failed: %v", err))
+		return
+	}
+
+	// Pre-update checks for all containers
+	if !force {
+		o.publishProgress(operationID, "", stackName, "validating", 5, "Running pre-update checks")
+		for _, c := range containers {
+			if scriptPath, ok := c.Labels[scripts.PreUpdateCheckLabel]; ok && scriptPath != "" {
+				log.Printf("STACK-RESTART: Running pre-update check for %s", c.Name)
+				if err := runPreUpdateCheck(ctx, c, scriptPath); err != nil {
+					errMsg := fmt.Sprintf("Pre-update check failed for %s: %v", c.Name, err)
+					o.updateBatchDetailStatus(ctx, operationID, c.Name, "failed", errMsg)
+					o.failOperation(ctx, operationID, "validating", errMsg)
+					return
+				}
+			}
+		}
+	}
+
+	// Set started_at timestamp
+	now := time.Now()
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
+	o.publishProgress(operationID, "", stackName, "restarting", 10, "Starting restarts")
+
+	// Stage 2: Restart by level (10-90%)
+	totalLevels := len(levels)
+	allSuccess := true
+
+	for levelIdx, level := range levels {
+		levelProgress := 10 + (80 * levelIdx / totalLevels)
+		o.publishProgress(operationID, "", stackName, "restarting", levelProgress,
+			fmt.Sprintf("Restarting level %d/%d (%d container(s))", levelIdx+1, totalLevels, len(level)))
+
+		log.Printf("STACK-RESTART: Restarting level %d: %v", levelIdx, level)
+
+		// Restart all containers in this level in parallel
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		levelFailed := false
+
+		for _, name := range level {
+			c := containerMap[name]
+			if c == nil {
+				continue
+			}
+
+			wg.Add(1)
+			go func(container *docker.Container, containerName string) {
+				defer wg.Done()
+
+				o.updateBatchDetailStatus(ctx, operationID, containerName, "restarting", "Restarting...")
+
+				// Check for self-restart
+				if selfupdate.IsSelfContainer(container.ID, container.Image, container.Name) {
+					log.Printf("STACK-RESTART: Skipping self-restart for docksmith container %s", containerName)
+					o.updateBatchDetailStatus(ctx, operationID, containerName, "complete", "Skipped (self)")
+					return
+				}
+
+				// Restart the container
+				composeFilePath := o.getComposeFilePath(container)
+				var restartErr error
+				if composeFilePath != "" {
+					hostComposeFilePath := o.getComposeFilePathForHost(container)
+					recreator := compose.NewRecreator(o.dockerClient)
+					restartErr = recreator.RestartWithCompose(ctx, container, hostComposeFilePath, composeFilePath)
+					if restartErr != nil {
+						log.Printf("STACK-RESTART: Compose restart failed for %s, falling back to Docker API: %v", containerName, restartErr)
+						restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerContainer.StopOptions{})
+					}
+				} else {
+					restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerContainer.StopOptions{})
+				}
+
+				if restartErr != nil {
+					errMsg := fmt.Sprintf("Failed to restart: %v", restartErr)
+					log.Printf("STACK-RESTART: %s: %s", containerName, errMsg)
+					o.updateBatchDetailStatus(ctx, operationID, containerName, "failed", errMsg)
+					mu.Lock()
+					levelFailed = true
+					mu.Unlock()
+					return
+				}
+
+				// Wait for healthy
+				if err := o.waitForHealthy(ctx, containerName, o.healthCheckCfg.Timeout); err != nil {
+					log.Printf("STACK-RESTART: Health check warning for %s: %v", containerName, err)
+					// Don't fail - container was restarted
+				}
+
+				log.Printf("STACK-RESTART: %s restarted successfully", containerName)
+				o.updateBatchDetailStatus(ctx, operationID, containerName, "complete", "Restarted successfully")
+			}(c, name)
+		}
+
+		wg.Wait()
+
+		if levelFailed {
+			allSuccess = false
+			// Continue to next level even if some containers failed
+			log.Printf("STACK-RESTART: Level %d had failures, continuing", levelIdx)
+		}
+	}
+
+	// Stage 3: External dependents (90-95%)
+	o.publishProgress(operationID, "", stackName, "restarting_dependents", 90, "Checking for external dependents")
+
+	allContainers, err := o.dockerClient.ListContainers(ctx)
+	if err == nil {
+		// Find containers outside the stack that have restart-after pointing to any stack container
+		stackSet := make(map[string]bool)
+		for _, c := range containers {
+			stackSet[c.Name] = true
+		}
+
+		var externalDeps []string
+		for _, c := range allContainers {
+			if stackSet[c.Name] {
+				continue // Skip containers in the stack
+			}
+			if restartAfter, ok := c.Labels[scripts.RestartAfterLabel]; ok && restartAfter != "" {
+				for _, dep := range strings.Split(restartAfter, ",") {
+					dep = strings.TrimSpace(dep)
+					if stackSet[dep] {
+						externalDeps = append(externalDeps, c.Name)
+						break
+					}
+				}
+			}
+		}
+
+		if len(externalDeps) > 0 {
+			log.Printf("STACK-RESTART: Found %d external dependent(s): %v", len(externalDeps), externalDeps)
+			for _, depName := range externalDeps {
+				log.Printf("STACK-RESTART: Restarting external dependent: %s", depName)
+				if restartErr := o.dockerSDK.ContainerRestart(ctx, depName, dockerContainer.StopOptions{}); restartErr != nil {
+					log.Printf("STACK-RESTART: Failed to restart external dependent %s: %v", depName, restartErr)
+				} else if healthErr := o.waitForHealthy(ctx, depName, o.healthCheckCfg.Timeout); healthErr != nil {
+					log.Printf("STACK-RESTART: Health check warning for external dependent %s: %v", depName, healthErr)
+				}
+			}
+		}
+	}
+
+	// Stage 4: Complete (100%)
+	completedNow := time.Now()
+	completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if completedFound {
+		if allSuccess {
+			completedOp.Status = "complete"
+		} else {
+			completedOp.Status = "complete"
+			completedOp.ErrorMessage = "Some containers failed to restart"
+		}
+		completedOp.CompletedAt = &completedNow
+		o.storage.SaveUpdateOperation(ctx, completedOp)
+	}
+
+	status := "complete"
+	message := fmt.Sprintf("Stack %s restarted successfully (%d container(s))", stackName, len(containers))
+	if !allSuccess {
+		message = fmt.Sprintf("Stack %s restart completed with errors", stackName)
+	}
+
+	o.publishProgress(operationID, "", stackName, status, 100, message)
+	log.Printf("STACK-RESTART: %s", message)
+
+	// Publish container updated event for dashboard refresh
+	if o.eventBus != nil {
+		o.eventBus.Publish(events.Event{
+			Type: events.EventContainerUpdated,
+			Payload: map[string]interface{}{
+				"container_name": stackName,
+				"operation_id":   operationID,
+				"status":         "restarted",
+			},
+		})
+	}
+}
+
+// updateBatchDetailStatus updates a single container's status within the operation's BatchDetails.
+func (o *UpdateOrchestrator) updateBatchDetailStatus(ctx context.Context, operationID, containerName, status, message string) {
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if !found {
+		return
+	}
+	for i, d := range op.BatchDetails {
+		if d.ContainerName == containerName {
+			op.BatchDetails[i].Status = status
+			op.BatchDetails[i].Message = message
+			break
+		}
+	}
+	o.storage.SaveUpdateOperation(ctx, op)
+
+	// Also publish an SSE event so the frontend gets real-time updates
+	o.publishProgress(operationID, containerName, op.StackName, status, 0, message)
+}
+
 // runPreUpdateCheck runs a pre-update check script for a container
 func runPreUpdateCheck(ctx context.Context, container *docker.Container, scriptPath string) error {
 	// Use shared implementation with path translation disabled (orchestrator runs in container)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup, batchSetLabels, batchStopContainers, batchRestartContainers, rollbackLabels } from '../api/client';
+import { startRestart, startStackRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup, batchSetLabels, batchStopContainers, batchRestartContainers, rollbackLabels } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -121,6 +121,7 @@ interface BatchLabelOperation {
     allow_latest?: boolean;
     version_pin_major?: boolean;
     version_pin_minor?: boolean;
+    version_pin_patch?: boolean;
     tag_regex?: string;
     script?: string;
   };
@@ -1482,116 +1483,95 @@ export function OperationProgressPage() {
       addLog('Force mode enabled - pre-update checks will be skipped', 'info', 'fa-forward');
     }
 
-    let hasAnyFailure = false;
-    let successCount = 0;
-    let failedCount = 0;
+    // Call single backend endpoint for the entire stack restart
+    try {
+      const response = await startStackRestart(stackName, containerNames, force);
 
-    // Restart each container sequentially using the orchestrator
-    for (const containerName of containerNames) {
-      updateContainer(containerName, { status: 'in_progress', message: 'Starting restart...' });
-      addLog(`Restarting ${containerName}...`, 'stage', 'fa-rotate');
-
-      try {
-        const response = await startRestart(containerName, force);
-
-        if (!response.success || !response.data?.operation_id) {
-          const errorMsg = response.error || 'Failed to start restart operation';
-          updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
-          addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-          hasAnyFailure = true;
-          failedCount++;
-
-          // Check if it's a precheck failure
-          if (isPreCheckFailure(errorMsg)) {
-            setCanForceRetry(true);
-            setForceRetryMessage('You can force restart to bypass pre-update checks');
-          }
-          continue;
-        }
-
-        const opId = response.data.operation_id;
-        containerToOpIdRef.current.set(containerName, opId);
-        addLog(`${containerName}: Operation started`, 'info', 'fa-play');
-
-        // Poll for completion of this individual container's restart
-        let completed = false;
-        let pollCount = 0;
-        const maxPolls = 90; // 3 minutes max per container
-
-        while (!completed && pollCount < maxPolls) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          pollCount++;
-
-          try {
-            const opResponse = await fetch(`/api/operations/${opId}`);
-            const opData = await opResponse.json();
-
-            if (opData.success && opData.data) {
-              const op = opData.data;
-
-              // Update progress from operation status
-              if (op.current_stage) {
-                const stageInfo = RESTART_STAGES[op.current_stage];
-                if (stageInfo) {
-                  updateContainer(containerName, {
-                    stage: op.current_stage,
-                    message: stageInfo.description,
-                  });
-                }
-              }
-
-              if (op.status === 'complete') {
-                completed = true;
-                updateContainer(containerName, { status: 'success', message: 'Restarted successfully', percent: 100 });
-                addLog(`${containerName}: Restarted successfully`, 'success', 'fa-circle-check');
-                successCount++;
-              } else if (op.status === 'failed') {
-                completed = true;
-                const errorMsg = op.error_message || 'Restart failed';
-                const briefMsg = isPreCheckFailure(errorMsg) ? 'Pre-update check failed' : errorMsg;
-                updateContainer(containerName, { status: 'failed', message: briefMsg, error: errorMsg });
-                addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-                hasAnyFailure = true;
-                failedCount++;
-
-                if (isPreCheckFailure(errorMsg)) {
-                  setCanForceRetry(true);
-                  setForceRetryMessage('You can force restart to bypass pre-update checks');
-                }
-              }
-            }
-          } catch {
-            // Continue polling on error
-          }
-        }
-
-        if (!completed) {
-          updateContainer(containerName, { status: 'failed', message: 'Timed out waiting for completion' });
-          addLog(`${containerName}: Timed out`, 'error', 'fa-clock');
-          hasAnyFailure = true;
-          failedCount++;
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        updateContainer(containerName, { status: 'failed', message: errorMsg, error: errorMsg });
-        addLog(`${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-        hasAnyFailure = true;
-        failedCount++;
-      }
-    }
-
-    // Final summary
-    if (hasAnyFailure) {
-      if (successCount > 0) {
-        addLog(`Stack restart completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
-        setStatus('success'); // Partial success still shows as success with individual failures visible
-      } else {
-        addLog(`Stack restart failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+      if (!response.success || !response.data?.operation_id) {
+        const errorMsg = response.error || 'Failed to start stack restart';
         setStatus('failed');
+        addLog(errorMsg, 'error', 'fa-circle-xmark');
+
+        if (isPreCheckFailure(errorMsg)) {
+          setCanForceRetry(true);
+          setForceRetryMessage('You can force restart to bypass pre-update checks');
+        }
+        return;
       }
-    } else {
-      addLog(`Stack restart completed: ${successCount} container(s) restarted successfully`, 'success', 'fa-circle-check');
-      setStatus('success');
+
+      const opId = response.data.operation_id;
+      setOperationId(opId);
+      setSearchParams({ id: opId }, { replace: true });
+      addLog('Stack restart operation started', 'info', 'fa-play');
+
+      // Poll the single operation for progress
+      let completed = false;
+      let pollCount = 0;
+      const maxPolls = 180; // 6 minutes for entire stack
+
+      while (!completed && pollCount < maxPolls) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        pollCount++;
+
+        try {
+          const opResponse = await fetch(`/api/operations/${opId}`);
+          const opData = await opResponse.json();
+          if (!opData.success || !opData.data) continue;
+
+          const op = opData.data;
+
+          // Update per-container status from batch_details
+          if (op.batch_details) {
+            for (const detail of op.batch_details) {
+              updateContainer(detail.container_name, {
+                status: detail.status === 'complete' ? 'success'
+                      : detail.status === 'failed' ? 'failed'
+                      : detail.status === 'restarting' ? 'in_progress'
+                      : 'pending',
+                message: detail.message || '',
+              });
+            }
+          }
+
+          if (op.status === 'complete') {
+            completed = true;
+            const failedContainers = op.batch_details?.filter((d: any) => d.status === 'failed') || [];
+            const successContainers = op.batch_details?.filter((d: any) => d.status === 'complete') || [];
+
+            if (failedContainers.length > 0 && successContainers.length > 0) {
+              addLog(`Stack restart completed with issues: ${successContainers.length} succeeded, ${failedContainers.length} failed`, 'warning', 'fa-triangle-exclamation');
+              setStatus('success');
+            } else if (failedContainers.length > 0) {
+              addLog(`Stack restart failed: all containers failed`, 'error', 'fa-circle-xmark');
+              setStatus('failed');
+            } else {
+              addLog(`Stack restart completed: ${successContainers.length} container(s) restarted successfully`, 'success', 'fa-circle-check');
+              setStatus('success');
+            }
+          } else if (op.status === 'failed') {
+            completed = true;
+            const errorMsg = op.error_message || 'Stack restart failed';
+            setStatus('failed');
+            addLog(errorMsg, 'error', 'fa-circle-xmark');
+
+            if (isPreCheckFailure(errorMsg)) {
+              setCanForceRetry(true);
+              setForceRetryMessage('You can force restart to bypass pre-update checks');
+            }
+          }
+        } catch {
+          // Continue polling on error
+        }
+      }
+
+      if (!completed) {
+        setStatus('failed');
+        addLog('Timed out waiting for stack restart', 'error', 'fa-clock');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setStatus('failed');
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
     }
   };
 
@@ -1663,7 +1643,8 @@ export function OperationProgressPage() {
     if (labelOp.allow_latest === false) return 'Disallow :latest';
     if (labelOp.version_pin_major) return 'Pin Major';
     if (labelOp.version_pin_minor) return 'Pin Minor';
-    if (labelOp.version_pin_major === false && labelOp.version_pin_minor === false) return 'Unpin';
+    if (labelOp.version_pin_patch) return 'Pin Patch';
+    if (labelOp.version_pin_major === false && labelOp.version_pin_minor === false && labelOp.version_pin_patch === false) return 'Unpin';
     if (labelOp.tag_regex === '') return 'Clear Tag Filter';
     if (labelOp.tag_regex) return `Set Tag Filter: ${labelOp.tag_regex}`;
     if (labelOp.script === '') return 'Clear Script';

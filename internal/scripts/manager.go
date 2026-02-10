@@ -47,6 +47,13 @@ const (
 	// Default: false (allow minor version upgrades)
 	VersionPinMinorLabel = "docksmith.version-pin-minor"
 
+	// VersionPinPatchLabel is the Docker label key to pin updates within the current patch version
+	// When set to "true", only build metadata/suffix changes are allowed (major.minor.patch stays the same).
+	// Example: Container on v1.2.3-ls100 will update to v1.2.3-ls101 but not to v1.2.4
+	//          Container on 3.5.1-alpine will update to 3.5.1-alpine2 but not to 3.5.2-alpine
+	// Default: false (allow patch version upgrades)
+	VersionPinPatchLabel = "docksmith.version-pin-patch"
+
 	// TagRegexLabel is the Docker label key for custom tag filtering via regular expressions
 	// When set, only tags matching the regex pattern will be considered for updates.
 	// Example: "^v?[0-9.]+-alpine$" to only allow Alpine-based images

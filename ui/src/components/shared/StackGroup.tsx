@@ -11,6 +11,7 @@ interface StackGroupProps {
   children: ReactNode;
   actions?: ReactNode;
   listClassName?: string;
+  id?: string;
 }
 
 export function StackGroup({
@@ -24,12 +25,13 @@ export function StackGroup({
   children,
   actions,
   listClassName = 'stack-container-list',
+  id,
 }: StackGroupProps) {
   const defaultIcon = isStandalone ? 'fa-cube' : 'fa-layer-group';
   const stackIcon = icon || defaultIcon;
 
   return (
-    <div className="stack-group">
+    <div className="stack-group" id={id}>
       {/* Separate header container to avoid nested buttons */}
       <div className={`stack-header ${isStandalone ? 'standalone' : ''}`}>
         <button

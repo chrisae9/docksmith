@@ -143,6 +143,7 @@ export function Containers() {
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const menuJustClosedRef = useRef(false);
 
   // Resource action menu state
   const [activeImageMenu, setActiveImageMenu] = useState<string | null>(null);
@@ -173,6 +174,30 @@ export function Containers() {
   const [isPulling, setIsPulling] = useState(false);
   const pullStartY = useRef<number | null>(null);
 
+  // Save scroll position and navigate to container detail
+  const SCROLL_KEY = 'containers_scroll_top';
+  const navigateToContainer = useCallback((name: string, state?: Record<string, unknown>) => {
+    if (mainRef.current) {
+      sessionStorage.setItem(SCROLL_KEY, String(mainRef.current.scrollTop));
+    }
+    navigate(`/container/${name}`, state ? { state } : undefined);
+  }, [navigate]);
+
+  // Restore scroll position after data loads
+  useEffect(() => {
+    if (!loading) {
+      const saved = sessionStorage.getItem(SCROLL_KEY);
+      if (saved) {
+        sessionStorage.removeItem(SCROLL_KEY);
+        requestAnimationFrame(() => {
+          if (mainRef.current) {
+            mainRef.current.scrollTop = parseInt(saved, 10);
+          }
+        });
+      }
+    }
+  }, [loading]);
+
   // Persist settings
   useEffect(() => { localStorage.setItem(STORAGE_KEY_ACTIVE_SUBTAB, activeSubTab); }, [activeSubTab]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY_COLLAPSED, JSON.stringify([...collapsedStacks])); }, [collapsedStacks]);
@@ -187,6 +212,10 @@ export function Containers() {
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        if (activeActionMenu) {
+          menuJustClosedRef.current = true;
+          requestAnimationFrame(() => { menuJustClosedRef.current = false; });
+        }
         setActiveActionMenu(null);
         setConfirmRemove(null);
         setActiveImageMenu(null);
@@ -202,7 +231,7 @@ export function Containers() {
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [activeActionMenu]);
 
   // === Container filtering ===
   const filterContainer = useCallback((c: UnifiedContainerItem) => {
@@ -459,7 +488,7 @@ export function Containers() {
     }
   };
 
-  const handleBulkLabel = (labelOp: { ignore?: boolean; allow_latest?: boolean; version_pin_major?: boolean; version_pin_minor?: boolean; tag_regex?: string; script?: string }) => {
+  const handleBulkLabel = (labelOp: { ignore?: boolean; allow_latest?: boolean; version_pin_major?: boolean; version_pin_minor?: boolean; version_pin_patch?: boolean; tag_regex?: string; script?: string }) => {
     const names = Array.from(selectedContainers);
     setSelectedContainers(new Set());
     setShowBulkActions(false);
@@ -735,8 +764,8 @@ export function Containers() {
           className="row-link"
           role="button"
           tabIndex={0}
-          onClick={() => navigate(`/container/${c.name}`)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/container/${c.name}`); } }}
+          onClick={(e) => { if (menuJustClosedRef.current) { e.preventDefault(); return; } navigateToContainer(c.name); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigateToContainer(c.name); } }}
         >
           <div className="container-info">
             <span className="name">{c.name}</span>
@@ -771,9 +800,9 @@ export function Containers() {
               navigate('/operation', { state: { fixMismatch: { containerName: c.name } } });
             }} />}
             <ActionMenuDivider />
-            <ActionMenuItem icon="fa-sliders" label="Configure..." onClick={() => { setActiveActionMenu(null); navigate(`/container/${c.name}`, { state: { tab: 'config' } }); }} />
-            <ActionMenuItem icon="fa-file-lines" label="Logs" onClick={() => { setActiveActionMenu(null); navigate(`/container/${c.name}`, { state: { tab: 'logs' } }); }} />
-            <ActionMenuItem icon="fa-magnifying-glass" label="Inspect" onClick={() => { setActiveActionMenu(null); navigate(`/container/${c.name}`, { state: { tab: 'inspect' } }); }} />
+            <ActionMenuItem icon="fa-sliders" label="Configure..." onClick={() => { setActiveActionMenu(null); navigateToContainer(c.name, { tab: 'config' }); }} />
+            <ActionMenuItem icon="fa-file-lines" label="Logs" onClick={() => { setActiveActionMenu(null); navigateToContainer(c.name, { tab: 'logs' }); }} />
+            <ActionMenuItem icon="fa-magnifying-glass" label="Inspect" onClick={() => { setActiveActionMenu(null); navigateToContainer(c.name, { tab: 'inspect' }); }} />
             <ActionMenuDivider />
             {confirmRemove === c.name ? (
               <ConfirmRemove onConfirm={() => handleContainerAction(c.name, 'remove', true)} onCancel={() => { setActiveActionMenu(null); setConfirmRemove(null); }} />
@@ -826,8 +855,35 @@ export function Containers() {
             icon={getGroupIcon(groupName)}
             isStandalone={groupName === '_standalone' || explorerSettings.containers.groupBy === 'none'}
             listClassName="explorer-list"
+            id={`stack-${groupName}`}
             actions={
               <>
+                {searchQuery && explorerSettings.containers.groupBy === 'stack' && groupName !== '_standalone' && containerStacks[groupName] && items.length < containerStacks[groupName].length && (
+                  <button
+                    className="show-full-stack-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const stackId = `stack-${groupName}`;
+                      setSearchQuery('');
+                      setCollapsedStacks(prev => {
+                        const next = new Set(prev);
+                        next.delete(groupName);
+                        return next;
+                      });
+                      requestAnimationFrame(() => {
+                        const el = document.getElementById(stackId);
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          el.classList.add('stack-highlight');
+                          setTimeout(() => el.classList.remove('stack-highlight'), 1500);
+                        }
+                      });
+                    }}
+                    title={`Show all ${containerStacks[groupName].length} containers in ${groupName}`}
+                  >
+                    Show all {containerStacks[groupName].length}
+                  </button>
+                )}
                 {items.length > 0 && (
                   <button
                     className="stack-select-btn"
@@ -1304,9 +1360,10 @@ export function Containers() {
                       <button onClick={() => handleBulkLabel({ allow_latest: false })}><i className="fa-solid fa-tag"></i> Disallow :latest</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Pinning</span>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false })}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Unpin</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false })}><i className="fa-solid fa-thumbtack"></i> Pin Major</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false })}><i className="fa-solid fa-thumbtack"></i> Pin Minor</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Unpin</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Pin Major</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Pin Minor</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_patch: true, version_pin_major: false, version_pin_minor: false })}><i className="fa-solid fa-thumbtack"></i> Pin Patch</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Clear</span>
                       <button onClick={() => handleBulkLabel({ tag_regex: '' })}><i className="fa-solid fa-filter-circle-xmark"></i> Clear Tag Filter</button>

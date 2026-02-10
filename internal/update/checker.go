@@ -960,6 +960,12 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		log.Printf("findLatestVersion: Minor version pinning enabled (current: %d.%d.x)", currentVersion.Major, currentVersion.Minor)
 	}
 
+	// Check if patch version pinning is enabled
+	pinPatch := labels[scripts.VersionPinPatchLabel] == "true"
+	if pinPatch && currentVersion != nil {
+		log.Printf("findLatestVersion: Patch version pinning enabled (current: %d.%d.%d)", currentVersion.Major, currentVersion.Minor, currentVersion.Patch)
+	}
+
 	log.Printf("findLatestVersion: Looking for tags with suffix='%s', currentVersion=%v, skipPrereleases=%v, allowPrerelease=%v", requiredSuffix, currentVersion, skipPrereleases, allowPrerelease)
 
 	for _, tag := range tags {
@@ -1003,6 +1009,14 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		if pinMinor && currentVersion != nil {
 			if tagInfo.Version.Major != currentVersion.Major || tagInfo.Version.Minor != currentVersion.Minor {
 				log.Printf("  Skipping tag %s: different minor version (pinned to %d.%d.x)", tag, currentVersion.Major, currentVersion.Minor)
+				continue
+			}
+		}
+
+		// Apply patch version pinning filter
+		if pinPatch && currentVersion != nil {
+			if tagInfo.Version.Major != currentVersion.Major || tagInfo.Version.Minor != currentVersion.Minor || tagInfo.Version.Patch != currentVersion.Patch {
+				log.Printf("  Skipping tag %s: different patch version (pinned to %d.%d.%d)", tag, currentVersion.Major, currentVersion.Minor, currentVersion.Patch)
 				continue
 			}
 		}

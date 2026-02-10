@@ -401,3 +401,52 @@ func (s *Server) executeContainerRestart(w http.ResponseWriter, parentCtx contex
 
 	RespondSuccess(w, response)
 }
+
+// handleStartStackRestart initiates a stack restart operation via the orchestrator.
+// Creates a single operation record and restarts containers in dependency order.
+// POST /api/restart/stack/start/{name}
+func (s *Server) handleStartStackRestart(w http.ResponseWriter, r *http.Request) {
+	if s.updateOrchestrator == nil {
+		RespondInternalError(w, fmt.Errorf("restart service unavailable"))
+		return
+	}
+
+	stackName := r.PathValue("name")
+	if stackName == "" {
+		RespondBadRequest(w, fmt.Errorf("stack name is required"))
+		return
+	}
+
+	force := r.URL.Query().Get("force") == "true"
+
+	var req struct {
+		Containers []string `json:"containers"`
+	}
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	if len(req.Containers) == 0 {
+		RespondBadRequest(w, fmt.Errorf("at least one container name is required"))
+		return
+	}
+
+	log.Printf("Starting stack restart for %s with %d container(s) (force=%v)", stackName, len(req.Containers), force)
+
+	ctx := r.Context()
+	operationID, err := s.updateOrchestrator.RestartStack(ctx, stackName, req.Containers, force)
+	if err != nil {
+		log.Printf("Failed to start stack restart for %s: %v", stackName, err)
+		RespondInternalError(w, err)
+		return
+	}
+
+	log.Printf("Stack restart operation started: %s for stack %s", operationID, stackName)
+
+	RespondSuccess(w, map[string]any{
+		"operation_id": operationID,
+		"stack_name":   stackName,
+		"force":        force,
+		"status":       "started",
+	})
+}

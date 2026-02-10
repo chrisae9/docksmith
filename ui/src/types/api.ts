@@ -224,6 +224,7 @@ export interface SetLabelsRequest {
   allow_latest?: boolean;
   version_pin_major?: boolean;
   version_pin_minor?: boolean;
+  version_pin_patch?: boolean;
   tag_regex?: string;
   version_min?: string;
   version_max?: string;

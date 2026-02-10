@@ -753,20 +753,20 @@
 /* Selection Bar */
 .selection-bar {
   position: fixed;
-  bottom: calc(var(--height-tab-bar) + var(--safe-area-inset-bottom));
+  bottom: calc(var(--height-tab-bar) + var(--safe-area-inset-bottom) + var(--space-4));
   left: calc(var(--space-8) + var(--safe-area-inset-left));
   right: calc(var(--space-8) + var(--safe-area-inset-right));
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-accent-border);
+  background: rgba(24, 24, 27, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-2xl);
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-5) var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   z-index: var(--z-dropdown);
-  box-shadow: var(--shadow-floating), var(--shadow-glow-amber);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
   animation: selection-bar-enter var(--duration-slow) var(--ease-spring);
 }
 
@@ -775,12 +775,21 @@
   justify-content: space-between;
   align-items: center;
   width: 100%;
+  gap: var(--space-4);
+}
+
+.selection-bar .selection-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
 .selection-bar .selection-buttons {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-items: center;
+  flex-shrink: 0;
 }
 
 /* Self-update warning in selection bar */
@@ -788,17 +797,17 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-warning-bg);
-  border: 1px solid var(--color-warning-border);
-  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-4);
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.15);
+  border-radius: var(--radius-md);
   color: var(--color-warning);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   font-weight: var(--font-medium);
 }
 
 .self-update-warning i {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   flex-shrink: 0;
 }
 
@@ -815,21 +824,23 @@
 
 .selection-bar .selection-count {
   color: var(--color-text-primary);
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   font-weight: var(--font-semibold);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Actions Dropdown Button (secondary) */
 .actions-dropdown-btn {
-  background: var(--color-bg-secondary);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-  padding: var(--space-5) var(--space-8);
-  min-height: 48px;
-  border-radius: var(--radius-xl);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: var(--space-3) var(--space-6);
+  min-height: 36px;
+  border-radius: var(--radius-lg);
   font-weight: var(--font-medium);
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -839,8 +850,8 @@
 }
 
 .actions-dropdown-btn:hover {
-  background: var(--color-bg-tertiary);
-  border-color: var(--color-text-tertiary);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 /* Update Button */
@@ -848,16 +859,16 @@
   background: var(--color-accent);
   color: white;
   border: none;
-  padding: var(--space-5) var(--space-12);
-  min-height: 48px;
-  border-radius: var(--radius-xl);
-  font-weight: var(--font-bold);
-  font-size: var(--text-lg);
+  padding: var(--space-3) var(--space-8);
+  min-height: 36px;
+  border-radius: var(--radius-lg);
+  font-weight: var(--font-semibold);
+  font-size: var(--text-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   transition: all var(--transition-fast);
 }
 
@@ -884,13 +895,13 @@
 /* Cancel Button */
 .cancel-btn {
   background: transparent;
-  color: var(--color-text-secondary);
-  border: 1px solid var(--color-border);
-  padding: var(--space-5) var(--space-12);
-  min-height: 48px;
-  border-radius: var(--radius-xl);
+  color: var(--color-text-tertiary);
+  border: none;
+  padding: var(--space-3) var(--space-5);
+  min-height: 36px;
+  border-radius: var(--radius-lg);
   font-weight: var(--font-medium);
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -899,13 +910,12 @@
 }
 
 .cancel-btn:hover {
-  background: var(--color-bg-tertiary);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--color-text-primary);
-  border-color: var(--color-text-tertiary);
 }
 
 .cancel-btn:active {
-  background: var(--color-bg-secondary);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* Update Status Notification */
@@ -1101,10 +1111,26 @@
 
   /* Selection bar — compact on mobile */
   .selection-bar {
-    left: var(--space-4);
-    right: var(--space-4);
-    padding: var(--space-4) var(--space-5);
+    left: var(--space-3);
+    right: var(--space-3);
+    padding: var(--space-4) var(--space-4);
+    gap: var(--space-2);
+  }
+
+  .selection-bar .selection-actions {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .selection-bar .selection-summary {
+    flex: 1 1 100%;
     gap: var(--space-3);
+  }
+
+  .selection-bar .selection-buttons {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    gap: var(--space-2);
   }
 
   .selection-bar .selection-count {
@@ -1114,14 +1140,9 @@
   .cancel-btn,
   .actions-dropdown-btn,
   .update-btn {
-    min-height: 36px;
-    padding: var(--space-3) var(--space-5);
-    font-size: var(--text-sm);
-    border-radius: var(--radius-lg);
-  }
-
-  .selection-bar .selection-buttons {
-    gap: var(--space-2);
+    min-height: 32px;
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-xs);
   }
 }
 

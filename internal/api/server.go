@@ -252,6 +252,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("POST /api/restart/start/{name}", s.handleStartRestart) // New SSE-based restart
 	mux.HandleFunc("POST /api/restart/container/{name}", s.handleRestartContainer)
 	mux.HandleFunc("POST /api/restart/stack/{name}", s.handleRestartStack)
+	mux.HandleFunc("POST /api/restart/stack/start/{name}", s.handleStartStackRestart) // Stack restart via orchestrator
 	mux.HandleFunc("POST /api/restart", s.handleRestartContainerBody)
 
 	// Server-Sent Events for real-time updates
@@ -352,12 +353,25 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 // setNoCacheHeaders ensures the browser never serves a stale HTML page.
-// Uses no-store to prevent caching entirely — critical for SPA index.html
-// so that new deployments are picked up immediately without manual cache clears.
 func setNoCacheHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
+}
+
+// serveIndexHTML serves index.html without Last-Modified/ETag headers.
+// http.ServeFile adds Last-Modified which can cause browsers to cache
+// via conditional requests (If-Modified-Since → 304), defeating no-store.
+// By reading and writing bytes directly, we ensure no conditional caching.
+func serveIndexHTML(w http.ResponseWriter, indexPath string) {
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	setNoCacheHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
 }
 
 // spaHandler serves static files and falls back to index.html for SPA routing
@@ -385,8 +399,7 @@ func spaHandler(staticDir string) http.Handler {
 			// File doesn't exist, serve index.html for SPA routing
 			indexPath := filepath.Join(staticDir, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
-				setNoCacheHeaders(w)
-				http.ServeFile(w, r, indexPath)
+				serveIndexHTML(w, indexPath)
 				return
 			}
 			http.NotFound(w, r)
@@ -402,20 +415,19 @@ func spaHandler(staticDir string) http.Handler {
 			// Try to serve index.html in the directory
 			indexPath := filepath.Join(fullPath, "index.html")
 			if _, indexErr := os.Stat(indexPath); indexErr == nil {
-				setNoCacheHeaders(w)
-				http.ServeFile(w, r, indexPath)
+				serveIndexHTML(w, indexPath)
 				return
 			}
 			// Otherwise serve root index.html for SPA routing
 			rootIndex := filepath.Join(staticDir, "index.html")
-			setNoCacheHeaders(w)
-			http.ServeFile(w, r, rootIndex)
+			serveIndexHTML(w, rootIndex)
 			return
 		}
 
 		// Set cache headers based on file type
 		if strings.HasSuffix(path, ".html") {
-			setNoCacheHeaders(w)
+			serveIndexHTML(w, fullPath)
+			return
 		} else if strings.HasPrefix(path, "/assets/") {
 			// Versioned assets (JS/CSS with hashes): cache forever
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

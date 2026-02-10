@@ -285,6 +285,8 @@ type BatchContainerDetail struct {
 	OldResolvedVersion string `json:"old_resolved_version,omitempty"` // Resolved version at time of update
 	NewResolvedVersion string `json:"new_resolved_version,omitempty"` // Resolved version at time of update
 	OldDigest          string `json:"old_digest,omitempty"`           // Image digest at time of update (for digest-based rollback)
+	Status             string `json:"status,omitempty"`               // Per-container status: pending, restarting, complete, failed
+	Message            string `json:"message,omitempty"`              // Human-readable status message
 }
 
 type UpdateOperation struct {

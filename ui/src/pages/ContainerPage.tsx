@@ -46,16 +46,14 @@ export function ContainerPage() {
   const initialTab = (location.state as { tab?: TabId })?.tab || 'overview';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
-  // Determine the correct back navigation based on route pattern
+  // Use browser history to go back, preserving scroll/search state
   const handleBack = useCallback(() => {
-    // If accessed from explorer route, go back to explorer
-    // Otherwise go back to updates (home)
-    if (location.pathname.startsWith('/explorer/')) {
-      navigate('/explorer');
+    if (window.history.length > 1) {
+      navigate(-1);
     } else {
       navigate('/');
     }
-  }, [navigate, location.pathname]);
+  }, [navigate]);
 
   // Core state
   const [loading, setLoading] = useState(true);

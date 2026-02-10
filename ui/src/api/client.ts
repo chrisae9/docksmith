@@ -343,6 +343,21 @@ export async function restartStack(stackName: string): Promise<APIResponse<Resta
   });
 }
 
+// Start a stack restart operation via orchestrator (single operation, dependency ordering)
+export async function startStackRestart(
+  stackName: string,
+  containers: string[],
+  force = false
+): Promise<APIResponse<StartRestartResponse>> {
+  const url = force
+    ? `/restart/stack/start/${stackName}?force=true`
+    : `/restart/stack/start/${stackName}`;
+  return fetchAPI(url, {
+    method: 'POST',
+    body: JSON.stringify({ containers }),
+  });
+}
+
 // Registry tags (for regex testing UI)
 // Note: imageRef is not encoded because the backend uses a wildcard path pattern {imageRef...}
 // that expects literal slashes in the path (e.g., /registry/tags/linuxserver/syncthing)
