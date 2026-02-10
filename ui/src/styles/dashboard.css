@@ -742,6 +742,7 @@
 .label-icon.regex { color: var(--color-accent); }
 .label-icon.script { color: var(--color-text-tertiary); }
 .label-icon.latest { color: var(--color-warning); }
+.label-icon.env { color: var(--color-accent); }
 
 /* Selected State */
 .dashboard li.selected,

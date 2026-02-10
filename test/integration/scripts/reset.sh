@@ -16,6 +16,7 @@ ENVIRONMENTS=(
     "multi-stack"
     "constraints"
     "labels"
+    "env-compose"
 )
 
 # Function to reset a specific environment
@@ -31,6 +32,12 @@ reset_env() {
     fi
 
     cd "$env_path"
+
+    # Run setup script if compose file doesn't exist (gitignored environments)
+    if [ ! -f "docker-compose.yml" ] && [ -f "setup.sh" ]; then
+        print_info "  Running setup.sh to create environment files..."
+        bash setup.sh
+    fi
 
     # Stop containers
     print_info "  Stopping containers..."

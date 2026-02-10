@@ -356,9 +356,52 @@
   background: var(--color-warning);
   color: white;
 }
+.container-page .update-btn.pin {
+  background: var(--color-accent);
+  color: white;
+}
 
 .container-page .update-btn:hover {
   filter: brightness(1.1);
+}
+
+/* Env-Controlled Info */
+.container-page .env-info-card {
+  background: rgba(100, 210, 255, 0.08);
+  border: 1px solid rgba(100, 210, 255, 0.25);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-xl);
+  margin-bottom: var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.container-page .env-info-card > i {
+  font-size: var(--text-4xl);
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.container-page .env-info-card strong {
+  display: block;
+  color: var(--color-accent);
+  font-size: var(--text-base);
+  margin-bottom: 2px;
+}
+
+.container-page .env-info-card p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.container-page .env-info-card code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
 }
 
 /* Sync Warning */

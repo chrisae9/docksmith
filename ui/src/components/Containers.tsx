@@ -769,6 +769,7 @@ export function Containers() {
           {c.pre_update_check_pass && <span className="check" title="Pre-update check passed"><i className="fa-solid fa-check"></i></span>}
           {c.pre_update_check_fail && <span className="warn" title={c.pre_update_check_fail}><i className="fa-solid fa-triangle-exclamation"></i></span>}
           {c.health_status === 'unhealthy' && <span className="warn" title="Container is unhealthy"><i className="fa-solid fa-heart-crack"></i></span>}
+          {c.env_controlled && <span className="label-icon env" title={`Image from .env: $${c.env_var_name || 'ENV'}`}><i className="fa-solid fa-file-code"></i></span>}
           {versionPin && <span className={`label-icon pin-${versionPin}`} title={`Version pinned to ${versionPin}`}><i className="fa-solid fa-thumbtack"></i></span>}
           {hasTagRegex && <span className="label-icon regex" title="Tag regex filter"><i className="fa-solid fa-filter"></i></span>}
           {hasPreUpdateScript && !c.pre_update_check_pass && !c.pre_update_check_fail && <span className="label-icon script" title="Pre-update script"><i className="fa-solid fa-terminal"></i></span>}

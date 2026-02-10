@@ -438,6 +438,9 @@ export function ContainerPage() {
       case 'UP_TO_DATE':
         return <span className="docksmith-badge current">Up to Date</span>;
       case 'UP_TO_DATE_PINNABLE':
+        if (docksmithData?.env_controlled) {
+          return <span className="docksmith-badge pinnable" title={`Image set by $${docksmithData.env_var_name || 'ENV'} in .env`}>Pinnable <i className="fa-solid fa-file-code"></i></span>;
+        }
         return <span className="docksmith-badge pinnable">Pinnable</span>;
       case 'LOCAL_IMAGE':
         return <span className="docksmith-badge local">Local Image</span>;
@@ -696,6 +699,38 @@ export function ContainerPage() {
               </section>
             )}
 
+            {/* Pinnable Version Card */}
+            {docksmithData?.status === 'UP_TO_DATE_PINNABLE' && docksmithData.recommended_tag && (
+              <section className="version-card">
+                <div className="version-info">
+                  <span className="version-current">
+                    {docksmithData.using_latest_tag ? 'latest' : (docksmithData.current_tag || 'untagged')}
+                  </span>
+                  <i className="fa-solid fa-arrow-right"></i>
+                  <span className="version-latest">{docksmithData.recommended_tag}</span>
+                </div>
+                {!hasChanges && (
+                  <button
+                    className="update-btn pin"
+                    onClick={() => navigate('/operation', {
+                      state: {
+                        update: {
+                          containers: [{
+                            name: docksmithData.container_name,
+                            target_version: docksmithData.recommended_tag || '',
+                            stack: docksmithData.stack || '',
+                          }]
+                        }
+                      }
+                    })}
+                  >
+                    <i className="fa-solid fa-thumbtack"></i>
+                    Pin
+                  </button>
+                )}
+              </section>
+            )}
+
             {/* Compose Mismatch Card */}
             {docksmithData?.status === 'COMPOSE_MISMATCH' && (
               <section className="mismatch-card">
@@ -743,6 +778,17 @@ export function ContainerPage() {
                   Sync
                 </button>
               </div>
+            )}
+
+            {/* Env-Controlled Info */}
+            {docksmithData?.env_controlled && docksmithData.env_var_name && (
+              <section className="env-info-card">
+                <i className="fa-solid fa-file-code"></i>
+                <div className="env-info-text">
+                  <strong>Env-Controlled Image</strong>
+                  <p>Image tag set by <code>${docksmithData.env_var_name}</code> in <code>.env</code>. Updates will modify this variable.</p>
+                </div>
+              </section>
             )}
 
             {/* Container Info */}
