@@ -1042,6 +1042,12 @@ textarea:focus-visible {
 }
 
 /* Dropdown Action Menu */
+.action-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-dropdown) - 1);
+}
+
 .action-menu {
   position: absolute;
   top: 100%;

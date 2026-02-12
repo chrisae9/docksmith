@@ -6,9 +6,6 @@ import {
   ConfirmRemove,
 } from '../shared';
 
-// Type fix for RefObject
-type RefCallback = React.RefObject<HTMLDivElement | null>;
-
 interface NetworkItemProps {
   network: NetworkInfo;
   isActive: boolean;
@@ -17,7 +14,7 @@ interface NetworkItemProps {
   onMenuToggle: () => void;
   onRemove: () => void;
   onConfirmRemove: () => void;
-  menuRef: RefCallback;
+  onClose: () => void;
 }
 
 export function NetworkItem({
@@ -28,7 +25,7 @@ export function NetworkItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  menuRef,
+  onClose,
 }: NetworkItemProps) {
   const containers = network.containers || [];
   const canRemove = !network.is_default && containers.length === 0;
@@ -47,13 +44,13 @@ export function NetworkItem({
         {network.is_default && <span className="badge default">Default</span>}
       </div>
       {!network.is_default && (
-        <div className="item-actions" ref={isActive ? menuRef : undefined}>
+        <div className="item-actions">
           <ActionMenuButton
             isActive={isActive}
             isLoading={isLoading}
             onClick={onMenuToggle}
           />
-          <ActionMenu isActive={isActive}>
+          <ActionMenu isActive={isActive} onClose={onClose}>
             {confirmRemove ? (
               <ConfirmRemove
                 onConfirm={onRemove}

@@ -7,9 +7,6 @@ import {
 } from '../shared';
 import { formatSize, isAnonymousVolume, truncateVolumeName } from './utils';
 
-// Type fix for RefObject
-type RefCallback = React.RefObject<HTMLDivElement | null>;
-
 interface VolumeItemProps {
   volume: VolumeInfo;
   isActive: boolean;
@@ -18,7 +15,7 @@ interface VolumeItemProps {
   onMenuToggle: () => void;
   onRemove: (force?: boolean) => void;
   onConfirmRemove: () => void;
-  menuRef: RefCallback;
+  onClose: () => void;
 }
 
 export function VolumeItem({
@@ -29,7 +26,7 @@ export function VolumeItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  menuRef,
+  onClose,
 }: VolumeItemProps) {
   const containers = volume.containers || [];
   const inUse = containers.length > 0;
@@ -51,13 +48,13 @@ export function VolumeItem({
       <div className="item-badges">
         {!inUse && <span className="badge unused">Unused</span>}
       </div>
-      <div className="item-actions" ref={isActive ? menuRef : undefined}>
+      <div className="item-actions">
         <ActionMenuButton
           isActive={isActive}
           isLoading={isLoading}
           onClick={onMenuToggle}
         />
-        <ActionMenu isActive={isActive}>
+        <ActionMenu isActive={isActive} onClose={onClose}>
           {confirmRemove ? (
             <ConfirmRemove
               onConfirm={() => onRemove(inUse)}

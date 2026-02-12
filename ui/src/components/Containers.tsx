@@ -141,9 +141,7 @@ export function Containers() {
   const [showSettings, setShowSettings] = useState(false);
   const [activeActionMenu, setActiveActionMenu] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  const menuJustClosedRef = useRef(false);
 
   // Resource action menu state
   const [activeImageMenu, setActiveImageMenu] = useState<string | null>(null);
@@ -158,7 +156,6 @@ export function Containers() {
 
   // Stack action menu
   const [activeStackMenu, setActiveStackMenu] = useState<string | null>(null);
-  const stackMenuRef = useRef<HTMLDivElement>(null);
 
   // Prune state
   const [pruneLoading, setPruneLoading] = useState(false);
@@ -208,30 +205,17 @@ export function Containers() {
     setViewSettings(prev => ({ ...prev, ...updates }));
   };
 
-  // Close menus on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        if (activeActionMenu) {
-          menuJustClosedRef.current = true;
-          requestAnimationFrame(() => { menuJustClosedRef.current = false; });
-        }
-        setActiveActionMenu(null);
-        setConfirmRemove(null);
-        setActiveImageMenu(null);
-        setActiveNetworkMenu(null);
-        setActiveVolumeMenu(null);
-        setConfirmImageRemove(null);
-        setConfirmNetworkRemove(null);
-        setConfirmVolumeRemove(null);
-      }
-      if (stackMenuRef.current && !stackMenuRef.current.contains(event.target as Node)) {
-        setActiveStackMenu(null);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [activeActionMenu]);
+  const closeAllMenus = useCallback(() => {
+    setActiveActionMenu(null);
+    setConfirmRemove(null);
+    setActiveImageMenu(null);
+    setActiveNetworkMenu(null);
+    setActiveVolumeMenu(null);
+    setConfirmImageRemove(null);
+    setConfirmNetworkRemove(null);
+    setConfirmVolumeRemove(null);
+    setActiveStackMenu(null);
+  }, []);
 
   // === Container filtering ===
   const filterContainer = useCallback((c: UnifiedContainerItem) => {
@@ -759,7 +743,7 @@ export function Containers() {
           className="row-link"
           role="button"
           tabIndex={0}
-          onClick={(e) => { if (menuJustClosedRef.current) { e.preventDefault(); return; } navigateToContainer(c.name); }}
+          onClick={() => navigateToContainer(c.name)}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigateToContainer(c.name); } }}
         >
           <div className="container-info">
@@ -776,9 +760,9 @@ export function Containers() {
           {allowsLatest && <span className="label-icon latest" title="Allows :latest"><i className="fa-solid fa-tag"></i></span>}
           {getStatusBadge(c)}
         </div>
-        <div className="item-actions" ref={isActive ? menuRef : undefined}>
+        <div className="item-actions">
           <ActionMenuButton isActive={isActive} isLoading={false} onClick={() => { setActiveActionMenu(isActive ? null : c.name); setConfirmRemove(null); }} />
-          <ActionMenu isActive={isActive}>
+          <ActionMenu isActive={isActive} onClose={closeAllMenus}>
             {isRunning ? (
               <>
                 <ActionMenuItem icon="fa-stop" label="Stop" onClick={() => handleContainerAction(c.name, 'stop')} />
@@ -892,9 +876,9 @@ export function Containers() {
                 {explorerSettings.containers.groupBy === 'stack' && groupName !== '_standalone' && (() => {
                   const isMenuActive = activeStackMenu === groupName;
                   return (
-                    <div className="stack-actions" ref={isMenuActive ? stackMenuRef : undefined} onClick={(e) => e.stopPropagation()}>
+                    <div className="stack-actions" onClick={(e) => e.stopPropagation()}>
                       <ActionMenuButton isActive={isMenuActive} isLoading={false} onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
-                      <ActionMenu isActive={isMenuActive}>
+                      <ActionMenu isActive={isMenuActive} onClose={closeAllMenus}>
                         {hasRunningContainers(items) && (
                           <>
                             <ActionMenuItem icon="fa-stop" label="Stop Stack" onClick={() => handleStackAction(groupName, 'stop')} />
@@ -932,7 +916,7 @@ export function Containers() {
           {flatImages.map(img => (
             <ImageItem key={img.id} image={img} isActive={activeImageMenu === img.id} isLoading={imageLoading === img.id} confirmRemove={confirmImageRemove === img.id}
               onMenuToggle={() => { setActiveImageMenu(activeImageMenu === img.id ? null : img.id); setConfirmImageRemove(null); }}
-              onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} menuRef={menuRef} />
+              onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} onClose={closeAllMenus} />
           ))}
           {flatImages.length === 0 && <li className="explorer-empty">No images found</li>}
         </ul>
@@ -946,7 +930,7 @@ export function Containers() {
             {imgs.map(img => (
               <ImageItem key={img.id} image={img} isActive={activeImageMenu === img.id} isLoading={imageLoading === img.id} confirmRemove={confirmImageRemove === img.id}
                 onMenuToggle={() => { setActiveImageMenu(activeImageMenu === img.id ? null : img.id); setConfirmImageRemove(null); }}
-                onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} menuRef={menuRef} />
+                onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} onClose={closeAllMenus} />
             ))}
           </StackGroup>
         ))}
@@ -965,7 +949,7 @@ export function Containers() {
           {flatNets.map(n => (
             <NetworkItem key={n.id} network={n} isActive={activeNetworkMenu === n.id} isLoading={networkLoading === n.id} confirmRemove={confirmNetworkRemove === n.id}
               onMenuToggle={() => { setActiveNetworkMenu(activeNetworkMenu === n.id ? null : n.id); setConfirmNetworkRemove(null); }}
-              onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} menuRef={menuRef} />
+              onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} onClose={closeAllMenus} />
           ))}
           {flatNets.length === 0 && <li className="explorer-empty">No networks found</li>}
         </ul>
@@ -979,7 +963,7 @@ export function Containers() {
             {nets.map(n => (
               <NetworkItem key={n.id} network={n} isActive={activeNetworkMenu === n.id} isLoading={networkLoading === n.id} confirmRemove={confirmNetworkRemove === n.id}
                 onMenuToggle={() => { setActiveNetworkMenu(activeNetworkMenu === n.id ? null : n.id); setConfirmNetworkRemove(null); }}
-                onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} menuRef={menuRef} />
+                onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} onClose={closeAllMenus} />
             ))}
           </StackGroup>
         ))}
@@ -998,7 +982,7 @@ export function Containers() {
           {flatVols.map(v => (
             <VolumeItem key={v.name} volume={v} isActive={activeVolumeMenu === v.name} isLoading={volumeLoading === v.name} confirmRemove={confirmVolumeRemove === v.name}
               onMenuToggle={() => { setActiveVolumeMenu(activeVolumeMenu === v.name ? null : v.name); setConfirmVolumeRemove(null); }}
-              onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} menuRef={menuRef} />
+              onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} onClose={closeAllMenus} />
           ))}
           {flatVols.length === 0 && <li className="explorer-empty">No volumes found</li>}
         </ul>
@@ -1012,7 +996,7 @@ export function Containers() {
             {vols.map(v => (
               <VolumeItem key={v.name} volume={v} isActive={activeVolumeMenu === v.name} isLoading={volumeLoading === v.name} confirmRemove={confirmVolumeRemove === v.name}
                 onMenuToggle={() => { setActiveVolumeMenu(activeVolumeMenu === v.name ? null : v.name); setConfirmVolumeRemove(null); }}
-                onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} menuRef={menuRef} />
+                onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} onClose={closeAllMenus} />
             ))}
           </StackGroup>
         ))}

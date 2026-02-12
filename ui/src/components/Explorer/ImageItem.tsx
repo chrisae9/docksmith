@@ -7,9 +7,6 @@ import {
 } from '../shared';
 import { formatSize, formatRelativeTime, truncateId } from './utils';
 
-// Type fix for RefObject
-type RefCallback = React.RefObject<HTMLDivElement | null>;
-
 interface ImageItemProps {
   image: ImageInfo;
   isActive: boolean;
@@ -18,7 +15,7 @@ interface ImageItemProps {
   onMenuToggle: () => void;
   onRemove: (force?: boolean) => void;
   onConfirmRemove: () => void;
-  menuRef: RefCallback;
+  onClose: () => void;
 }
 
 export function ImageItem({
@@ -29,7 +26,7 @@ export function ImageItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  menuRef,
+  onClose,
 }: ImageItemProps) {
   const tags = image.tags || [];
   const primaryTag = tags.length > 0 ? tags[0] : `<none> (${truncateId(image.id)})`;
@@ -47,13 +44,13 @@ export function ImageItem({
         {image.in_use && <span className="badge in-use">In Use</span>}
         {image.dangling && <span className="badge dangling">Dangling</span>}
       </div>
-      <div className="item-actions" ref={isActive ? menuRef : undefined}>
+      <div className="item-actions">
         <ActionMenuButton
           isActive={isActive}
           isLoading={isLoading}
           onClick={onMenuToggle}
         />
-        <ActionMenu isActive={isActive}>
+        <ActionMenu isActive={isActive} onClose={onClose}>
           {confirmRemove ? (
             <ConfirmRemove
               onConfirm={() => onRemove(image.in_use)}

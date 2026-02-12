@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ActionMenuButtonProps {
   isActive: boolean;
@@ -39,11 +40,11 @@ export function ActionMenuButton({
 interface ActionMenuProps {
   isActive: boolean;
   menuRef?: RefObject<HTMLDivElement | null>;
+  onClose?: () => void;
   children: ReactNode;
 }
 
-export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
-  // Note: Add role="menu" for proper ARIA semantics
+export function ActionMenu({ isActive, menuRef, onClose, children }: ActionMenuProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const [flipUp, setFlipUp] = useState(false);
 
@@ -53,16 +54,14 @@ export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
       return;
     }
 
-    // Check if menu would be cut off at bottom of viewport
     const checkPosition = () => {
       const menu = internalRef.current;
       if (!menu) return;
 
       const rect = menu.getBoundingClientRect();
       const viewportHeight = window.innerHeight;
-      const bottomNavHeight = 70; // Account for bottom navigation bar
+      const bottomNavHeight = 70;
 
-      // If menu bottom would be below viewport (minus nav), flip it up
       if (rect.bottom > viewportHeight - bottomNavHeight) {
         setFlipUp(true);
       } else {
@@ -70,27 +69,34 @@ export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
       }
     };
 
-    // useLayoutEffect runs synchronously after DOM mutations,
-    // so the ref should be set by now
     checkPosition();
   }, [isActive]);
 
   if (!isActive) return null;
 
   return (
-    <div
-      className={`action-menu ${flipUp ? 'flip-up' : ''}`}
-      role="menu"
-      ref={(node) => {
-        // Support both internal ref and passed menuRef
-        (internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-        if (menuRef && 'current' in menuRef) {
-          (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-        }
-      }}
-    >
-      {children}
-    </div>
+    <>
+      {onClose && createPortal(
+        <div
+          className="action-menu-backdrop"
+          onClick={() => onClose()}
+          onMouseDown={(e) => e.preventDefault()}
+        />,
+        document.body
+      )}
+      <div
+        className={`action-menu ${flipUp ? 'flip-up' : ''}`}
+        role="menu"
+        ref={(node) => {
+          (internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+          if (menuRef && 'current' in menuRef) {
+            (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+          }
+        }}
+      >
+        {children}
+      </div>
+    </>
   );
 }
 
