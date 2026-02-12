@@ -230,6 +230,14 @@
   cursor: not-allowed;
 }
 
+.bulk-actions-menu button.danger {
+  color: var(--color-danger);
+}
+
+.bulk-actions-menu button.danger i {
+  color: var(--color-danger);
+}
+
 .bulk-actions-menu button i {
   width: 20px;
   text-align: center;

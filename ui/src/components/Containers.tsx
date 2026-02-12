@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useContainersData } from '../hooks/useContainersData';
@@ -216,6 +217,39 @@ export function Containers() {
     setConfirmVolumeRemove(null);
     setActiveStackMenu(null);
   }, []);
+
+  // Document-level menu dismiss: close menus on outside click and prevent click-through.
+  // Listeners stay always-attached; a ref tracks menu state so React's batched re-render
+  // (which runs between pointerdown and click via microtask) can't remove the click handler.
+  const menuDismissFlag = useRef(false);
+  const anyMenuOpenRef = useRef(false);
+  anyMenuOpenRef.current = !!(activeActionMenu || activeImageMenu || activeNetworkMenu || activeVolumeMenu || activeStackMenu);
+
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (!anyMenuOpenRef.current) return;
+      const target = e.target as Element;
+      if (target.closest('.action-menu, .action-menu-btn, .stack-actions')) return;
+      menuDismissFlag.current = true;
+      closeAllMenus();
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (menuDismissFlag.current) {
+        menuDismissFlag.current = false;
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('click', onClick, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('click', onClick, true);
+      menuDismissFlag.current = false;
+    };
+  }, [closeAllMenus]);
 
   // === Container filtering ===
   const filterContainer = useCallback((c: UnifiedContainerItem) => {
@@ -762,7 +796,7 @@ export function Containers() {
         </div>
         <div className="item-actions">
           <ActionMenuButton isActive={isActive} isLoading={false} onClick={() => { setActiveActionMenu(isActive ? null : c.name); setConfirmRemove(null); }} />
-          <ActionMenu isActive={isActive} onClose={closeAllMenus}>
+          <ActionMenu isActive={isActive}>
             {isRunning ? (
               <>
                 <ActionMenuItem icon="fa-stop" label="Stop" onClick={() => handleContainerAction(c.name, 'stop')} />
@@ -878,7 +912,7 @@ export function Containers() {
                   return (
                     <div className="stack-actions" onClick={(e) => e.stopPropagation()}>
                       <ActionMenuButton isActive={isMenuActive} isLoading={false} onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
-                      <ActionMenu isActive={isMenuActive} onClose={closeAllMenus}>
+                      <ActionMenu isActive={isMenuActive}>
                         {hasRunningContainers(items) && (
                           <>
                             <ActionMenuItem icon="fa-stop" label="Stop Stack" onClick={() => handleStackAction(groupName, 'stop')} />
@@ -916,7 +950,7 @@ export function Containers() {
           {flatImages.map(img => (
             <ImageItem key={img.id} image={img} isActive={activeImageMenu === img.id} isLoading={imageLoading === img.id} confirmRemove={confirmImageRemove === img.id}
               onMenuToggle={() => { setActiveImageMenu(activeImageMenu === img.id ? null : img.id); setConfirmImageRemove(null); }}
-              onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} onClose={closeAllMenus} />
+              onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} />
           ))}
           {flatImages.length === 0 && <li className="explorer-empty">No images found</li>}
         </ul>
@@ -930,7 +964,7 @@ export function Containers() {
             {imgs.map(img => (
               <ImageItem key={img.id} image={img} isActive={activeImageMenu === img.id} isLoading={imageLoading === img.id} confirmRemove={confirmImageRemove === img.id}
                 onMenuToggle={() => { setActiveImageMenu(activeImageMenu === img.id ? null : img.id); setConfirmImageRemove(null); }}
-                onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} onClose={closeAllMenus} />
+                onRemove={(f?: boolean) => handleImageRemove(img.id, f)} onConfirmRemove={() => setConfirmImageRemove(img.id)} />
             ))}
           </StackGroup>
         ))}
@@ -949,7 +983,7 @@ export function Containers() {
           {flatNets.map(n => (
             <NetworkItem key={n.id} network={n} isActive={activeNetworkMenu === n.id} isLoading={networkLoading === n.id} confirmRemove={confirmNetworkRemove === n.id}
               onMenuToggle={() => { setActiveNetworkMenu(activeNetworkMenu === n.id ? null : n.id); setConfirmNetworkRemove(null); }}
-              onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} onClose={closeAllMenus} />
+              onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} />
           ))}
           {flatNets.length === 0 && <li className="explorer-empty">No networks found</li>}
         </ul>
@@ -963,7 +997,7 @@ export function Containers() {
             {nets.map(n => (
               <NetworkItem key={n.id} network={n} isActive={activeNetworkMenu === n.id} isLoading={networkLoading === n.id} confirmRemove={confirmNetworkRemove === n.id}
                 onMenuToggle={() => { setActiveNetworkMenu(activeNetworkMenu === n.id ? null : n.id); setConfirmNetworkRemove(null); }}
-                onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} onClose={closeAllMenus} />
+                onRemove={() => handleNetworkRemove(n.id)} onConfirmRemove={() => setConfirmNetworkRemove(n.id)} />
             ))}
           </StackGroup>
         ))}
@@ -982,7 +1016,7 @@ export function Containers() {
           {flatVols.map(v => (
             <VolumeItem key={v.name} volume={v} isActive={activeVolumeMenu === v.name} isLoading={volumeLoading === v.name} confirmRemove={confirmVolumeRemove === v.name}
               onMenuToggle={() => { setActiveVolumeMenu(activeVolumeMenu === v.name ? null : v.name); setConfirmVolumeRemove(null); }}
-              onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} onClose={closeAllMenus} />
+              onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} />
           ))}
           {flatVols.length === 0 && <li className="explorer-empty">No volumes found</li>}
         </ul>
@@ -996,7 +1030,7 @@ export function Containers() {
             {vols.map(v => (
               <VolumeItem key={v.name} volume={v} isActive={activeVolumeMenu === v.name} isLoading={volumeLoading === v.name} confirmRemove={confirmVolumeRemove === v.name}
                 onMenuToggle={() => { setActiveVolumeMenu(activeVolumeMenu === v.name ? null : v.name); setConfirmVolumeRemove(null); }}
-                onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} onClose={closeAllMenus} />
+                onRemove={(f?: boolean) => handleVolumeRemove(v.name, f)} onConfirmRemove={() => setConfirmVolumeRemove(v.name)} />
             ))}
           </StackGroup>
         ))}
@@ -1323,7 +1357,10 @@ export function Containers() {
                 </button>
                 {showBulkActions && (
                   <>
-                    <div className="settings-menu-backdrop" onClick={() => setShowBulkActions(false)} />
+                    {createPortal(
+                      <div className="action-menu-backdrop" onClick={() => setShowBulkActions(false)} />,
+                      document.body
+                    )}
                     <div className="bulk-actions-menu">
                       {selectedAnalysis.hasStopped && (
                         <button onClick={() => handleBulkAction('start')}><i className="fa-solid fa-play"></i> Start</button>
@@ -1332,6 +1369,7 @@ export function Containers() {
                         <button onClick={() => handleBulkAction('stop')}><i className="fa-solid fa-stop"></i> Stop</button>
                       )}
                       <button onClick={() => handleBulkAction('restart')}><i className="fa-solid fa-rotate"></i> Restart</button>
+                      <button onClick={() => handleBulkAction('remove')} className="danger"><i className="fa-solid fa-trash"></i> Remove</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Labels</span>
                       <button onClick={() => handleBulkLabel({ ignore: true })}><i className="fa-solid fa-eye-slash"></i> Ignore</button>
