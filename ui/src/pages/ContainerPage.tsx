@@ -201,20 +201,57 @@ export function ContainerPage() {
     }
   }, [containerName]);
 
-  // Fetch logs
-  const fetchLogs = useCallback(async () => {
-    setLogsLoading(true);
+  // Ref to hold the streaming AbortController so we can cancel from anywhere
+  const streamAbortRef = useRef<AbortController | null>(null);
+
+  // Fetch initial logs then start streaming
+  const fetchLogs = useCallback(async (showSpinner = true) => {
+    // Cancel any existing stream
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+
+    if (showSpinner) setLogsLoading(true);
     try {
       const response = await getContainerLogs(containerName, { tail: tailLines });
       if (response.success && response.data) {
         setLogs(response.data.logs);
       } else {
         setLogs(`Error: ${response.error || 'Failed to fetch logs'}`);
+        return;
       }
     } catch (err) {
       setLogs(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      return;
     } finally {
-      setLogsLoading(false);
+      if (showSpinner) setLogsLoading(false);
+    }
+
+    // Start streaming new logs with follow=true&tail=0
+    const abortController = new AbortController();
+    streamAbortRef.current = abortController;
+
+    try {
+      const streamRes = await fetch(
+        `/api/containers/${encodeURIComponent(containerName)}/logs?follow=true&tail=0`,
+        { signal: abortController.signal }
+      );
+      if (!streamRes.ok || !streamRes.body) return;
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (chunk) {
+          setLogs(prev => prev + chunk);
+        }
+      }
+    } catch {
+      // AbortError is expected on cleanup, ignore all stream errors
     }
   }, [containerName, tailLines]);
 
@@ -244,17 +281,27 @@ export function ContainerPage() {
     }
   }, [location.state, location.pathname, navigate]);
 
-  // Fetch logs when tab changes
+  // Fetch logs + start streaming when logs tab is active
   useEffect(() => {
-    if (activeTab === 'logs') {
-      fetchLogs();
-    }
+    if (activeTab !== 'logs') return;
+    fetchLogs(true);
+    return () => {
+      // Cancel stream when leaving logs tab
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort();
+        streamAbortRef.current = null;
+      }
+    };
   }, [activeTab, fetchLogs]);
 
   // Auto-scroll logs
   useEffect(() => {
     if (autoScroll && logsViewerRef.current) {
-      logsViewerRef.current.scrollTop = logsViewerRef.current.scrollHeight;
+      requestAnimationFrame(() => {
+        if (logsViewerRef.current) {
+          logsViewerRef.current.scrollTop = logsViewerRef.current.scrollHeight;
+        }
+      });
     }
   }, [logs, autoScroll]);
 
@@ -1324,7 +1371,7 @@ export function ContainerPage() {
                 </label>
               </div>
               <div className="logs-actions">
-                <button onClick={fetchLogs} disabled={logsLoading} title="Refresh">
+                <button onClick={() => fetchLogs(true)} disabled={logsLoading} title="Refresh">
                   <i className={`fa-solid fa-rotate ${logsLoading ? 'fa-spin' : ''}`}></i>
                 </button>
                 <button onClick={downloadLogs} title="Download">
