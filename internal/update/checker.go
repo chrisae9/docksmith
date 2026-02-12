@@ -664,6 +664,25 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		log.Printf("Container %s: Using findLatestVersion as resolved version: %s", container.Name, latestVersion)
 	}
 
+	// For meta tag containers, prefer findLatestVersion over digest-based resolution
+	// when both resolve to the same version — findLatestVersion respects type filtering
+	// and avoids picking wrong tag variants (e.g., "v2026.2.9" vs "2026.2.9")
+	if isMetaTag(checkTag) && update.LatestResolvedVersion != "" && latestVersion != "" && latestVersion != "latest" && update.LatestResolvedVersion != latestVersion {
+		resolvedVer := c.versionParser.ParseTag(update.LatestResolvedVersion)
+		findLatestVer := c.versionParser.ParseTag(latestVersion)
+		if resolvedVer != nil && findLatestVer != nil &&
+			resolvedVer.Major == findLatestVer.Major &&
+			resolvedVer.Minor == findLatestVer.Minor &&
+			resolvedVer.Patch == findLatestVer.Patch {
+			log.Printf("Container %s: Correcting resolved version '%s' -> '%s' (same version, better tag match)",
+				container.Name, update.LatestResolvedVersion, latestVersion)
+			update.LatestResolvedVersion = latestVersion
+			if update.RecommendedTag != "" {
+				update.RecommendedTag = latestVersion
+			}
+		}
+	}
+
 	// Only do semantic version comparison if we haven't already determined status via digest check
 	if !digestCheckComplete {
 		// Compare versions if we have both

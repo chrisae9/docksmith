@@ -744,3 +744,69 @@ func (m *mockRegistryClient) ListTagsWithDigests(ctx context.Context, imageRef s
 	}
 	return mappings, nil
 }
+
+// TestLatestContainerDateTagResolution tests that a :latest container with both
+// date-format (2026.2.9) and v-prefixed (v2026.2.9) tags resolves to the date-format
+// tag, not the v-prefixed variant that may have an invalid manifest.
+func TestLatestContainerDateTagResolution(t *testing.T) {
+	mockDocker := &mockDockerClient{
+		containers: []docker.Container{
+			{
+				ID:    "openclaw-gateway",
+				Name:  "moltbot-openclaw-gateway-1",
+				Image: "ghcr.io/openclaw/openclaw:latest",
+			},
+		},
+		imageDigests: map[string]string{
+			"ghcr.io/openclaw/openclaw:latest": "sha256:olddigest111",
+		},
+		imageVersions: map[string]string{},
+		localImages:   map[string]bool{},
+	}
+
+	mockRegistry := &mockRegistryClient{
+		tags: map[string][]string{
+			"ghcr.io/openclaw/openclaw": {
+				"latest", "2026.2.9", "v2026.2.9", "2026.2.1", "v2026.2.1",
+			},
+		},
+		tagDigests: map[string]string{
+			// Latest digest differs from current → update available
+			"ghcr.io/openclaw/openclaw:latest": "sha256:newdigest222",
+		},
+		digestMappings: map[string]map[string][]string{
+			"ghcr.io/openclaw/openclaw": {
+				// resolveVersionFromDigest sees both tags sharing the same digest
+				"v2026.2.9": {"sha256:newdigest222"},
+				"2026.2.9":  {"sha256:newdigest222"},
+				"latest":    {"sha256:newdigest222"},
+			},
+		},
+	}
+
+	mockStore := newMockStorage()
+	checker := NewChecker(mockDocker, mockRegistry, mockStore)
+
+	ctx := context.Background()
+	result, err := checker.CheckForUpdates(ctx)
+	if err != nil {
+		t.Fatalf("CheckForUpdates failed: %v", err)
+	}
+
+	if len(result.Updates) != 1 {
+		t.Fatalf("Expected 1 update, got %d", len(result.Updates))
+	}
+
+	update := result.Updates[0]
+
+	if update.Status != UpdateAvailable {
+		t.Errorf("Expected UpdateAvailable, got %s", update.Status)
+	}
+
+	// The key assertion: LatestResolvedVersion should be "2026.2.9" (date-format),
+	// NOT "v2026.2.9" (which may have an invalid manifest in the registry)
+	if update.LatestResolvedVersion != "2026.2.9" {
+		t.Errorf("LatestResolvedVersion: got %q, want %q — should prefer date-format tag over v-prefixed variant",
+			update.LatestResolvedVersion, "2026.2.9")
+	}
+}
