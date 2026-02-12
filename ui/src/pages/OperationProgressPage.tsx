@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { startRestart, startStackRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup, batchSetLabels, batchStopContainers, batchRestartContainers, rollbackLabels } from '../api/client';
+import { startRestart, startStackRestart, setLabels as setLabelsAPI, triggerBatchUpdate, startContainer, stopContainer, removeContainer, fixComposeMismatch, getOperationsByGroup, batchSetLabels, batchStartContainers, batchStopContainers, batchRestartContainers, batchRemoveContainers, rollbackLabels } from '../api/client';
 import { useEventStream } from '../hooks/useEventStream';
 import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import { useElapsedTime } from '../hooks/useElapsedTime';
@@ -10,7 +10,7 @@ import '../styles/progress-common.css';
 import './OperationProgressPage.css';
 
 // Operation types
-type OperationType = 'restart' | 'update' | 'rollback' | 'start' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed' | 'batchLabel' | 'batchStop' | 'batchRestart' | 'labelRollback';
+type OperationType = 'restart' | 'update' | 'rollback' | 'start' | 'stop' | 'remove' | 'stackRestart' | 'stackStop' | 'fixMismatch' | 'batchFixMismatch' | 'mixed' | 'batchLabel' | 'batchStart' | 'batchStop' | 'batchRestart' | 'batchRemove' | 'labelRollback';
 
 // Restart operation info (includes save settings)
 interface RestartOperation {
@@ -127,6 +127,12 @@ interface BatchLabelOperation {
   };
 }
 
+// Batch start operation info (start multiple containers via batch endpoint)
+interface BatchStartOperation {
+  type: 'batchStart';
+  containers: string[];
+}
+
 // Batch stop operation info (stop multiple containers via batch endpoint)
 interface BatchStopOperation {
   type: 'batchStop';
@@ -139,6 +145,12 @@ interface BatchRestartOperation {
   containers: string[];
 }
 
+// Batch remove operation info (remove multiple containers via batch endpoint)
+interface BatchRemoveOperation {
+  type: 'batchRemove';
+  containers: string[];
+}
+
 // Label rollback operation info (reverse label changes from a previous batch)
 interface LabelRollbackOperation {
   type: 'labelRollback';
@@ -147,7 +159,7 @@ interface LabelRollbackOperation {
   containerNames?: string[]; // Optional: rollback specific containers only
 }
 
-type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StartOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation | BatchLabelOperation | BatchStopOperation | BatchRestartOperation | LabelRollbackOperation;
+type OperationInfo = RestartOperation | UpdateOperation | RollbackOperation | StartOperation | StopOperation | RemoveOperation | StackRestartOperation | StackStopOperation | FixMismatchOperation | BatchFixMismatchOperation | MixedOperation | BatchLabelOperation | BatchStartOperation | BatchStopOperation | BatchRestartOperation | BatchRemoveOperation | LabelRollbackOperation;
 
 export function OperationProgressPage() {
   const navigate = useNavigate();
@@ -198,11 +210,17 @@ export function OperationProgressPage() {
     if (state.batchLabel) {
       return { type: 'batchLabel', ...state.batchLabel };
     }
+    if (state.batchStart) {
+      return { type: 'batchStart', ...state.batchStart };
+    }
     if (state.batchStop) {
       return { type: 'batchStop', ...state.batchStop };
     }
     if (state.batchRestart) {
       return { type: 'batchRestart', ...state.batchRestart };
+    }
+    if (state.batchRemove) {
+      return { type: 'batchRemove', ...state.batchRemove };
     }
     if (state.labelRollback) {
       return { type: 'labelRollback', ...state.labelRollback };
@@ -964,11 +982,17 @@ export function OperationProgressPage() {
       case 'batchLabel':
         runBatchLabel(operationInfo as BatchLabelOperation);
         break;
+      case 'batchStart':
+        runBatchStart(operationInfo as BatchStartOperation);
+        break;
       case 'batchStop':
         runBatchStop(operationInfo as BatchStopOperation);
         break;
       case 'batchRestart':
         runBatchRestart(operationInfo as BatchRestartOperation);
+        break;
+      case 'batchRemove':
+        runBatchRemove(operationInfo as BatchRemoveOperation);
         break;
       case 'labelRollback':
         runLabelRollback(operationInfo as LabelRollbackOperation);
@@ -1746,6 +1770,69 @@ export function OperationProgressPage() {
     }
   };
 
+  // Run batch start operation (start multiple containers via batch endpoint)
+  const runBatchStart = async (info: BatchStartOperation) => {
+    const { containers: containerNames } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Starting...',
+    })));
+
+    addLog(`Starting ${containerNames.length} container(s)`, 'info', 'fa-play');
+
+    try {
+      const response = await batchStartContainers(containerNames);
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Batch start failed' });
+        addLog(`Batch start failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: 'Started successfully', percent: 100 });
+          if (result.operation_id) containerToOpIdRef.current.set(result.container, result.operation_id);
+          addLog(`${result.container}: Started successfully`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed to start`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Start completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`${successCount} container(s) started successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
   // Run batch stop operation (stop multiple containers via batch endpoint)
   const runBatchStop = async (info: BatchStopOperation) => {
     const { containers: containerNames } = info;
@@ -1862,6 +1949,69 @@ export function OperationProgressPage() {
         setStatus('success');
       } else {
         addLog(`${successCount} container(s) restarted successfully`, 'success', 'fa-circle-check');
+        setStatus('success');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      updateContainersWhere(() => true, { status: 'failed', message: errorMsg });
+      addLog(errorMsg, 'error', 'fa-circle-xmark');
+      setStatus('failed');
+    }
+  };
+
+  // Run batch remove operation (remove multiple containers via batch endpoint)
+  const runBatchRemove = async (info: BatchRemoveOperation) => {
+    const { containers: containerNames } = info;
+
+    setContainers(containerNames.map(name => ({
+      name,
+      status: 'in_progress' as const,
+      percent: 0,
+      message: 'Removing...',
+    })));
+
+    addLog(`Removing ${containerNames.length} container(s)`, 'info', 'fa-trash');
+
+    try {
+      const response = await batchRemoveContainers(containerNames, true);
+
+      if (!response.success) {
+        updateContainersWhere(() => true, { status: 'failed', message: response.error || 'Batch remove failed' });
+        addLog(`Batch remove failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+        return;
+      }
+
+      const batchGroupId = response.data?.batch_group_id;
+      if (batchGroupId) {
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      const results = response.data?.results || [];
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const result of results) {
+        if (result.success) {
+          updateContainer(result.container, { status: 'success', message: 'Removed successfully', percent: 100 });
+          if (result.operation_id) containerToOpIdRef.current.set(result.container, result.operation_id);
+          addLog(`${result.container}: Removed successfully`, 'success', 'fa-circle-check');
+          successCount++;
+        } else {
+          updateContainer(result.container, { status: 'failed', message: result.error || 'Failed', error: result.error });
+          addLog(`${result.container}: ${result.error || 'Failed'}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+        }
+      }
+
+      if (failedCount > 0 && successCount === 0) {
+        addLog(`All ${failedCount} container(s) failed to remove`, 'error', 'fa-circle-xmark');
+        setStatus('failed');
+      } else if (failedCount > 0) {
+        addLog(`Remove completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        setStatus('success');
+      } else {
+        addLog(`${successCount} container(s) removed successfully`, 'success', 'fa-circle-check');
         setStatus('success');
       }
     } catch (err) {
@@ -2400,8 +2550,10 @@ export function OperationProgressPage() {
       case 'batchFixMismatch': return 'Fixing Compose Mismatches';
       case 'mixed': return 'Processing Containers';
       case 'batchLabel': return 'Applying Labels';
+      case 'batchStart': return 'Starting Containers';
       case 'batchStop': return 'Stopping Containers';
       case 'batchRestart': return 'Restarting Containers';
+      case 'batchRemove': return 'Removing Containers';
       case 'labelRollback': return 'Rolling Back Labels';
       default: return 'Progress';
     }
@@ -2445,8 +2597,10 @@ export function OperationProgressPage() {
         case 'batchFixMismatch': return 'All compose mismatches fixed successfully!';
         case 'mixed': return 'All operations completed successfully!';
         case 'batchLabel': return 'Labels applied successfully!';
+        case 'batchStart': return 'All containers started successfully!';
         case 'batchStop': return 'All containers stopped successfully!';
         case 'batchRestart': return 'All containers restarted successfully!';
+        case 'batchRemove': return 'All containers removed successfully!';
         case 'labelRollback': return 'Labels restored successfully!';
         default: return 'Completed successfully!';
       }
@@ -2479,8 +2633,10 @@ export function OperationProgressPage() {
       case 'batchFixMismatch': return `Fixing ${(operationInfo as BatchFixMismatchOperation).containerNames.length} compose mismatch(es)...`;
       case 'mixed': return `Processing ${(operationInfo as MixedOperation).updates.length + (operationInfo as MixedOperation).mismatches.length} container(s)...`;
       case 'batchLabel': return `Applying labels to ${(operationInfo as BatchLabelOperation).containers.length} container(s)...`;
+      case 'batchStart': return `Starting ${(operationInfo as BatchStartOperation).containers.length} container(s)...`;
       case 'batchStop': return `Stopping ${(operationInfo as BatchStopOperation).containers.length} container(s)...`;
       case 'batchRestart': return `Restarting ${(operationInfo as BatchRestartOperation).containers.length} container(s)...`;
+      case 'batchRemove': return `Removing ${(operationInfo as BatchRemoveOperation).containers.length} container(s)...`;
       case 'labelRollback': return `Rolling back labels for ${(operationInfo as LabelRollbackOperation).containers.length} container(s)...`;
       default: return 'Processing...';
     }

@@ -568,6 +568,24 @@ export async function rollbackLabels(params: {
   });
 }
 
+// Batch start - start multiple containers with a shared batch_group_id
+export async function batchStartContainers(
+  containers: string[]
+): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    operation_id?: string;
+    error?: string;
+  }>;
+  batch_group_id: string;
+}>> {
+  return fetchAPI('/containers/batch/start', {
+    method: 'POST',
+    body: JSON.stringify({ containers }),
+  });
+}
+
 // Batch stop - stop multiple containers with a shared batch_group_id
 export async function batchStopContainers(
   containers: string[],
@@ -603,6 +621,25 @@ export async function batchRestartContainers(
   return fetchAPI('/containers/batch/restart', {
     method: 'POST',
     body: JSON.stringify({ containers, timeout }),
+  });
+}
+
+// Batch remove - remove multiple containers with a shared batch_group_id
+export async function batchRemoveContainers(
+  containers: string[],
+  force?: boolean
+): Promise<APIResponse<{
+  results: Array<{
+    container: string;
+    success: boolean;
+    operation_id?: string;
+    error?: string;
+  }>;
+  batch_group_id: string;
+}>> {
+  return fetchAPI('/containers/batch/remove', {
+    method: 'POST',
+    body: JSON.stringify({ containers, force }),
   });
 }
 

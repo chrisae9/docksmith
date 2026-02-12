@@ -494,14 +494,8 @@ export function Containers() {
       navigate('/operation', { state: { [action]: { containerName: names[0] } } });
     } else {
       // For multi-container ops, use batch endpoints
-      if (action === 'restart') {
-        navigate('/operation', { state: { batchRestart: { containers: names } } });
-      } else if (action === 'stop') {
-        navigate('/operation', { state: { batchStop: { containers: names } } });
-      } else {
-        // For start/remove, process first one (could extend later)
-        navigate('/operation', { state: { [action]: { containerName: names[0] } } });
-      }
+      const batchKey = `batch${action.charAt(0).toUpperCase()}${action.slice(1)}`;
+      navigate('/operation', { state: { [batchKey]: { containers: names } } });
     }
   };
 
