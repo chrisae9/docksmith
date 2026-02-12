@@ -46,13 +46,9 @@ export function ContainerPage() {
   const initialTab = (location.state as { tab?: TabId })?.tab || 'overview';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
-  // Use browser history to go back, preserving scroll/search state
+  // Navigate back to containers list
   const handleBack = useCallback(() => {
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      navigate('/');
-    }
+    navigate('/');
   }, [navigate]);
 
   // Core state
