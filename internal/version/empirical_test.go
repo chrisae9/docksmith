@@ -336,12 +336,12 @@ func TestDateBasedVersionTags(t *testing.T) {
 			versionType:   "date",
 		},
 		{
-			name:          "YYYY.M.D format (single digit) - parsed as semantic",
+			name:          "YYYY.M.D format (single digit) - parsed as date",
 			tag:           "2024.1.5",
 			expectedYear:  2024,
 			expectedMonth: 1,
 			expectedDay:   5,
-			versionType:   "semantic", // Single digit dates look like semantic versions
+			versionType:   "date", // Now correctly recognized as date (non-padded format supported)
 		},
 	}
 

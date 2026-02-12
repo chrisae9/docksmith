@@ -223,6 +223,7 @@ func TestParseTag(t *testing.T) {
 		expectMajor int
 		expectMinor int
 		expectPatch int
+		expectType  string // expected Version.Type ("semantic", "date", or "")
 	}{
 		{
 			name:        "simple semver",
@@ -230,6 +231,7 @@ func TestParseTag(t *testing.T) {
 			expectMajor: 1,
 			expectMinor: 2,
 			expectPatch: 3,
+			expectType:  "semantic",
 		},
 		{
 			name:        "with v prefix",
@@ -237,6 +239,7 @@ func TestParseTag(t *testing.T) {
 			expectMajor: 10,
 			expectMinor: 5,
 			expectPatch: 2,
+			expectType:  "semantic",
 		},
 		{
 			name:      "non-version tag",
@@ -247,6 +250,22 @@ func TestParseTag(t *testing.T) {
 			name:      "random string",
 			tag:       "stable-alpine",
 			expectNil: true,
+		},
+		{
+			name:        "date-format version (dot-separated)",
+			tag:         "2026.2.9",
+			expectMajor: 2026,
+			expectMinor: 2,
+			expectPatch: 9,
+			expectType:  "date",
+		},
+		{
+			name:        "date-format version with v prefix is semantic",
+			tag:         "v2026.2.9",
+			expectMajor: 2026,
+			expectMinor: 2,
+			expectPatch: 9,
+			expectType:  "semantic",
 		},
 	}
 
@@ -273,6 +292,9 @@ func TestParseTag(t *testing.T) {
 			}
 			if version.Patch != tt.expectPatch {
 				t.Errorf("Patch: got %d, want %d", version.Patch, tt.expectPatch)
+			}
+			if tt.expectType != "" && version.Type != tt.expectType {
+				t.Errorf("Type: got %q, want %q", version.Type, tt.expectType)
 			}
 		})
 	}

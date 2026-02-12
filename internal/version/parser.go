@@ -27,8 +27,8 @@ var (
 		pattern *regexp.Regexp
 		format  string
 	}{
-		{regexp.MustCompile(`^(\d{4})\.(\d{1,2})\.(\d{1,2})`), "2006.01.02"},
-		{regexp.MustCompile(`^(\d{4})-(\d{1,2})-(\d{1,2})`), "2006-01-02"},
+		{regexp.MustCompile(`^(\d{4})\.(\d{1,2})\.(\d{1,2})`), "2006.1.2"},
+		{regexp.MustCompile(`^(\d{4})-(\d{1,2})-(\d{1,2})`), "2006-1-2"},
 		{regexp.MustCompile(`^(\d{8})$`), "20060102"},
 		{regexp.MustCompile(`^(\d{4})(\d{2})(\d{2})`), "20060102"},
 	}
@@ -167,13 +167,14 @@ func (p *Parser) ParseImageTag(imageTag string) *TagInfo {
 // ParseTag extracts version information from just the tag portion.
 // Example: "1.21.3-alpine" -> version 1.21.3, suffix "alpine"
 func (p *Parser) ParseTag(tag string) *Version {
-	version, _ := p.extractVersion(tag)
-	if version != nil {
-		return version
+	// Try date-based version FIRST (consistent with ParseImageTag)
+	// Date versions can look like semantic versions (e.g., 2024.01.15 → 2024.1.15)
+	if dateVer := p.extractDateVersion(tag); dateVer != nil {
+		return dateVer
 	}
 
-	// Try date-based version
-	return p.extractDateVersion(tag)
+	version, _ := p.extractVersion(tag)
+	return version
 }
 
 // extractVersion attempts to extract a semantic version from a tag string.
