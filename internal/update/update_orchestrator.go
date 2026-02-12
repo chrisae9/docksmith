@@ -592,7 +592,8 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		return
 	}
 
-	o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Verifying health")
+	o.publishProgress(operationID, container.Name, stackName, "health_check", 80,
+		fmt.Sprintf("Checking health of %s", container.Name))
 
 	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
 		o.failOperation(ctx, operationID, "health_check", fmt.Sprintf("Health check failed: %v", err))
@@ -1156,12 +1157,15 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	}
 
 	// Phase 4: Health check (90-95%)
-	o.publishProgress(operationID, "", stackName, "health_check", 90, "Verifying container health")
+	for i, cont := range orderedContainers {
+		progress := 90 + (i * 5 / len(orderedContainers))
+		o.publishProgress(operationID, cont.Name, stackName, "health_check", progress,
+			fmt.Sprintf("Checking health of %s", cont.Name))
 
-	// Wait for all containers to be healthy
-	for _, cont := range orderedContainers {
 		if err := o.waitForHealthy(ctx, cont.Name, o.healthCheckCfg.Timeout); err != nil {
 			log.Printf("BATCH UPDATE: Health check warning for %s: %v", cont.Name, err)
+			o.publishProgress(operationID, cont.Name, stackName, "health_check", progress,
+				fmt.Sprintf("Health check warning for %s: %v", cont.Name, err))
 		}
 	}
 
@@ -2617,7 +2621,8 @@ func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID
 	}
 
 	// Health check
-	o.publishProgress(operationID, container.Name, stackName, "health_check", 80, "Verifying health")
+	o.publishProgress(operationID, container.Name, stackName, "health_check", 80,
+		fmt.Sprintf("Checking health of %s", container.Name))
 
 	if err := o.waitForHealthy(ctx, container.Name, o.healthCheckCfg.Timeout); err != nil {
 		o.failOperation(ctx, operationID, "health_check", fmt.Sprintf("Health check failed: %v", err))

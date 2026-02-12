@@ -252,8 +252,9 @@ export function OperationProgressPage() {
   const sawPendingRestartRef = useRef(false);
 
   // Calculate elapsed time
+  const [endTime, setEndTime] = useState<number | null>(null);
   const isRunning = startTime !== null && status === 'in_progress';
-  const elapsedTime = useElapsedTime(startTime, isRunning);
+  const elapsedTime = useElapsedTime(startTime, isRunning, endTime);
 
   // Auto-scroll logs
   useEffect(() => {
@@ -340,7 +341,7 @@ export function OperationProgressPage() {
                 containerList.push({
                   name: detail.container_name,
                   status: op.status === 'complete' ? 'success' : op.status === 'failed' ? 'failed' : 'in_progress',
-                  message: op.error_message || op.status,
+                  message: op.status === 'complete' ? 'Completed' : op.status === 'failed' ? (op.error_message || 'Failed') : 'In progress',
                   percent: op.status === 'complete' ? 100 : 50,
                   versionFrom: detail.old_version,
                   versionTo: detail.new_version,
@@ -352,7 +353,7 @@ export function OperationProgressPage() {
               containerList.push({
                 name: op.container_name || 'Unknown',
                 status: op.status === 'complete' ? 'success' : op.status === 'failed' ? 'failed' : 'in_progress',
-                message: op.error_message || op.status,
+                message: op.status === 'complete' ? 'Completed' : op.status === 'failed' ? (op.error_message || 'Failed') : 'In progress',
                 percent: op.status === 'complete' ? 100 : 50,
                 operationId: op.operation_id,
               });
@@ -367,9 +368,14 @@ export function OperationProgressPage() {
           const allDone = ops.every(op => op.status === 'complete' || op.status === 'failed');
 
           if (allComplete) {
+            // Use latest completed_at from all operations
+            const completedTimes = ops.filter(op => op.completed_at).map(op => new Date(op.completed_at!).getTime());
+            setEndTime(completedTimes.length > 0 ? Math.max(...completedTimes) : Date.now());
             setStatus('success');
             addLog('All operations completed successfully', 'success', 'fa-circle-check');
           } else if (allDone && anyFailed) {
+            const completedTimes = ops.filter(op => op.completed_at).map(op => new Date(op.completed_at!).getTime());
+            setEndTime(completedTimes.length > 0 ? Math.max(...completedTimes) : Date.now());
             setStatus('failed');
             addLog('Some operations failed', 'error', 'fa-circle-xmark');
           } else {
@@ -379,6 +385,7 @@ export function OperationProgressPage() {
             const pollGroupOperations = async () => {
               let attempts = 0;
               const maxAttempts = 120;
+              const loggedOps = new Set<string>();
 
               while (attempts < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
@@ -404,15 +411,24 @@ export function OperationProgressPage() {
                       setContainers(prev => prev.map(c =>
                         affectedNames.includes(c.name) ? { ...c, status: 'success', percent: 100, message: 'Completed' } : c
                       ));
+                      if (!loggedOps.has(op.operation_id)) {
+                        loggedOps.add(op.operation_id);
+                        addLog(`${affectedNames.join(', ')}: Update completed`, 'success', 'fa-circle-check');
+                      }
                     } else if (op.status === 'failed') {
                       setContainers(prev => prev.map(c =>
                         affectedNames.includes(c.name) ? { ...c, status: 'failed', message: op.error_message || 'Failed' } : c
                       ));
+                      if (!loggedOps.has(op.operation_id)) {
+                        loggedOps.add(op.operation_id);
+                        addLog(`${affectedNames.join(', ')}: ${op.error_message || 'Update failed'}`, 'error', 'fa-circle-xmark');
+                      }
                     }
                   }
 
                   if (pollAllDone) {
                     const pollAllComplete = pollOps.every(op => op.status === 'complete');
+                    setEndTime(Date.now());
                     setStatus(pollAllComplete ? 'success' : 'failed');
                     addLog(pollAllComplete ? 'All operations completed' : 'Some operations failed', pollAllComplete ? 'success' : 'error', pollAllComplete ? 'fa-circle-check' : 'fa-circle-xmark');
                     return;
@@ -469,9 +485,11 @@ export function OperationProgressPage() {
 
         // Update status based on operation status
         if (op.status === 'complete') {
+          setEndTime(op.completed_at ? new Date(op.completed_at).getTime() : Date.now());
           setStatus('success');
           addLog(op.error_message || 'Operation completed successfully', 'success', 'fa-circle-check');
         } else if (op.status === 'failed') {
+          setEndTime(op.completed_at ? new Date(op.completed_at).getTime() : Date.now());
           setStatus('failed');
           addLog(op.error_message || 'Operation failed', 'error', 'fa-circle-xmark');
         } else if (op.status === 'pending_restart') {
@@ -858,6 +876,7 @@ export function OperationProgressPage() {
 
       // For single container ops (restart/rollback), complete immediately
       if (operationType !== 'update') {
+        setEndTime(Date.now());
         setStatus('success');
         const successMsg = operationType === 'rollback' ? 'Rollback completed successfully' : 'Container restarted successfully';
         addLog(successMsg, 'success', 'fa-circle-check');
@@ -878,6 +897,7 @@ export function OperationProgressPage() {
 
       // For single container ops, fail immediately
       if (operationType !== 'update') {
+        setEndTime(Date.now());
         setStatus('failed');
         addLog(`Error: ${errorMessage}`, 'error', 'fa-circle-xmark');
 
@@ -1193,12 +1213,14 @@ export function OperationProgressPage() {
                   c => affectedContainers.includes(c.name) && c.status !== 'success',
                   { status: 'success', message: 'Updated successfully', percent: 100 }
                 );
+                addLog(`${affectedContainers.join(', ')}: Update completed`, 'success', 'fa-circle-check');
               } else if (op.status === 'failed') {
                 completed = true;
                 updateContainersWhere(
                   c => affectedContainers.includes(c.name) && c.status !== 'failed',
                   { status: 'failed', message: 'Update failed', error: op.error_message }
                 );
+                addLog(`${affectedContainers.join(', ')}: ${op.error_message || 'Update failed'}`, 'error', 'fa-circle-xmark');
               }
             }
           } catch {
@@ -1235,6 +1257,7 @@ export function OperationProgressPage() {
     }
 
     // Determine final status based on individual container results
+    setEndTime(Date.now());
     setContainers(prev => {
       const failedCount = prev.filter(c => c.status === 'failed').length;
       const successCount = prev.filter(c => c.status === 'success').length;
