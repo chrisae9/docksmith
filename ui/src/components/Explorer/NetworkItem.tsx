@@ -14,7 +14,6 @@ interface NetworkItemProps {
   onMenuToggle: () => void;
   onRemove: () => void;
   onConfirmRemove: () => void;
-  onClose: () => void;
 }
 
 export function NetworkItem({
@@ -25,7 +24,6 @@ export function NetworkItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  onClose,
 }: NetworkItemProps) {
   const containers = network.containers || [];
   const canRemove = !network.is_default && containers.length === 0;
@@ -50,7 +48,7 @@ export function NetworkItem({
             isLoading={isLoading}
             onClick={onMenuToggle}
           />
-          <ActionMenu isActive={isActive} onClose={onClose}>
+          <ActionMenu isActive={isActive}>
             {confirmRemove ? (
               <ConfirmRemove
                 onConfirm={onRemove}

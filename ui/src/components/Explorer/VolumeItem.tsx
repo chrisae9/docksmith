@@ -15,7 +15,6 @@ interface VolumeItemProps {
   onMenuToggle: () => void;
   onRemove: (force?: boolean) => void;
   onConfirmRemove: () => void;
-  onClose: () => void;
 }
 
 export function VolumeItem({
@@ -26,7 +25,6 @@ export function VolumeItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  onClose,
 }: VolumeItemProps) {
   const containers = volume.containers || [];
   const inUse = containers.length > 0;
@@ -54,7 +52,7 @@ export function VolumeItem({
           isLoading={isLoading}
           onClick={onMenuToggle}
         />
-        <ActionMenu isActive={isActive} onClose={onClose}>
+        <ActionMenu isActive={isActive}>
           {confirmRemove ? (
             <ConfirmRemove
               onConfirm={() => onRemove(inUse)}

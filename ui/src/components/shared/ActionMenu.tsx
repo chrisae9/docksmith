@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { createPortal } from 'react-dom';
 
 interface ActionMenuButtonProps {
   isActive: boolean;
@@ -40,11 +39,10 @@ export function ActionMenuButton({
 interface ActionMenuProps {
   isActive: boolean;
   menuRef?: RefObject<HTMLDivElement | null>;
-  onClose?: () => void;
   children: ReactNode;
 }
 
-export function ActionMenu({ isActive, menuRef, onClose, children }: ActionMenuProps) {
+export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
   const internalRef = useRef<HTMLDivElement>(null);
   const [flipUp, setFlipUp] = useState(false);
 
@@ -75,28 +73,18 @@ export function ActionMenu({ isActive, menuRef, onClose, children }: ActionMenuP
   if (!isActive) return null;
 
   return (
-    <>
-      {onClose && createPortal(
-        <div
-          className="action-menu-backdrop"
-          onClick={() => onClose()}
-          onMouseDown={(e) => e.preventDefault()}
-        />,
-        document.body
-      )}
-      <div
-        className={`action-menu ${flipUp ? 'flip-up' : ''}`}
-        role="menu"
-        ref={(node) => {
-          (internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-          if (menuRef && 'current' in menuRef) {
-            (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-          }
-        }}
-      >
-        {children}
-      </div>
-    </>
+    <div
+      className={`action-menu ${flipUp ? 'flip-up' : ''}`}
+      role="menu"
+      ref={(node) => {
+        (internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+        if (menuRef && 'current' in menuRef) {
+          (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+        }
+      }}
+    >
+      {children}
+    </div>
   );
 }
 

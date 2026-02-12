@@ -15,7 +15,6 @@ interface ImageItemProps {
   onMenuToggle: () => void;
   onRemove: (force?: boolean) => void;
   onConfirmRemove: () => void;
-  onClose: () => void;
 }
 
 export function ImageItem({
@@ -26,7 +25,6 @@ export function ImageItem({
   onMenuToggle,
   onRemove,
   onConfirmRemove,
-  onClose,
 }: ImageItemProps) {
   const tags = image.tags || [];
   const primaryTag = tags.length > 0 ? tags[0] : `<none> (${truncateId(image.id)})`;
@@ -50,7 +48,7 @@ export function ImageItem({
           isLoading={isLoading}
           onClick={onMenuToggle}
         />
-        <ActionMenu isActive={isActive} onClose={onClose}>
+        <ActionMenu isActive={isActive}>
           {confirmRemove ? (
             <ConfirmRemove
               onConfirm={() => onRemove(image.in_use)}
