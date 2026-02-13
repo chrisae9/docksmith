@@ -131,7 +131,11 @@ func NewServer(cfg Config) *Server {
 	var rateLimiter *PathRateLimiter
 	disableRateLimit := os.Getenv("DOCKSMITH_DISABLE_RATE_LIMIT") == "true"
 	if !disableRateLimit {
-		rateLimiter = NewPathRateLimiter(DefaultRateLimitConfig())
+		rateLimiter = NewPathRateLimiter(RateLimitConfig{
+			RequestsPerMinute: 120,
+			BurstSize:         30,
+			CleanupInterval:   5 * time.Minute,
+		})
 		// Allow higher rate for SSE events endpoint (long-lived connections)
 		rateLimiter.SetPathLimit("/api/events", RateLimitConfig{
 			RequestsPerMinute: 10,
@@ -142,12 +146,6 @@ func NewServer(cfg Config) *Server {
 		rateLimiter.SetPathLimit("/api/health", RateLimitConfig{
 			RequestsPerMinute: 120,
 			BurstSize:         20,
-			CleanupInterval:   5 * time.Minute,
-		})
-		// Lower rate for mutation endpoints
-		rateLimiter.SetPathLimit("/api/update", RateLimitConfig{
-			RequestsPerMinute: 30,
-			BurstSize:         5,
 			CleanupInterval:   5 * time.Minute,
 		})
 	} else {

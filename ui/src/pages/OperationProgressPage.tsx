@@ -247,6 +247,7 @@ export function OperationProgressPage() {
   const [operationId, setOperationId] = useState<string | null>(urlOperationId);
   const [canForceRetry, setCanForceRetry] = useState(false);
   const [forceRetryMessage, setForceRetryMessage] = useState<string>('');
+  const [canRetry, setCanRetry] = useState(false);
   const [recoveredOperation, setRecoveredOperation] = useState<any>(null);
 
   // Dependent container tracking
@@ -1172,6 +1173,7 @@ export function OperationProgressPage() {
         );
         addLog(`Batch update failed: ${response.error}`, 'error', 'fa-circle-xmark');
         setStatus('failed');
+        setCanRetry(true);
         return;
       }
 
@@ -2464,6 +2466,21 @@ export function OperationProgressPage() {
     window.location.reload();
   };
 
+  // Handle simple retry (e.g., after rate limit error)
+  const handleRetry = () => {
+    if (!operationInfo) return;
+
+    // Navigate with same state to retry
+    navigate('/operation', {
+      state: {
+        [operationInfo.type]: operationInfo,
+      },
+      replace: true,
+    });
+
+    window.location.reload();
+  };
+
   // Detect completion from SSE events for batch updates
   // This avoids waiting for the polling interval when all containers are done
   useEffect(() => {
@@ -2787,6 +2804,22 @@ export function OperationProgressPage() {
             >
               <i className="fa-solid fa-triangle-exclamation"></i>
               {getForceButtonLabel()}
+            </button>
+          </div>
+        ) : canRetry ? (
+          <div className="footer-buttons">
+            <button
+              className="button button-secondary"
+              onClick={() => navigate(-1)}
+            >
+              Back
+            </button>
+            <button
+              className="button button-primary"
+              onClick={handleRetry}
+            >
+              <i className="fa-solid fa-rotate-right"></i>
+              Retry
             </button>
           </div>
         ) : isComplete && operationType === 'batchLabel' && successCount > 0 ? (
