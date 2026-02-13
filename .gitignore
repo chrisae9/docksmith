@@ -1,6 +1,10 @@
 # Environment files
 .env
 
+# Next.js
+.next/
+node_modules/
+
 # Build artifacts
 /docksmith
 bin/

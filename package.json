@@ -2,12 +2,21 @@
   "name": "docksmith",
   "private": true,
   "scripts": {
-    "dev": "cd ui && npm run dev",
-    "build": "cd ui && npm run build",
-    "postinstall": "cd ui && npm install"
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^5.1.4",
-    "vite": "^7.3.1"
+    "next": "latest",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-router-dom": "^7.9.6",
+    "react-window": "^2.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/react-window": "^1.8.8",
+    "typescript": "~5.9.3"
   }
 }
