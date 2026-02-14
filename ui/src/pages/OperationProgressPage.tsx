@@ -76,6 +76,7 @@ export function OperationProgressPage() {
         .then(data => {
           if (!data.success || !data.data) return;
           for (const op of data.data.operations) {
+            const isTerminal = op.status === 'complete' || op.status === 'failed';
             if (op.batch_details) {
               for (const d of op.batch_details) {
                 if (d.status === 'complete') {
@@ -84,6 +85,10 @@ export function OperationProgressPage() {
                   dispatch({ type: 'POLL_UPDATE', runId: state.runId, containerName: d.container_name, status: 'failed', message: d.message || 'Failed', error: d.message });
                 } else if (d.status === 'in_progress') {
                   dispatch({ type: 'POLL_UPDATE', runId: state.runId, containerName: d.container_name, status: 'in_progress', message: d.message || 'In progress' });
+                } else if (isTerminal) {
+                  // Fallback: op is terminal but detail has no per-container status — use op-level
+                  const fallbackStatus = op.status === 'complete' ? 'success' as const : 'failed' as const;
+                  dispatch({ type: 'POLL_UPDATE', runId: state.runId, containerName: d.container_name, status: fallbackStatus, message: d.message || op.error_message || op.status });
                 }
               }
             }

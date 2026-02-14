@@ -518,6 +518,9 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		return
 	}
 
+	// Update batch detail status so poller can report progress even if SSE drops
+	o.updateBatchDetailStatus(ctx, operationID, container.Name, "in_progress", "Starting update")
+
 	o.publishProgress(operationID, container.Name, stackName, "validating", 0, "Validating permissions")
 
 	if err := o.checkPermissions(ctx, container); err != nil {
@@ -613,6 +616,10 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	}
 
 	log.Printf("UPDATE: Health check passed for operation=%s, marking complete", operationID)
+
+	// Update batch detail status so poller can detect per-container completion
+	o.updateBatchDetailStatus(ctx, operationID, container.Name, "complete", "Update completed successfully")
+
 	o.publishProgress(operationID, container.Name, stackName, "complete", 100, "Update completed successfully")
 
 	completedNow := time.Now()
@@ -2843,17 +2850,26 @@ func (o *UpdateOrchestrator) failOperation(ctx context.Context, operationID, sta
 	o.storage.UpdateOperationStatus(ctx, operationID, "failed", errorMsg)
 	o.publishProgress(operationID, "", "", "failed", 0, errorMsg)
 
-	// Get operation details to publish container updated event
-	if op, found, _ := o.storage.GetUpdateOperation(ctx, operationID); found && o.eventBus != nil {
-		o.eventBus.Publish(events.Event{
-			Type: events.EventContainerUpdated,
-			Payload: map[string]interface{}{
-				"container_id":   op.ContainerID,
-				"container_name": op.ContainerName,
-				"operation_id":   operationID,
-				"status":         "failed",
-			},
-		})
+	// Get operation details to update batch detail statuses and publish container updated event
+	if op, found, _ := o.storage.GetUpdateOperation(ctx, operationID); found {
+		// Update per-container batch detail statuses so poller can detect failure
+		for _, d := range op.BatchDetails {
+			if d.Status == "" || d.Status == "in_progress" || d.Status == "pending" {
+				o.updateBatchDetailStatus(ctx, operationID, d.ContainerName, "failed", errorMsg)
+			}
+		}
+
+		if o.eventBus != nil {
+			o.eventBus.Publish(events.Event{
+				Type: events.EventContainerUpdated,
+				Payload: map[string]interface{}{
+					"container_id":   op.ContainerID,
+					"container_name": op.ContainerName,
+					"operation_id":   operationID,
+					"status":         "failed",
+				},
+			})
+		}
 	}
 }
 
