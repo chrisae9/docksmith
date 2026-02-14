@@ -217,6 +217,74 @@ h1 {
   letter-spacing: -0.03em;
 }
 
+/* Active operation banner — shown globally when an operation is running */
+.active-operation-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) var(--space-4);
+  flex-shrink: 0;
+}
+
+.active-operation-banner-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.active-operation-banner-content:hover {
+  color: var(--text-primary);
+}
+
+.active-operation-banner-content > .fa-spinner {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+
+.active-operation-banner-label {
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.active-operation-banner-count {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.active-operation-banner-view {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.active-operation-banner-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-1);
+  font-size: var(--text-sm);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.active-operation-banner-dismiss:hover {
+  color: var(--text-primary);
+}
+
 /* Loading */
 .loading {
   display: flex;

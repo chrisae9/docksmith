@@ -3,7 +3,6 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   getContainerLogs,
   inspectContainer,
-  startContainer,
   getContainerLabels,
   getContainerStatus,
   recheckContainer,
@@ -66,7 +65,6 @@ export function ContainerPage() {
   const logsViewerRef = useRef<HTMLDivElement>(null);
 
   // Action state
-  const [actionLoading, setActionLoading] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Docksmith settings state
@@ -329,42 +327,11 @@ export function ContainerPage() {
     }
   }, []);
 
-  // Container actions - stop/restart use operation page, start is quick
-  const handleAction = async (action: 'start' | 'stop' | 'restart') => {
-    if (action === 'stop') {
-      navigate('/operation', {
-        state: {
-          stop: { containerName }
-        }
-      });
-      return;
-    }
-
-    if (action === 'restart') {
-      navigate('/operation', {
-        state: {
-          restart: { containerName }
-        }
-      });
-      return;
-    }
-
-    // Start is quick, handle directly
-    setActionLoading(true);
-    try {
-      const result = await startContainer(containerName);
-      if (result.success) {
-        toast.success(result.data?.message || 'Container started successfully');
-        await fetchInspect();
-        await fetchDocksmithData();
-      } else {
-        toast.error(result.error || 'Failed to start container');
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start container');
-    } finally {
-      setActionLoading(false);
-    }
+  // Container actions - all go through operation page
+  const handleAction = (action: 'start' | 'stop' | 'restart') => {
+    navigate('/operation', {
+      state: { [action]: { containerName } }
+    });
   };
 
   // Remove container - uses operation page
@@ -600,7 +567,7 @@ export function ContainerPage() {
               <button
                 className="action-btn"
                 onClick={() => handleAction('stop')}
-                disabled={actionLoading}
+
                 title="Stop"
               >
                 <i className="fa-solid fa-stop"></i>
@@ -608,7 +575,7 @@ export function ContainerPage() {
               <button
                 className="action-btn"
                 onClick={() => handleAction('restart')}
-                disabled={actionLoading}
+
                 title="Restart"
               >
                 <i className="fa-solid fa-rotate"></i>
@@ -618,7 +585,7 @@ export function ContainerPage() {
             <button
               className="action-btn"
               onClick={() => handleAction('start')}
-              disabled={actionLoading}
+
               title="Start"
             >
               <i className="fa-solid fa-play"></i>
@@ -629,7 +596,7 @@ export function ContainerPage() {
               <button
                 className="action-btn danger"
                 onClick={handleRemove}
-                disabled={actionLoading}
+
                 title="Confirm remove"
               >
                 <i className="fa-solid fa-check"></i>
@@ -637,7 +604,7 @@ export function ContainerPage() {
               <button
                 className="action-btn"
                 onClick={() => setConfirmRemove(false)}
-                disabled={actionLoading}
+
                 title="Cancel"
               >
                 <i className="fa-solid fa-xmark"></i>
@@ -647,7 +614,7 @@ export function ContainerPage() {
             <button
               className="action-btn danger"
               onClick={() => setConfirmRemove(true)}
-              disabled={actionLoading}
+
               title="Remove"
             >
               <i className="fa-solid fa-trash"></i>

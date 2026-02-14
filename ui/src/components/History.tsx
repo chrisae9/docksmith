@@ -335,16 +335,9 @@ export function History({ onBack: _onBack }: HistoryProps) {
     setSelectedForRollback(new Set());
 
     if (rollbackOpIds.length > 0) {
-      // Navigate to operation page for the first rollback operation
-      navigate('/operation', {
-        state: {
-          rollback: {
-            operationId: rollbackOpIds[0],
-            containerName: allNames.join(', '),
-            force,
-          }
-        }
-      });
+      // Navigate to recovery mode — rollback operations are already started by the API calls above.
+      // Using URL params instead of state avoids the executor calling the API again.
+      navigate(`/operation?id=${rollbackOpIds[0]}`);
     } else if (errors.length > 0) {
       setError(errors.join('; '));
     }
@@ -696,7 +689,20 @@ export function History({ onBack: _onBack }: HistoryProps) {
                 className="rollback-btn"
                 onClick={(e) => {
                   e.stopPropagation();
-                  showRollbackConfirm(op);
+                  if (op.batch_details && op.batch_details.length > 1) {
+                    // Batch operation — use batch rollback flow so recovery creates per-container entries
+                    const selections = new Map<string, Array<{ name: string; oldVersion: string; newVersion: string }>>();
+                    const containers = op.batch_details
+                      .filter(d => getRollbackStrategy(d) !== 'none')
+                      .map(d => ({ name: d.container_name, oldVersion: d.old_version, newVersion: d.new_version }));
+                    if (containers.length > 0) {
+                      selections.set(op.operation_id, containers);
+                      const isLabelChange = op.operation_type === 'label_change';
+                      setBatchRollbackConfirm({ selections, isLabelChange });
+                    }
+                  } else {
+                    showRollbackConfirm(op);
+                  }
                 }}
               >
                 <i className="fa-solid fa-rotate-left"></i> Rollback{op.batch_details && op.batch_details.length > 1 ? ' All' : ''}

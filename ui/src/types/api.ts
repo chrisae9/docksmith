@@ -84,6 +84,8 @@ export interface BatchContainerDetail {
   old_resolved_version?: string;
   new_resolved_version?: string;
   old_digest?: string;
+  status?: string;   // Per-container status: pending, restarting, complete, failed
+  message?: string;  // Human-readable status message
 }
 
 // Update Operation (matches storage.UpdateOperation)

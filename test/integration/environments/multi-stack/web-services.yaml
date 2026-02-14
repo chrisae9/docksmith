@@ -4,7 +4,7 @@ services:
     container_name: rooday2-nginx
     restart: unless-stopped
   traefik-test:
-    image: traefik:3.2.0
+    image: traefik:v3.6.8
     container_name: rooday2-traefik
     command:
       - "--api.insecure=true"

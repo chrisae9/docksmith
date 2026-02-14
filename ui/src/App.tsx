@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Containers } from './components/Containers'
 import { History } from './components/History'
 import { Settings } from './components/Settings'
@@ -12,8 +12,37 @@ import { TabBar, type TabId } from './components/TabBar'
 import { ToastProvider, ToastContainer } from './components/Toast'
 import { getContainerStatus } from './api/client'
 import { useEventStream } from './hooks/useEventStream'
-import { STORAGE_KEY_TAB } from './utils/constants'
+import { STORAGE_KEY_TAB, ACTIVE_OPERATION_KEY } from './utils/constants'
+import { getPageTitle } from './operation/utils'
 // CSS is now imported via index.css
+
+interface ActiveOperation {
+  url: string;
+  type: string | null;
+  containerCount: number;
+  startTime: number | null;
+}
+
+function ActiveOperationBanner({ op, onDismiss }: { op: ActiveOperation; onDismiss: () => void }) {
+  const navigate = useNavigate();
+  const label = getPageTitle(op.type as any) || 'Operation in progress';
+
+  return (
+    <div className="active-operation-banner">
+      <div className="active-operation-banner-content" onClick={() => navigate(op.url)}>
+        <i className="fa-solid fa-spinner fa-spin"></i>
+        <span className="active-operation-banner-label">{label}</span>
+        {op.containerCount > 1 && (
+          <span className="active-operation-banner-count">({op.containerCount} containers)</span>
+        )}
+        <span className="active-operation-banner-view">View <i className="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <button className="active-operation-banner-dismiss" onClick={(e) => { e.stopPropagation(); onDismiss(); }} aria-label="Dismiss">
+        <i className="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+  );
+}
 
 function AppContent() {
   const location = useLocation();
@@ -27,11 +56,29 @@ function AppContent() {
   const [updateCount, setUpdateCount] = useState(0);
   const { lastEvent, containerUpdated } = useEventStream(true);
 
+  // Active operation banner state
+  const [activeOp, setActiveOp] = useState<ActiveOperation | null>(() => {
+    try {
+      const saved = sessionStorage.getItem(ACTIVE_OPERATION_KEY);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      // Ignore if > 30 min old
+      if (parsed.startTime && Date.now() - parsed.startTime > 30 * 60 * 1000) {
+        sessionStorage.removeItem(ACTIVE_OPERATION_KEY);
+        return null;
+      }
+      return parsed;
+    } catch { return null; }
+  });
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
   // Determine if we're on a sub-page (hide tab bar)
   const isSubPage = location.pathname.startsWith('/container/') ||
                     location.pathname.startsWith('/tag-filter/') ||
                     location.pathname.startsWith('/operation') ||
                     location.pathname.startsWith('/explorer/container/');
+
+  const isOnOperationPage = location.pathname.startsWith('/operation');
 
   // Sync activeTab state with URL for tab highlighting
   useEffect(() => {
@@ -85,8 +132,74 @@ function AppContent() {
     }
   }, [containerUpdated, fetchUpdateCount]);
 
+  // Poll for active operation banner — check sessionStorage periodically
+  // (OperationProgressPage writes/clears it as phases change)
+  useEffect(() => {
+    const check = () => {
+      try {
+        const saved = sessionStorage.getItem(ACTIVE_OPERATION_KEY);
+        if (!saved) {
+          setActiveOp(null);
+          setBannerDismissed(false);
+          return;
+        }
+        const parsed = JSON.parse(saved);
+        if (parsed.startTime && Date.now() - parsed.startTime > 30 * 60 * 1000) {
+          sessionStorage.removeItem(ACTIVE_OPERATION_KEY);
+          setActiveOp(null);
+          return;
+        }
+        setActiveOp(parsed);
+      } catch {
+        setActiveOp(null);
+      }
+    };
+    check();
+    const interval = setInterval(check, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Also validate once on mount: if there's an active op, check if it's actually still running
+  useEffect(() => {
+    if (!activeOp) return;
+    const groupMatch = activeOp.url.match(/group=([^&]+)/);
+    const idMatch = activeOp.url.match(/id=([^&]+)/);
+    const url = groupMatch
+      ? `/api/operations/group/${groupMatch[1]}`
+      : idMatch
+      ? `/api/operations/${idMatch[1]}`
+      : null;
+    if (!url) return;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.success || !data.data) {
+          sessionStorage.removeItem(ACTIVE_OPERATION_KEY);
+          setActiveOp(null);
+          return;
+        }
+        // For group endpoint, check if all operations are terminal
+        const ops = data.data.operations || [data.data];
+        const allDone = ops.every((op: any) => op.status === 'complete' || op.status === 'failed');
+        if (allDone) {
+          sessionStorage.removeItem(ACTIVE_OPERATION_KEY);
+          setActiveOp(null);
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const showBanner = activeOp && !isOnOperationPage && !bannerDismissed;
+
   return (
     <div className="app">
+      {showBanner && (
+        <ActiveOperationBanner
+          op={activeOp}
+          onDismiss={() => setBannerDismissed(true)}
+        />
+      )}
       <div className="tab-content">
         <Routes>
           <Route path="/" element={<Containers />} />

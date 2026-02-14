@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type MutableRefObject } from 'react';
 
 export interface UpdateProgressEvent {
   operation_id: string;
@@ -52,6 +52,11 @@ export function useEventStream(enabled: boolean = true) {
     containerUpdated: null,
   });
 
+  // Ref-based event queue: immune to React batching (setState can't lose events)
+  // Consumers drain this queue to process ALL events, even when many arrive in one tick.
+  const eventQueueRef = useRef<UpdateProgressEvent[]>([]);
+  const [eventSeq, setEventSeq] = useState(0);
+
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hadConnectionRef = useRef(false);
@@ -64,6 +69,11 @@ export function useEventStream(enabled: boolean = true) {
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {
+      // Cancel any pending manual reconnect — EventSource auto-reconnected first
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       const wasDisconnected = hadConnectionRef.current;
       hadConnectionRef.current = true;
       reconnectAttemptRef.current = 0; // Reset attempt counter on successful connection
@@ -113,6 +123,10 @@ export function useEventStream(enabled: boolean = true) {
       try {
         const data = JSON.parse(e.data);
         const progressEvent: UpdateProgressEvent = data.payload;
+
+        // Push to ref-based queue (immune to React batching — never loses events)
+        eventQueueRef.current.push(progressEvent);
+        setEventSeq(s => s + 1);
 
         setState(prev => ({
           ...prev,
@@ -197,6 +211,8 @@ export function useEventStream(enabled: boolean = true) {
 
   return {
     ...state,
+    eventQueue: eventQueueRef as MutableRefObject<UpdateProgressEvent[]>,
+    eventSeq,
     clearEvents,
     clearWasDisconnected,
     reconnect: connect,

@@ -449,7 +449,10 @@ export function Containers() {
   // === Bulk actions ===
   const handleBulkUpdate = () => {
     if (selectedContainers.size === 0) return;
-    const selected = containers.filter(c => selectedContainers.has(c.name) && c.has_update_data);
+    const allSelected = containers.filter(c => selectedContainers.has(c.name));
+    const selected = allSelected.filter(c => c.has_update_data);
+    const skippedNoData = allSelected.length - selected.length;
+
     const mismatchContainers: string[] = [];
     const containersToUpdate: Array<{ name: string; target_version: string; stack: string; force?: boolean; change_type: number; old_resolved_version: string; new_resolved_version: string }> = [];
 
@@ -467,6 +470,27 @@ export function Containers() {
           new_resolved_version: c.latest_resolved_version || c.latest_version || '',
         });
       }
+    }
+
+    const skippedUpToDate = selected.length - containersToUpdate.length - mismatchContainers.length;
+    const totalSkipped = skippedNoData + skippedUpToDate;
+
+    if (containersToUpdate.length === 0 && mismatchContainers.length === 0) {
+      setSelectedContainers(new Set());
+      if (skippedNoData > 0) {
+        toast.info(`${skippedNoData} container${skippedNoData > 1 ? 's' : ''} not yet scanned — run a check first`);
+      } else {
+        toast.info('All selected containers are already up to date');
+      }
+      return;
+    }
+
+    // Notify about skipped containers before navigating
+    if (totalSkipped > 0) {
+      const parts: string[] = [];
+      if (skippedNoData > 0) parts.push(`${skippedNoData} not scanned`);
+      if (skippedUpToDate > 0) parts.push(`${skippedUpToDate} up to date`);
+      toast.info(`Skipped ${totalSkipped}: ${parts.join(', ')}`);
     }
 
     setSelectedContainers(new Set());

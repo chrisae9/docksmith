@@ -326,22 +326,8 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 		stackName = o.stackManager.DetermineStack(ctx, *orderedContainers[0])
 	}
 
-	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, containerNames, operationType); err != nil {
-			return "", fmt.Errorf("failed to queue operation: %w", err)
-		}
-		return operationID, nil
-	}
-
-	op := storage.UpdateOperation{
-		OperationID:   operationID,
-		StackName:     stackName,
-		OperationType: operationType,
-		Status:        "validating",
-		BatchGroupID:  batchGroupID,
-	}
-
-	// Build batch details for all containers
+	// Build batch details for all containers BEFORE lock check
+	// so that queued operations also have full container/version info
 	batchDetails := make([]storage.BatchContainerDetail, 0, len(orderedContainers))
 	for _, container := range orderedContainers {
 		currentVersion := ""
@@ -394,9 +380,17 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 
 		batchDetails = append(batchDetails, detail)
 	}
-	op.BatchDetails = batchDetails
 
-	// For single-container batches, also populate top-level fields for backwards compatibility
+	// Build operation record with full details
+	op := storage.UpdateOperation{
+		OperationID:   operationID,
+		StackName:     stackName,
+		OperationType: operationType,
+		BatchGroupID:  batchGroupID,
+		BatchDetails:  batchDetails,
+	}
+
+	// Populate container name fields
 	if len(orderedContainers) == 1 && len(batchDetails) > 0 {
 		container := orderedContainers[0]
 		op.ContainerID = container.ID
@@ -404,10 +398,28 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 		op.OldVersion = batchDetails[0].OldVersion
 		op.NewVersion = batchDetails[0].NewVersion
 	} else {
-		// For multi-container batches, use a summary in container_name
 		op.ContainerName = fmt.Sprintf("%d containers", len(orderedContainers))
 	}
 
+	if !o.acquireStackLock(stackName) {
+		op.Status = "queued"
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			return "", fmt.Errorf("failed to save queued operation: %w", err)
+		}
+		queue := storage.UpdateQueue{
+			OperationID:   operationID,
+			StackName:     stackName,
+			Containers:    containerNames,
+			OperationType: operationType,
+			QueuedAt:      time.Now(),
+		}
+		if err := o.storage.QueueUpdate(ctx, queue); err != nil {
+			return "", fmt.Errorf("failed to queue operation: %w", err)
+		}
+		return operationID, nil
+	}
+
+	op.Status = "validating"
 	if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
 		o.releaseStackLock(stackName)
 		return "", fmt.Errorf("failed to save operation: %w", err)
@@ -1032,141 +1044,138 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 	}
 
-	// Stop containers in reverse order (dependents first)
-	// Only stop containers that will use SDK recreation - compose handles its own stop
-	o.publishProgress(operationID, "", stackName, "recreating", 65, "Stopping containers")
-	for i := len(orderedContainers) - 1; i >= 0; i-- {
-		cont := orderedContainers[i]
-		if networkModeContainers[cont.Name] {
-			// Skip stopping - compose will handle this
-			log.Printf("BATCH UPDATE: Skipping stop for %s (will use compose)", cont.Name)
-			continue
-		}
-		log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
-		timeout := 10
-		if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
-			log.Printf("BATCH UPDATE: Warning - failed to stop %s: %v", cont.Name, err)
-		}
-	}
-
-	// Remove and recreate in dependency order
+	// Stop, remove, recreate, health-check, and mark each container individually (60-95%)
+	// All phases merged into one per-container loop so the frontend gets continuous SSE events.
 	successCount := 0
 	failCount := 0
+	failedContainers := make(map[string]bool)
 
 	for i, cont := range orderedContainers {
 		targetVersion := targetVersions[cont.Name]
 		newImageRef := strings.Split(cont.Image, ":")[0] + ":" + targetVersion
 
-		progress := 70 + (i * 20 / len(orderedContainers))
-		o.publishProgress(operationID, cont.Name, stackName, "recreating", progress, fmt.Sprintf("Recreating %s", cont.Name))
+		baseProgress := 60 + (i * 35 / len(orderedContainers))
+
+		containerFailed := false
+
+		// Update DB status so poller can report progress even if SSE drops
+		o.updateBatchDetailStatus(ctx, operationID, cont.Name, "in_progress", fmt.Sprintf("Updating %s", cont.Name))
 
 		// Check if this container needs compose-based recreation (network_mode dependency)
 		if networkModeContainers[cont.Name] {
+			o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress, fmt.Sprintf("Recreating %s", cont.Name))
 			log.Printf("BATCH UPDATE: Using compose recreation for %s (network_mode dependency)", cont.Name)
 			if err := o.recreateContainerWithCompose(ctx, cont); err != nil {
 				log.Printf("BATCH UPDATE: Compose recreation failed for %s: %v", cont.Name, err)
-				failCount++
-				continue
-			}
-			log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
-			successCount++
-			continue
-		}
-
-		// SDK-based recreation for containers without network_mode dependencies
-		inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
-		if err != nil {
-			log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
-			failCount++
-			continue
-		}
-
-		// Save old image for recovery if creation fails
-		oldImage := inspect.Config.Image
-
-		// Remove container
-		if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
-			log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
-			failCount++
-			continue
-		}
-
-		// Create with new image
-		newConfig := inspect.Config
-		newConfig.Image = newImageRef
-
-		// Clear hostname if using container network mode (hostname is inherited from the network source)
-		// Without this, Docker returns "conflicting options: hostname and the network mode"
-		if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
-			newConfig.Hostname = ""
-			newConfig.Domainname = ""
-		}
-
-		networkingConfig := &network.NetworkingConfig{
-			EndpointsConfig: inspect.NetworkSettings.Networks,
-		}
-
-		_, createErr := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
-		if createErr != nil {
-			log.Printf("BATCH UPDATE: SDK creation failed for %s: %v, attempting fallback", cont.Name, createErr)
-
-			// Fallback 1: Try compose-based recreation
-			composeErr := o.recreateContainerWithCompose(ctx, cont)
-			if composeErr == nil {
-				log.Printf("BATCH UPDATE: Compose fallback succeeded for %s", cont.Name)
-				successCount++
-				continue
-			}
-			log.Printf("BATCH UPDATE: Compose fallback failed for %s: %v", cont.Name, composeErr)
-
-			// Fallback 2: Try to restore with old image to prevent orphaning
-			log.Printf("BATCH UPDATE: Attempting to restore %s with old image %s", cont.Name, oldImage)
-			restoreConfig := inspect.Config
-			restoreConfig.Image = oldImage
-			if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
-				restoreConfig.Hostname = ""
-				restoreConfig.Domainname = ""
-			}
-
-			_, restoreErr := o.dockerSDK.ContainerCreate(ctx, restoreConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
-			if restoreErr != nil {
-				log.Printf("BATCH UPDATE: CRITICAL - Failed to restore %s with old image: %v (container orphaned!)", cont.Name, restoreErr)
-				failCount++
-				continue
-			}
-
-			// Start the restored container
-			if startErr := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); startErr != nil {
-				log.Printf("BATCH UPDATE: Failed to start restored container %s: %v", cont.Name, startErr)
+				containerFailed = true
 			} else {
-				log.Printf("BATCH UPDATE: Restored %s with old image (update failed but container recovered)", cont.Name)
+				log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
 			}
+		} else {
+			// SDK-based: stop → remove → create → start
+			// Use distinct stage names so each sub-step appears in the frontend activity log
+			o.publishProgress(operationID, cont.Name, stackName, "stopping", baseProgress, fmt.Sprintf("Stopping %s", cont.Name))
+			log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
+			timeout := 3
+			if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
+				log.Printf("BATCH UPDATE: Warning - failed to stop %s: %v", cont.Name, err)
+			}
+
+			inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
+			if err != nil {
+				log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
+				containerFailed = true
+			} else {
+				// Save old image for recovery if creation fails
+				oldImage := inspect.Config.Image
+
+				// Remove and recreate container
+				o.publishProgress(operationID, cont.Name, stackName, "removing", baseProgress+1, fmt.Sprintf("Removing %s", cont.Name))
+				if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
+					log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
+					containerFailed = true
+				} else {
+					// Create with new image
+					o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress+2, fmt.Sprintf("Creating %s with new image", cont.Name))
+					newConfig := inspect.Config
+					newConfig.Image = newImageRef
+
+					// Clear hostname if using container network mode (hostname is inherited from the network source)
+					// Without this, Docker returns "conflicting options: hostname and the network mode"
+					if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
+						newConfig.Hostname = ""
+						newConfig.Domainname = ""
+					}
+
+					networkingConfig := &network.NetworkingConfig{
+						EndpointsConfig: inspect.NetworkSettings.Networks,
+					}
+
+					_, createErr := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
+					if createErr != nil {
+						log.Printf("BATCH UPDATE: SDK creation failed for %s: %v, attempting fallback", cont.Name, createErr)
+
+						// Fallback 1: Try compose-based recreation
+						composeErr := o.recreateContainerWithCompose(ctx, cont)
+						if composeErr == nil {
+							log.Printf("BATCH UPDATE: Compose fallback succeeded for %s", cont.Name)
+						} else {
+							log.Printf("BATCH UPDATE: Compose fallback failed for %s: %v", cont.Name, composeErr)
+
+							// Fallback 2: Try to restore with old image to prevent orphaning
+							log.Printf("BATCH UPDATE: Attempting to restore %s with old image %s", cont.Name, oldImage)
+							restoreConfig := inspect.Config
+							restoreConfig.Image = oldImage
+							if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
+								restoreConfig.Hostname = ""
+								restoreConfig.Domainname = ""
+							}
+
+							_, restoreErr := o.dockerSDK.ContainerCreate(ctx, restoreConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
+							if restoreErr != nil {
+								log.Printf("BATCH UPDATE: CRITICAL - Failed to restore %s with old image: %v (container orphaned!)", cont.Name, restoreErr)
+							} else {
+								if startErr := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); startErr != nil {
+									log.Printf("BATCH UPDATE: Failed to start restored container %s: %v", cont.Name, startErr)
+								} else {
+									log.Printf("BATCH UPDATE: Restored %s with old image (update failed but container recovered)", cont.Name)
+								}
+							}
+							containerFailed = true
+						}
+					} else {
+						// Start container
+						o.publishProgress(operationID, cont.Name, stackName, "starting", baseProgress+3, fmt.Sprintf("Starting %s", cont.Name))
+						if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
+							log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
+							containerFailed = true
+						} else {
+							log.Printf("BATCH UPDATE: Successfully recreated %s with %s", cont.Name, newImageRef)
+						}
+					}
+				}
+			}
+		}
+
+		if containerFailed {
 			failCount++
+			failedContainers[cont.Name] = true
+			o.updateBatchDetailStatus(ctx, operationID, cont.Name, "failed", fmt.Sprintf("Failed to update %s", cont.Name))
 			continue
 		}
 
-		// Start container
-		if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
-			log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
-			failCount++
-			continue
-		}
-
-		log.Printf("BATCH UPDATE: Successfully recreated %s with %s", cont.Name, newImageRef)
-		successCount++
-	}
-
-	// Phase 4: Health check (90-95%)
-	for i, cont := range orderedContainers {
-		progress := 90 + (i * 5 / len(orderedContainers))
-		o.publishProgress(operationID, cont.Name, stackName, "health_check", progress,
+		// Health check for this container
+		healthProgress := baseProgress + (35 / len(orderedContainers) / 2)
+		o.publishProgress(operationID, cont.Name, stackName, "health_check", healthProgress,
 			fmt.Sprintf("Checking health of %s", cont.Name))
 
 		if err := o.waitForHealthy(ctx, cont.Name, o.healthCheckCfg.Timeout); err != nil {
 			log.Printf("BATCH UPDATE: Health check warning for %s: %v", cont.Name, err)
-			o.publishProgress(operationID, cont.Name, stackName, "health_check", progress,
-				fmt.Sprintf("Health check warning for %s: %v", cont.Name, err))
 		}
+
+		// Mark this container as complete (DB + SSE)
+		o.updateBatchDetailStatus(ctx, operationID, cont.Name, "complete", fmt.Sprintf("Updated %s", cont.Name))
+		successCount++
 	}
 
 	// Phase 5: Restart dependent containers (95-99%)
@@ -1407,6 +1416,7 @@ func (o *UpdateOrchestrator) updateComposeFile(ctx context.Context, composeFileP
 }
 
 // pullImage pulls a Docker image with retry logic.
+// Tracks per-layer progress and reports aggregate percent across all layers.
 func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, progressChan chan<- PullProgress) error {
 	if o.dockerSDK == nil {
 		return fmt.Errorf("docker SDK not initialized")
@@ -1432,8 +1442,18 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 		err = func() error {
 			defer reader.Close()
 			decoder := json.NewDecoder(reader)
+
+			// Track per-layer progress for aggregate calculation.
+			// Each layer goes through: Downloading (0-50%) → Extracting (50-100%) → Pull complete (100%).
+			type layerState struct {
+				percent int
+				total   float64
+			}
+			layers := make(map[string]*layerState)
+			var layerOrder []string
+
 			for {
-				var event map[string]interface{}
+				var event map[string]any
 				if err := decoder.Decode(&event); err != nil {
 					if err == io.EOF {
 						break
@@ -1441,19 +1461,69 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 					return fmt.Errorf("failed to decode pull progress: %w", err)
 				}
 
-				if status, ok := event["status"].(string); ok {
-					progress := PullProgress{Status: status}
-					if progressDetail, ok := event["progressDetail"].(map[string]interface{}); ok {
-						if current, ok := progressDetail["current"].(float64); ok {
-							if total, ok := progressDetail["total"].(float64); ok && total > 0 {
-								progress.Percent = int((current / total) * 100)
+				status, _ := event["status"].(string)
+				if status == "" {
+					continue
+				}
+
+				layerID, _ := event["id"].(string)
+
+				// Track layers with IDs (skip metadata messages like "Pulling from ...")
+				if layerID != "" {
+					ls, exists := layers[layerID]
+					if !exists {
+						ls = &layerState{}
+						layers[layerID] = ls
+						layerOrder = append(layerOrder, layerID)
+					}
+
+					switch status {
+					case "Pull complete", "Already exists":
+						ls.percent = 100
+					case "Extracting":
+						// Extracting phase: 50-100% of layer progress
+						if progressDetail, ok := event["progressDetail"].(map[string]any); ok {
+							if current, ok := progressDetail["current"].(float64); ok {
+								if total, ok := progressDetail["total"].(float64); ok && total > 0 {
+									ls.percent = 50 + int((current/total)*50)
+									ls.total = total
+								}
 							}
 						}
+					case "Downloading":
+						// Downloading phase: 0-50% of layer progress
+						if progressDetail, ok := event["progressDetail"].(map[string]any); ok {
+							if current, ok := progressDetail["current"].(float64); ok {
+								if total, ok := progressDetail["total"].(float64); ok && total > 0 {
+									ls.percent = int((current / total) * 50)
+									ls.total = total
+								}
+							}
+						}
+					case "Download complete":
+						ls.percent = 50
+					case "Verifying Checksum":
+						ls.percent = 50
 					}
-					select {
-					case progressChan <- progress:
-					default:
+				}
+
+				// Compute aggregate progress across all layers
+				aggregatePercent := 0
+				if len(layers) > 0 {
+					total := 0
+					for _, id := range layerOrder {
+						total += layers[id].percent
 					}
+					aggregatePercent = total / len(layers)
+				}
+
+				progress := PullProgress{
+					Status:  status,
+					Percent: aggregatePercent,
+				}
+				select {
+				case progressChan <- progress:
+				default:
 				}
 			}
 			return nil
@@ -2752,26 +2822,12 @@ func (o *UpdateOrchestrator) publishProgress(operationID, containerName, stackNa
 		log.Printf("PROGRESS: eventBus is nil, skipping publish for operation=%s stage=%s", operationID, stage)
 		return
 	}
-	log.Printf("PROGRESS: Publishing %s (%d%%) for operation=%s", stage, percent, operationID)
-
-	// Get container ID for the dashboard to refresh the specific card
-	ctx := context.Background()
-	containers, err := o.dockerClient.ListContainers(ctx)
-	var containerID string
-	if err == nil {
-		for _, c := range containers {
-			if c.Name == containerName {
-				containerID = c.ID
-				break
-			}
-		}
-	}
+	log.Printf("PROGRESS: Publishing %s (%d%%) for operation=%s container=%s", stage, percent, operationID, containerName)
 
 	o.eventBus.Publish(events.Event{
 		Type: events.EventUpdateProgress,
 		Payload: map[string]interface{}{
 			"operation_id":   operationID,
-			"container_id":   containerID,
 			"container_name": containerName,
 			"stack_name":     stackName,
 			"stage":          stage,
@@ -2968,6 +3024,22 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 								o.releaseStackLock(q.StackName)
 								o.failOperation(ctx, q.OperationID, "queued", "fix_mismatch only supports single containers")
 							}
+						case "rollback":
+							// Recover target versions from the saved operation's batch_details
+							op, opFound, opErr := o.storage.GetUpdateOperation(ctx, q.OperationID)
+							if opErr != nil || !opFound {
+								log.Printf("QUEUE: Failed to recover rollback operation %s: %v", q.OperationID, opErr)
+								o.releaseStackLock(q.StackName)
+								o.failOperation(ctx, q.OperationID, "queued", "Failed to recover rollback details")
+								continue
+							}
+							targetVersions := make(map[string]string)
+							for _, detail := range op.BatchDetails {
+								if detail.NewVersion != "" {
+									targetVersions[detail.ContainerName] = detail.NewVersion
+								}
+							}
+							go o.executeBatchUpdate(opCtx, q.OperationID, targetContainers, targetVersions, q.StackName, nil)
 						default: // "single", "batch", "stack"
 							if len(targetContainers) == 1 {
 								go o.executeSingleUpdate(opCtx, q.OperationID, targetContainers[0], "latest", q.StackName, false)

@@ -22,7 +22,7 @@ export function ContainerProgressRow({ container }: ContainerProgressRowProps) {
     <div className={`container-item status-${container.status}`}>
       <div className="container-main-row">
         <span className="status-icon">
-          {container.status === 'pending' && <i className="fa-regular fa-circle"></i>}
+          {container.status === 'pending' && <i className="fa-regular fa-clock"></i>}
           {container.status === 'in_progress' && (
             container.stage && (STAGE_INFO[container.stage] || RESTART_STAGES[container.stage])
               ? <i className={`fa-solid ${(STAGE_INFO[container.stage] || RESTART_STAGES[container.stage]).icon}`}></i>

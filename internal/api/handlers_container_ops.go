@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/docker/docker/api/types/container"
 	"github.com/google/uuid"
@@ -400,6 +401,40 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 	RespondSuccess(w, response)
 }
 
+// publishContainerProgress emits an SSE progress event for container operations
+func (s *Server) publishContainerProgress(operationID, containerName, stackName, stage string, percent int, message string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.Event{
+		Type: events.EventUpdateProgress,
+		Payload: map[string]interface{}{
+			"operation_id":   operationID,
+			"container_name": containerName,
+			"stack_name":     stackName,
+			"stage":          stage,
+			"progress":       percent,
+			"message":        message,
+			"timestamp":      time.Now().Unix(),
+		},
+	})
+}
+
+// publishContainerUpdated emits an SSE event when a container operation completes or fails
+func (s *Server) publishContainerUpdated(operationID, containerName, status string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.Event{
+		Type: events.EventContainerUpdated,
+		Payload: map[string]interface{}{
+			"operation_id":   operationID,
+			"container_name": containerName,
+			"status":         status,
+		},
+	})
+}
+
 // handleContainerStop stops a running container
 // POST /api/containers/{name}/stop
 // Query params: ?timeout=10
@@ -447,12 +482,17 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Emit progress event
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "stopping", 30, "Stopping container...")
+
 	// Stop the container
 	stopOptions := container.StopOptions{
 		Timeout: &timeout,
 	}
 	err = s.dockerService.GetClient().ContainerStop(ctx, ctr.ID, stopOptions)
 	if err != nil {
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+		s.publishContainerUpdated(operationID, containerName, "failed")
 		// Record failure
 		if s.storageService != nil {
 			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
@@ -460,6 +500,10 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 		RespondInternalError(w, fmt.Errorf("failed to stop container: %w", err))
 		return
 	}
+
+	// Emit completion events
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s stopped successfully", containerName))
+	s.publishContainerUpdated(operationID, containerName, "complete")
 
 	// Record success
 	if s.storageService != nil {
@@ -524,15 +568,24 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Emit progress event
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "starting", 30, "Starting container...")
+
 	// Start the container
 	err = s.dockerService.GetClient().ContainerStart(ctx, ctr.ID, container.StartOptions{})
 	if err != nil {
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+		s.publishContainerUpdated(operationID, containerName, "failed")
 		if s.storageService != nil {
 			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 		}
 		RespondInternalError(w, fmt.Errorf("failed to start container: %w", err))
 		return
 	}
+
+	// Emit completion events
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s started successfully", containerName))
+	s.publishContainerUpdated(operationID, containerName, "complete")
 
 	// Record success
 	if s.storageService != nil {
@@ -594,18 +647,27 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Emit progress event
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "restarting", 30, "Restarting container...")
+
 	// Restart the container
 	restartOptions := container.StopOptions{
 		Timeout: &timeout,
 	}
 	err = s.dockerService.GetClient().ContainerRestart(ctx, ctr.ID, restartOptions)
 	if err != nil {
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+		s.publishContainerUpdated(operationID, containerName, "failed")
 		if s.storageService != nil {
 			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 		}
 		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return
 	}
+
+	// Emit completion events
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s restarted successfully", containerName))
+	s.publishContainerUpdated(operationID, containerName, "complete")
 
 	// Record success
 	if s.storageService != nil {
@@ -675,6 +737,9 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Emit progress event
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "removing", 30, "Removing container...")
+
 	// Remove the container
 	removeOptions := container.RemoveOptions{
 		Force:         force,
@@ -682,6 +747,8 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	err = s.dockerService.GetClient().ContainerRemove(ctx, ctr.ID, removeOptions)
 	if err != nil {
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+		s.publishContainerUpdated(operationID, containerName, "failed")
 		// Record failure
 		if s.storageService != nil {
 			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
@@ -689,6 +756,10 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 		RespondInternalError(w, fmt.Errorf("failed to remove container: %w", err))
 		return
 	}
+
+	// Emit completion events
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s removed successfully", containerName))
+	s.publishContainerUpdated(operationID, containerName, "complete")
 
 	// Record success
 	if s.storageService != nil {
@@ -773,13 +844,20 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 			s.storageService.SaveUpdateOperation(ctx, op)
 		}
 
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "starting", 30, "Starting container...")
+
 		if err := s.dockerService.GetClient().ContainerStart(ctx, ctr.ID, container.StartOptions{}); err != nil {
+			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+			s.publishContainerUpdated(operationID, containerName, "failed")
 			if s.storageService != nil {
 				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 			}
 			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
 			continue
 		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s started successfully", containerName))
+		s.publishContainerUpdated(operationID, containerName, "complete")
 
 		if s.storageService != nil {
 			completedAt := time.Now()
@@ -850,14 +928,21 @@ func (s *Server) handleBatchStop(w http.ResponseWriter, r *http.Request) {
 			s.storageService.SaveUpdateOperation(ctx, op)
 		}
 
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "stopping", 30, "Stopping container...")
+
 		stopOptions := container.StopOptions{Timeout: &timeout}
 		if err := s.dockerService.GetClient().ContainerStop(ctx, ctr.ID, stopOptions); err != nil {
+			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+			s.publishContainerUpdated(operationID, containerName, "failed")
 			if s.storageService != nil {
 				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 			}
 			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
 			continue
 		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s stopped successfully", containerName))
+		s.publishContainerUpdated(operationID, containerName, "complete")
 
 		if s.storageService != nil {
 			completedAt := time.Now()
@@ -923,14 +1008,21 @@ func (s *Server) handleBatchRestart(w http.ResponseWriter, r *http.Request) {
 			s.storageService.SaveUpdateOperation(ctx, op)
 		}
 
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "restarting", 30, "Restarting container...")
+
 		restartOptions := container.StopOptions{Timeout: &timeout}
 		if err := s.dockerService.GetClient().ContainerRestart(ctx, ctr.ID, restartOptions); err != nil {
+			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+			s.publishContainerUpdated(operationID, containerName, "failed")
 			if s.storageService != nil {
 				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 			}
 			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
 			continue
 		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s restarted successfully", containerName))
+		s.publishContainerUpdated(operationID, containerName, "complete")
 
 		if s.storageService != nil {
 			completedAt := time.Now()
@@ -991,17 +1083,24 @@ func (s *Server) handleBatchRemove(w http.ResponseWriter, r *http.Request) {
 			s.storageService.SaveUpdateOperation(ctx, op)
 		}
 
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "removing", 30, "Removing container...")
+
 		removeOptions := container.RemoveOptions{
 			Force:         req.Force || ctr.State == "running",
 			RemoveVolumes: false,
 		}
 		if err := s.dockerService.GetClient().ContainerRemove(ctx, ctr.ID, removeOptions); err != nil {
+			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+			s.publishContainerUpdated(operationID, containerName, "failed")
 			if s.storageService != nil {
 				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 			}
 			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
 			continue
 		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s removed successfully", containerName))
+		s.publishContainerUpdated(operationID, containerName, "complete")
 
 		if s.storageService != nil {
 			completedAt := time.Now()

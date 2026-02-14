@@ -127,30 +127,9 @@ func NewServer(cfg Config) *Server {
 	// Create background checker using the discovery orchestrator
 	backgroundChecker := update.NewBackgroundChecker(discoveryOrchestrator, cfg.DockerService, eventBus, cfg.StorageService, checkInterval)
 
-	// Create rate limiter with path-specific limits (can be disabled for testing)
+	// Rate limiting disabled — this is a self-hosted app, not a public API.
+	// The internal rate limiter was blocking normal usage with many containers.
 	var rateLimiter *PathRateLimiter
-	disableRateLimit := os.Getenv("DOCKSMITH_DISABLE_RATE_LIMIT") == "true"
-	if !disableRateLimit {
-		rateLimiter = NewPathRateLimiter(RateLimitConfig{
-			RequestsPerMinute: 120,
-			BurstSize:         30,
-			CleanupInterval:   5 * time.Minute,
-		})
-		// Allow higher rate for SSE events endpoint (long-lived connections)
-		rateLimiter.SetPathLimit("/api/events", RateLimitConfig{
-			RequestsPerMinute: 10,
-			BurstSize:         5,
-			CleanupInterval:   5 * time.Minute,
-		})
-		// Allow higher rate for health checks
-		rateLimiter.SetPathLimit("/api/health", RateLimitConfig{
-			RequestsPerMinute: 120,
-			BurstSize:         20,
-			CleanupInterval:   5 * time.Minute,
-		})
-	} else {
-		log.Printf("Rate limiting disabled via DOCKSMITH_DISABLE_RATE_LIMIT")
-	}
 
 	s := &Server{
 		dockerService:         cfg.DockerService,

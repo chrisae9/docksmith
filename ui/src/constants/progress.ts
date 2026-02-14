@@ -48,6 +48,26 @@ export const STAGE_INFO: Record<string, StageInfo> = {
     label: 'Restarting',
     description: 'Docksmith is restarting to apply the update...'
   },
+  'starting': {
+    icon: 'fa-circle-play',
+    label: 'Starting',
+    description: 'Starting container...'
+  },
+  'stopping': {
+    icon: 'fa-circle-stop',
+    label: 'Stopping',
+    description: 'Stopping container...'
+  },
+  'restarting': {
+    icon: 'fa-rotate',
+    label: 'Restarting',
+    description: 'Restarting container...'
+  },
+  'removing': {
+    icon: 'fa-trash',
+    label: 'Removing',
+    description: 'Removing container...'
+  },
   'complete': {
     icon: 'fa-circle-check',
     label: 'Complete',

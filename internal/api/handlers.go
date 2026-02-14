@@ -568,6 +568,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no") // Prevent proxy buffering
 
 	// Flush headers immediately
 	flusher, ok := w.(http.Flusher)
@@ -576,6 +577,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flusher.Flush()
+
+	// Disable write deadline for this long-lived SSE connection
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
 
 	// Subscribe to all events
 	eventChan, unsubscribe := s.eventBus.Subscribe("*")
@@ -587,12 +592,20 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n")
 	flusher.Flush()
 
+	// Heartbeat keeps connection alive through proxies (Traefik idle timeout ~30s)
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
 	// Stream events
 	for {
 		select {
 		case <-r.Context().Done():
 			log.Printf("SSE client disconnected")
 			return
+		case <-heartbeat.C:
+			// SSE comment — invisible to EventSource but keeps the connection alive
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		case event, ok := <-eventChan:
 			if !ok {
 				return
@@ -605,9 +618,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			// Send as SSE
+			// Send as SSE, reset heartbeat since we just sent data
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, eventData)
 			flusher.Flush()
+			heartbeat.Reset(15 * time.Second)
 		}
 	}
 }
