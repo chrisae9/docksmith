@@ -2654,13 +2654,15 @@ func (o *UpdateOrchestrator) FixComposeMismatch(ctx context.Context, containerNa
 		}
 	}
 
-	go o.executeFixMismatch(context.Background(), operationID, targetContainer, expectedImage, stackName)
+	go o.executeFixMismatch(context.Background(), operationID, targetContainer, expectedImage, stackName, resolvedPath)
 
 	return operationID, nil
 }
 
-// executeFixMismatch pulls the image specified in compose file and recreates the container
-func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID string, container *docker.Container, expectedImage, stackName string) {
+// executeFixMismatch pulls the image specified in compose file and recreates the container.
+// If the compose tag no longer exists on the registry, it falls back to updating the compose
+// file to match the running container image (resolving the mismatch in the other direction).
+func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID string, container *docker.Container, expectedImage, stackName, composeFilePath string) {
 	defer o.releaseStackLock(stackName)
 
 	log.Printf("FIX_MISMATCH: Starting fix for operation=%s container=%s expected=%s", operationID, container.Name, expectedImage)
@@ -2694,16 +2696,61 @@ func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID
 
 	if err := o.pullImage(ctx, expectedImage, progressChan); err != nil {
 		close(progressChan)
-		errMsg := fmt.Sprintf("Image pull failed: %v", err)
+
+		// If the compose tag no longer exists on the registry, update the compose file
+		// to match the running container instead (resolve mismatch in reverse)
 		if strings.Contains(err.Error(), "does not exist on the registry") {
-			// Extract tag from expected image for a clearer message
-			tag := expectedImage
-			if parts := strings.Split(expectedImage, ":"); len(parts) >= 2 {
-				tag = parts[len(parts)-1]
+			runningTag := ""
+			if parts := strings.Split(container.Image, ":"); len(parts) >= 2 {
+				runningTag = parts[len(parts)-1]
 			}
-			errMsg = fmt.Sprintf("Compose tag '%s' no longer exists on the registry. Update your compose file to use an available tag (running: %s).", tag, container.Image)
+			composeTag := ""
+			if parts := strings.Split(expectedImage, ":"); len(parts) >= 2 {
+				composeTag = parts[len(parts)-1]
+			}
+
+			log.Printf("FIX_MISMATCH: Compose tag '%s' removed from registry, updating compose file to running tag '%s'", composeTag, runningTag)
+			o.publishProgress(operationID, container.Name, stackName, "updating_compose", 60,
+				fmt.Sprintf("Tag '%s' removed from registry, syncing compose to running tag '%s'", composeTag, runningTag))
+
+			if runningTag == "" {
+				o.failOperation(ctx, operationID, "pulling_image", "Cannot resolve mismatch: running container has no tag")
+				return
+			}
+
+			if err := o.updateComposeFile(ctx, composeFilePath, container, runningTag); err != nil {
+				o.failOperation(ctx, operationID, "updating_compose", fmt.Sprintf("Failed to update compose file: %v", err))
+				return
+			}
+
+			// Compose file updated — mismatch resolved without recreating the container
+			log.Printf("FIX_MISMATCH: Updated compose file to match running tag '%s' for %s", runningTag, container.Name)
+			o.publishProgress(operationID, container.Name, stackName, "complete", 100,
+				fmt.Sprintf("Updated compose file: %s → %s (tag removed from registry)", composeTag, runningTag))
+
+			completedNow := time.Now()
+			completedOp, completedFound, _ := o.storage.GetUpdateOperation(ctx, operationID)
+			if completedFound {
+				completedOp.Status = "complete"
+				completedOp.CompletedAt = &completedNow
+				o.storage.SaveUpdateOperation(ctx, completedOp)
+			}
+
+			if o.eventBus != nil {
+				o.eventBus.Publish(events.Event{
+					Type: events.EventContainerUpdated,
+					Payload: map[string]interface{}{
+						"container_id":   container.ID,
+						"container_name": container.Name,
+						"operation_id":   operationID,
+						"status":         "updated",
+					},
+				})
+			}
+			return
 		}
-		o.failOperation(ctx, operationID, "pulling_image", errMsg)
+
+		o.failOperation(ctx, operationID, "pulling_image", fmt.Sprintf("Image pull failed: %v", err))
 		return
 	}
 	close(progressChan)
@@ -3054,7 +3101,15 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 									o.failOperation(ctx, q.OperationID, "queued", fmt.Sprintf("Failed to derive expected image: %v", err))
 									continue
 								}
-								go o.executeFixMismatch(opCtx, q.OperationID, targetContainers[0], expectedImage, q.StackName)
+								qComposePath := o.getComposeFilePath(targetContainers[0])
+								qResolvedPath, resolveErr := o.resolveComposeFile(qComposePath)
+								if resolveErr != nil {
+									log.Printf("QUEUE: Failed to resolve compose file for fix_mismatch %s: %v", q.OperationID, resolveErr)
+									o.releaseStackLock(q.StackName)
+									o.failOperation(ctx, q.OperationID, "queued", fmt.Sprintf("Failed to resolve compose file: %v", resolveErr))
+									continue
+								}
+								go o.executeFixMismatch(opCtx, q.OperationID, targetContainers[0], expectedImage, q.StackName, qResolvedPath)
 							} else {
 								log.Printf("QUEUE: fix_mismatch with multiple containers not supported, operation %s", q.OperationID)
 								o.releaseStackLock(q.StackName)
