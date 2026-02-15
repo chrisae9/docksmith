@@ -1440,6 +1440,11 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 
 		reader, err := o.dockerSDK.ImagePull(ctx, imageRef, image.PullOptions{})
 		if err != nil {
+			// Don't retry permanent errors — tag/manifest doesn't exist on the registry
+			errStr := err.Error()
+			if strings.Contains(errStr, "manifest unknown") || strings.Contains(errStr, "not found") {
+				return fmt.Errorf("image tag does not exist on the registry: %w", err)
+			}
 			if attempt < maxRetries-1 {
 				continue
 			}
@@ -2689,7 +2694,16 @@ func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID
 
 	if err := o.pullImage(ctx, expectedImage, progressChan); err != nil {
 		close(progressChan)
-		o.failOperation(ctx, operationID, "pulling_image", fmt.Sprintf("Image pull failed: %v", err))
+		errMsg := fmt.Sprintf("Image pull failed: %v", err)
+		if strings.Contains(err.Error(), "does not exist on the registry") {
+			// Extract tag from expected image for a clearer message
+			tag := expectedImage
+			if parts := strings.Split(expectedImage, ":"); len(parts) >= 2 {
+				tag = parts[len(parts)-1]
+			}
+			errMsg = fmt.Sprintf("Compose tag '%s' no longer exists on the registry. Update your compose file to use an available tag (running: %s).", tag, container.Image)
+		}
+		o.failOperation(ctx, operationID, "pulling_image", errMsg)
 		return
 	}
 	close(progressChan)
