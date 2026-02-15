@@ -80,6 +80,19 @@ func (cf *ComposeFile) FindServiceByContainerName(containerName string) (*Servic
 	return nil, fmt.Errorf("service not found for container: %s", containerName)
 }
 
+// GetServiceImage extracts the image value from a Service's YAML node.
+func GetServiceImage(svc *Service) string {
+	if svc.Node == nil || svc.Node.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i < len(svc.Node.Content)-1; i += 2 {
+		if svc.Node.Content[i].Value == "image" {
+			return svc.Node.Content[i+1].Value
+		}
+	}
+	return ""
+}
+
 // getContainerName extracts the container_name value from a service definition node.
 func getContainerName(serviceNode *yaml.Node) string {
 	if serviceNode.Kind != yaml.MappingNode {

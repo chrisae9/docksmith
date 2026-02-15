@@ -75,7 +75,7 @@ export class SequentialExecutor implements OperationExecutor {
   }
 
   private async runBatchFixMismatch(info: BatchFixMismatchOperation, ctx: ExecutorContext): Promise<void> {
-    const { dispatch, runId } = ctx;
+    const { dispatch, runId, setSearchParams } = ctx;
     const { containerNames } = info;
 
     addLog(dispatch, runId, `Fixing ${containerNames.length} compose mismatch(es)...`, 'info', 'fa-rotate');
@@ -93,6 +93,10 @@ export class SequentialExecutor implements OperationExecutor {
         if (!response.success || !response.data?.operation_id) {
           throw new Error(response.error || 'Failed to start fix mismatch operation');
         }
+
+        const opId = response.data.operation_id;
+        dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName, operationId: opId });
+        setSearchParams({ id: opId }, { replace: true });
 
         // Poll for completion (inline polling — sequential operations)
         let completed = false;

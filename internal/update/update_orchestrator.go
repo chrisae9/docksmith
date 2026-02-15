@@ -2600,17 +2600,23 @@ func (o *UpdateOrchestrator) FixComposeMismatch(ctx context.Context, containerNa
 		return "", fmt.Errorf("container %s has no compose service label", containerName)
 	}
 
-	// Read the compose file to get the expected image tag
-	content, err := os.ReadFile(resolvedPath)
+	// Load compose file (handles include directives for multi-file stacks)
+	cf, err := compose.LoadComposeFileOrIncluded(resolvedPath, serviceName)
 	if err != nil {
 		o.releaseStackLock(stackName)
-		return "", fmt.Errorf("failed to read compose file: %w", err)
+		return "", fmt.Errorf("failed to load compose file: %w", err)
 	}
 
-	expectedImage, err := extractImageFromCompose(content, serviceName)
+	svc, err := cf.FindServiceByContainerName(serviceName)
 	if err != nil {
 		o.releaseStackLock(stackName)
-		return "", fmt.Errorf("failed to extract image from compose file: %w", err)
+		return "", fmt.Errorf("service %s not found in compose file: %w", serviceName, err)
+	}
+
+	expectedImage := compose.GetServiceImage(svc)
+	if expectedImage == "" {
+		o.releaseStackLock(stackName)
+		return "", fmt.Errorf("no image key found for service %s", serviceName)
 	}
 
 	log.Printf("FIX_MISMATCH: Container %s running %s, compose expects %s", containerName, targetContainer.Image, expectedImage)
