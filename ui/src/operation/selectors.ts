@@ -1,4 +1,4 @@
-import type { OperationState, ContainerState } from './types';
+import type { OperationState } from './types';
 
 export function selectSuccessCount(state: OperationState): number {
   return state.containers.filter(c => c.status === 'success').length;
@@ -10,10 +10,6 @@ export function selectFailedCount(state: OperationState): number {
 
 export function selectIsTerminal(state: OperationState): boolean {
   return state.phase === 'completed' || state.phase === 'failed' || state.phase === 'partial';
-}
-
-export function selectIsComplete(state: OperationState): boolean {
-  return selectIsTerminal(state);
 }
 
 export function selectHasErrors(state: OperationState): boolean {
@@ -29,18 +25,3 @@ export function selectDisplayPercent(state: OperationState): number {
   return state.currentPercent;
 }
 
-export function selectRunningContainers(state: OperationState): ContainerState[] {
-  return state.containers.filter(c => c.status === 'in_progress');
-}
-
-export function selectQueuedContainers(state: OperationState): ContainerState[] {
-  return state.containers.filter(c => c.status === 'pending');
-}
-
-export function selectActiveContainer(state: OperationState): ContainerState | undefined {
-  return state.containers.find(c => c.status === 'in_progress');
-}
-
-export function selectCompletedCount(state: OperationState): number {
-  return state.containers.filter(c => c.status === 'success' || c.status === 'failed').length;
-}

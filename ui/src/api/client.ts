@@ -151,16 +151,6 @@ export async function triggerBatchUpdate(containers: Array<{
   });
 }
 
-// Get rollback information
-export async function getRollbackInfo(operationId: string): Promise<APIResponse<unknown>> {
-  return fetchAPI('/rollback', {
-    method: 'POST',
-    body: JSON.stringify({
-      operation_id: operationId,
-    }),
-  });
-}
-
 // Get all operations in a batch group
 export async function getOperationsByGroup(groupId: string): Promise<APIResponse<{
   batch_group_id: string;
@@ -303,16 +293,6 @@ export async function removeLabels(
   });
 }
 
-// Restart operations
-export interface RestartResponse {
-  success: boolean;
-  message: string;
-  container_names: string[];
-  dependents_restarted?: string[];
-  dependents_blocked?: string[];
-  errors?: string[];
-}
-
 // Start a restart operation via orchestrator (returns operation_id for SSE tracking)
 export interface StartRestartResponse {
   operation_id: string;
@@ -324,21 +304,6 @@ export interface StartRestartResponse {
 export async function startRestart(containerName: string, force = false): Promise<APIResponse<StartRestartResponse>> {
   const url = force ? `/restart/start/${containerName}?force=true` : `/restart/start/${containerName}`;
   return fetchAPI(url, {
-    method: 'POST',
-  });
-}
-
-// Restart a single container (legacy - no SSE progress)
-export async function restartContainer(containerName: string, force = false): Promise<APIResponse<RestartResponse>> {
-  const url = force ? `/restart/container/${containerName}?force=true` : `/restart/container/${containerName}`;
-  return fetchAPI(url, {
-    method: 'POST',
-  });
-}
-
-// Restart all containers in a stack
-export async function restartStack(stackName: string): Promise<APIResponse<RestartResponse>> {
-  return fetchAPI(`/restart/stack/${stackName}`, {
     method: 'POST',
   });
 }

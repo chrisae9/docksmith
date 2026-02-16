@@ -1,24 +1,9 @@
-import { STAGE_INFO, RESTART_STAGES } from '../constants/progress';
 import type {
   OperationInfo,
   OperationType,
   OperationError,
   RestartOperation,
-  RollbackOperation,
-  StartOperation,
-  StopOperation,
-  RemoveOperation,
-  StackRestartOperation,
-  StackStopOperation,
-  FixMismatchOperation,
-  BatchFixMismatchOperation,
-  MixedOperation,
   BatchLabelOperation,
-  BatchStartOperation,
-  BatchStopOperation,
-  BatchRestartOperation,
-  BatchRemoveOperation,
-  LabelRollbackOperation,
 } from './types';
 
 // Parse location state into OperationInfo (from router navigation)
@@ -204,113 +189,6 @@ export function getPageTitle(operationType: OperationType | null, recoveredOpera
     case 'labelRollback': return 'Rolling Back Labels';
     default: return 'Progress';
   }
-}
-
-// Stage message — the primary text shown during/after an operation
-export function getStageMessage(params: {
-  operationType: OperationType | null;
-  operationInfo: OperationInfo | null;
-  containers: { name: string; status: string }[];
-  currentStage: string | null;
-  isComplete: boolean;
-  hasErrors: boolean;
-  isRecoveryMode: boolean;
-  recoveredOperation: any;
-}): string {
-  const { operationType, operationInfo, containers, currentStage, isComplete, hasErrors, isRecoveryMode, recoveredOperation } = params;
-
-  if (isComplete) {
-    if (hasErrors) {
-      return 'Operation failed';
-    }
-    // Handle recovery mode completion messages
-    if (isRecoveryMode && recoveredOperation) {
-      return recoveredOperation.error_message || 'Completed successfully!';
-    }
-    switch (operationType) {
-      case 'restart': return 'Container restarted successfully!';
-      case 'update': return 'All updates completed successfully!';
-      case 'rollback': return 'Rollback completed successfully!';
-      case 'start': return 'Container started successfully!';
-      case 'stop': return 'Container stopped successfully!';
-      case 'remove': return 'Container removed successfully!';
-      case 'stackRestart': return 'Stack restarted successfully!';
-      case 'stackStop': return 'Stack stopped successfully!';
-      case 'fixMismatch': return 'Compose mismatch fixed successfully!';
-      case 'batchFixMismatch': return 'All compose mismatches fixed successfully!';
-      case 'mixed': return 'All operations completed successfully!';
-      case 'batchLabel': return 'Labels applied successfully!';
-      case 'batchStart': return 'All containers started successfully!';
-      case 'batchStop': return 'All containers stopped successfully!';
-      case 'batchRestart': return 'All containers restarted successfully!';
-      case 'batchRemove': return 'All containers removed successfully!';
-      case 'labelRollback': return 'Labels restored successfully!';
-      default: return 'Completed successfully!';
-    }
-  }
-
-  if (currentStage) {
-    const stageInfo = STAGE_INFO[currentStage] || RESTART_STAGES[currentStage];
-    if (stageInfo) {
-      const containerName = operationType === 'update' && containers.find(c => c.status === 'in_progress')?.name;
-      return containerName ? `${containerName}: ${stageInfo.label}` : stageInfo.label;
-    }
-  }
-
-  // Handle recovery mode in-progress messages
-  if (isRecoveryMode) {
-    const containerName = recoveredOperation?.container_name || containers[0]?.name || 'Container';
-    return `Recovering status for ${containerName}...`;
-  }
-
-  switch (operationType) {
-    case 'restart': return `Restarting ${(operationInfo as RestartOperation).containerName}...`;
-    case 'update': return `Updating ${containers.length} container(s)...`;
-    case 'rollback': return `Rolling back ${(operationInfo as RollbackOperation).containerName}...`;
-    case 'start': return `Starting ${(operationInfo as StartOperation).containerName}...`;
-    case 'stop': return `Stopping ${(operationInfo as StopOperation).containerName}...`;
-    case 'remove': return `Removing ${(operationInfo as RemoveOperation).containerName}...`;
-    case 'stackRestart': return `Restarting ${(operationInfo as StackRestartOperation).containers.length} container(s) in "${(operationInfo as StackRestartOperation).stackName}"...`;
-    case 'stackStop': return `Stopping ${(operationInfo as StackStopOperation).containers.length} container(s) in "${(operationInfo as StackStopOperation).stackName}"...`;
-    case 'fixMismatch': return `Fixing ${(operationInfo as FixMismatchOperation).containerName}...`;
-    case 'batchFixMismatch': return `Fixing ${(operationInfo as BatchFixMismatchOperation).containerNames.length} compose mismatch(es)...`;
-    case 'mixed': return `Processing ${(operationInfo as MixedOperation).updates.length + (operationInfo as MixedOperation).mismatches.length} container(s)...`;
-    case 'batchLabel': return `Applying labels to ${(operationInfo as BatchLabelOperation).containers.length} container(s)...`;
-    case 'batchStart': return `Starting ${(operationInfo as BatchStartOperation).containers.length} container(s)...`;
-    case 'batchStop': return `Stopping ${(operationInfo as BatchStopOperation).containers.length} container(s)...`;
-    case 'batchRestart': return `Restarting ${(operationInfo as BatchRestartOperation).containers.length} container(s)...`;
-    case 'batchRemove': return `Removing ${(operationInfo as BatchRemoveOperation).containers.length} container(s)...`;
-    case 'labelRollback': return `Rolling back labels for ${(operationInfo as LabelRollbackOperation).containers.length} container(s)...`;
-    default: return 'Processing...';
-  }
-}
-
-// Get stage description text (subtitle below stage message)
-export function getStageDescription(currentStage: string | null): string {
-  if (currentStage) {
-    const stageInfo = STAGE_INFO[currentStage] || RESTART_STAGES[currentStage];
-    if (stageInfo) {
-      return stageInfo.description;
-    }
-  }
-  return '';
-}
-
-// Get stage icon class name (for FA icon rendering)
-export function getStageIcon(currentStage: string | null, isComplete: boolean, hasErrors: boolean): string {
-  if (hasErrors) {
-    return 'fa-circle-xmark';
-  }
-  if (isComplete) {
-    return 'fa-circle-check';
-  }
-  if (currentStage) {
-    const stageInfo = STAGE_INFO[currentStage] || RESTART_STAGES[currentStage];
-    if (stageInfo) {
-      return stageInfo.icon;
-    }
-  }
-  return 'fa-spinner fa-spin';
 }
 
 // Describe label changes for display (used in restart with saveSettings)

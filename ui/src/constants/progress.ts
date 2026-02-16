@@ -132,17 +132,3 @@ export interface LogEntry {
   icon?: string;
 }
 
-// Helper to get stage icon class
-export function getStageIconClass(stage: string, stageInfo = STAGE_INFO): string {
-  return stageInfo[stage]?.icon || 'fa-hourglass-half';
-}
-
-// Helper to get stage label
-export function getStageLabel(stage: string, stageInfo = STAGE_INFO): string {
-  return stageInfo[stage]?.label || stage;
-}
-
-// Helper to get stage description
-export function getStageDescription(stage: string, stageInfo = STAGE_INFO): string {
-  return stageInfo[stage]?.description || '';
-}

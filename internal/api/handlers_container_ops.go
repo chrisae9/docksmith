@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/docker/docker/api/types/container"
@@ -435,42 +436,57 @@ func (s *Server) publishContainerUpdated(operationID, containerName, status stri
 	})
 }
 
-// handleContainerStop stops a running container
-// POST /api/containers/{name}/stop
-// Query params: ?timeout=10
-func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
+// containerOpConfig defines the varying parts of a container operation (single or batch).
+type containerOpConfig struct {
+	opType      string // storage operation type: "stop", "start", "restart", "remove"
+	stage       string // SSE progress stage: "stopping", "starting", "restarting", "removing"
+	successVerb string // past tense for messages: "stopped", "started", "restarted", "removed"
+}
+
+// capitalize returns s with the first letter uppercased. Only handles ASCII.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// runSingleContainerOp executes a single-container operation with full operation lifecycle:
+// find container → validate → record op → publish progress → execute → handle result → respond.
+func (s *Server) runSingleContainerOp(
+	w http.ResponseWriter, r *http.Request,
+	cfg containerOpConfig,
+	validate func(ctr *docker.Container) error,
+	execute func(ctx context.Context, ctrID string) error,
+	extraResponse map[string]any,
+) {
 	containerName := r.PathValue("name")
 	if !validateRequired(w, "container name", containerName) {
 		return
 	}
 
-	timeout := parsePositiveIntParam(r, "timeout", 10)
-
 	ctx := r.Context()
-
-	// Find container
 	ctr, err := s.findContainerByName(ctx, containerName)
 	if err != nil {
 		RespondNotFound(w, fmt.Errorf("container not found: %s", containerName))
 		return
 	}
 
-	// Check if already stopped
-	if ctr.State != "running" {
-		RespondBadRequest(w, fmt.Errorf("container is not running (state: %s)", ctr.State))
-		return
+	if validate != nil {
+		if err := validate(ctr); err != nil {
+			RespondBadRequest(w, err)
+			return
+		}
 	}
 
-	// Generate operation ID and record operation start
 	operationID := uuid.New().String()
 	now := time.Now()
-
 	op := storage.UpdateOperation{
 		OperationID:   operationID,
 		ContainerID:   ctr.ID,
 		ContainerName: containerName,
 		StackName:     ctr.Stack,
-		OperationType: "stop",
+		OperationType: cfg.opType,
 		Status:        "in_progress",
 		StartedAt:     &now,
 		CreatedAt:     now,
@@ -478,308 +494,118 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.storageService != nil {
 		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save stop operation to database: %v", err)
+			log.Printf("Failed to save %s operation to database: %v", cfg.opType, err)
 		}
 	}
 
-	// Emit progress event
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "stopping", 30, "Stopping container...")
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, cfg.stage, 30,
+		fmt.Sprintf("%s container...", capitalize(cfg.stage)))
 
-	// Stop the container
-	stopOptions := container.StopOptions{
-		Timeout: &timeout,
-	}
-	err = s.dockerService.GetClient().ContainerStop(ctx, ctr.ID, stopOptions)
-	if err != nil {
+	if err := execute(ctx, ctr.ID); err != nil {
 		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
 		s.publishContainerUpdated(operationID, containerName, "failed")
-		// Record failure
 		if s.storageService != nil {
 			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
 		}
-		RespondInternalError(w, fmt.Errorf("failed to stop container: %w", err))
+		RespondInternalError(w, fmt.Errorf("failed to %s container: %w", cfg.opType, err))
 		return
 	}
 
-	// Emit completion events
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s stopped successfully", containerName))
+	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100,
+		fmt.Sprintf("Container %s %s successfully", containerName, cfg.successVerb))
 	s.publishContainerUpdated(operationID, containerName, "complete")
 
-	// Record success
 	if s.storageService != nil {
 		completedAt := time.Now()
 		op.Status = "complete"
 		op.CompletedAt = &completedAt
 		op.UpdatedAt = completedAt
 		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save stop operation completion: %v", err)
+			log.Printf("Failed to save %s operation completion: %v", cfg.opType, err)
 		}
 	}
 
-	RespondSuccess(w, map[string]any{
+	resp := map[string]any{
 		"container":    containerName,
-		"status":       "stopped",
+		"status":       cfg.successVerb,
 		"operation_id": operationID,
-		"message":      fmt.Sprintf("Container %s stopped successfully", containerName),
-	})
+		"message":      fmt.Sprintf("Container %s %s successfully", containerName, cfg.successVerb),
+	}
+	for k, v := range extraResponse {
+		resp[k] = v
+	}
+	RespondSuccess(w, resp)
+}
+
+// handleContainerStop stops a running container
+// POST /api/containers/{name}/stop?timeout=10
+func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
+	timeout := parsePositiveIntParam(r, "timeout", 10)
+	s.runSingleContainerOp(w, r,
+		containerOpConfig{"stop", "stopping", "stopped"},
+		func(ctr *docker.Container) error {
+			if ctr.State != "running" {
+				return fmt.Errorf("container is not running (state: %s)", ctr.State)
+			}
+			return nil
+		},
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+		},
+		nil,
+	)
 }
 
 // handleContainerStart starts a stopped container
 // POST /api/containers/{name}/start
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
-	containerName := r.PathValue("name")
-	if !validateRequired(w, "container name", containerName) {
-		return
-	}
-
-	ctx := r.Context()
-
-	// Find container
-	ctr, err := s.findContainerByName(ctx, containerName)
-	if err != nil {
-		RespondNotFound(w, fmt.Errorf("container not found: %s", containerName))
-		return
-	}
-
-	// Check if already running
-	if ctr.State == "running" {
-		RespondBadRequest(w, fmt.Errorf("container is already running"))
-		return
-	}
-
-	// Generate operation ID and record operation start
-	operationID := uuid.New().String()
-	now := time.Now()
-
-	op := storage.UpdateOperation{
-		OperationID:   operationID,
-		ContainerID:   ctr.ID,
-		ContainerName: containerName,
-		StackName:     ctr.Stack,
-		OperationType: "start",
-		Status:        "in_progress",
-		StartedAt:     &now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if s.storageService != nil {
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save start operation to database: %v", err)
-		}
-	}
-
-	// Emit progress event
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "starting", 30, "Starting container...")
-
-	// Start the container
-	err = s.dockerService.GetClient().ContainerStart(ctx, ctr.ID, container.StartOptions{})
-	if err != nil {
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-		s.publishContainerUpdated(operationID, containerName, "failed")
-		if s.storageService != nil {
-			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
-		}
-		RespondInternalError(w, fmt.Errorf("failed to start container: %w", err))
-		return
-	}
-
-	// Emit completion events
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s started successfully", containerName))
-	s.publishContainerUpdated(operationID, containerName, "complete")
-
-	// Record success
-	if s.storageService != nil {
-		completedAt := time.Now()
-		op.Status = "complete"
-		op.CompletedAt = &completedAt
-		op.UpdatedAt = completedAt
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save start operation completion: %v", err)
-		}
-	}
-
-	RespondSuccess(w, map[string]any{
-		"container":    containerName,
-		"status":       "started",
-		"operation_id": operationID,
-		"message":      fmt.Sprintf("Container %s started successfully", containerName),
-	})
+	s.runSingleContainerOp(w, r,
+		containerOpConfig{"start", "starting", "started"},
+		func(ctr *docker.Container) error {
+			if ctr.State == "running" {
+				return fmt.Errorf("container is already running")
+			}
+			return nil
+		},
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+		},
+		nil,
+	)
 }
 
 // handleContainerRestart restarts a container
-// POST /api/containers/{name}/restart
-// Query params: ?timeout=10
+// POST /api/containers/{name}/restart?timeout=10
 func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) {
-	containerName := r.PathValue("name")
-	if !validateRequired(w, "container name", containerName) {
-		return
-	}
-
 	timeout := parsePositiveIntParam(r, "timeout", 10)
-
-	ctx := r.Context()
-
-	// Find container
-	ctr, err := s.findContainerByName(ctx, containerName)
-	if err != nil {
-		RespondNotFound(w, fmt.Errorf("container not found: %s", containerName))
-		return
-	}
-
-	// Generate operation ID and record operation start
-	operationID := uuid.New().String()
-	now := time.Now()
-
-	op := storage.UpdateOperation{
-		OperationID:   operationID,
-		ContainerID:   ctr.ID,
-		ContainerName: containerName,
-		StackName:     ctr.Stack,
-		OperationType: "restart",
-		Status:        "in_progress",
-		StartedAt:     &now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if s.storageService != nil {
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save restart operation to database: %v", err)
-		}
-	}
-
-	// Emit progress event
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "restarting", 30, "Restarting container...")
-
-	// Restart the container
-	restartOptions := container.StopOptions{
-		Timeout: &timeout,
-	}
-	err = s.dockerService.GetClient().ContainerRestart(ctx, ctr.ID, restartOptions)
-	if err != nil {
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-		s.publishContainerUpdated(operationID, containerName, "failed")
-		if s.storageService != nil {
-			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
-		}
-		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
-		return
-	}
-
-	// Emit completion events
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s restarted successfully", containerName))
-	s.publishContainerUpdated(operationID, containerName, "complete")
-
-	// Record success
-	if s.storageService != nil {
-		completedAt := time.Now()
-		op.Status = "complete"
-		op.CompletedAt = &completedAt
-		op.UpdatedAt = completedAt
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save restart operation completion: %v", err)
-		}
-	}
-
-	RespondSuccess(w, map[string]any{
-		"container":    containerName,
-		"status":       "restarted",
-		"operation_id": operationID,
-		"message":      fmt.Sprintf("Container %s restarted successfully", containerName),
-	})
+	s.runSingleContainerOp(w, r,
+		containerOpConfig{"restart", "restarting", "restarted"},
+		nil,
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerRestart(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+		},
+		nil,
+	)
 }
 
 // handleContainerRemove removes a container
-// DELETE /api/containers/{name}
-// Query params: ?force=false&volumes=false
+// DELETE /api/containers/{name}?force=false&volumes=false
 func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
-	containerName := r.PathValue("name")
-	if !validateRequired(w, "container name", containerName) {
-		return
-	}
-
-	// Parse options
 	force := r.URL.Query().Get("force") == "true"
 	removeVolumes := r.URL.Query().Get("volumes") == "true"
-
-	ctx := r.Context()
-
-	// Find container
-	ctr, err := s.findContainerByName(ctx, containerName)
-	if err != nil {
-		RespondNotFound(w, fmt.Errorf("container not found: %s", containerName))
-		return
-	}
-
-	// Check if running and force not set
-	if ctr.State == "running" && !force {
-		RespondBadRequest(w, fmt.Errorf("container is running, use force=true to remove"))
-		return
-	}
-
-	// Generate operation ID and record operation start
-	operationID := uuid.New().String()
-	now := time.Now()
-
-	op := storage.UpdateOperation{
-		OperationID:   operationID,
-		ContainerID:   ctr.ID,
-		ContainerName: containerName,
-		StackName:     ctr.Stack,
-		OperationType: "remove",
-		Status:        "in_progress",
-		StartedAt:     &now,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if s.storageService != nil {
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save remove operation to database: %v", err)
-		}
-	}
-
-	// Emit progress event
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "removing", 30, "Removing container...")
-
-	// Remove the container
-	removeOptions := container.RemoveOptions{
-		Force:         force,
-		RemoveVolumes: removeVolumes,
-	}
-	err = s.dockerService.GetClient().ContainerRemove(ctx, ctr.ID, removeOptions)
-	if err != nil {
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-		s.publishContainerUpdated(operationID, containerName, "failed")
-		// Record failure
-		if s.storageService != nil {
-			s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
-		}
-		RespondInternalError(w, fmt.Errorf("failed to remove container: %w", err))
-		return
-	}
-
-	// Emit completion events
-	s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s removed successfully", containerName))
-	s.publishContainerUpdated(operationID, containerName, "complete")
-
-	// Record success
-	if s.storageService != nil {
-		completedAt := time.Now()
-		op.Status = "complete"
-		op.CompletedAt = &completedAt
-		op.UpdatedAt = completedAt
-		if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
-			log.Printf("Failed to save remove operation completion: %v", err)
-		}
-	}
-
-	RespondSuccess(w, map[string]any{
-		"container":    containerName,
-		"status":       "removed",
-		"operation_id": operationID,
-		"force":        force,
-		"volumes":      removeVolumes,
-		"message":      fmt.Sprintf("Container %s removed successfully", containerName),
-	})
+	s.runSingleContainerOp(w, r,
+		containerOpConfig{"remove", "removing", "removed"},
+		func(ctr *docker.Container) error {
+			if ctr.State == "running" && !force {
+				return fmt.Errorf("container is running, use force=true to remove")
+			}
+			return nil
+		},
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerRemove(ctx, ctrID, container.RemoveOptions{Force: force, RemoveVolumes: removeVolumes})
+		},
+		map[string]any{"force": force, "volumes": removeVolumes},
+	)
 }
 
 // BatchContainerRequest represents a batch container operation request
@@ -797,326 +623,180 @@ type BatchContainerResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// handleBatchStart starts multiple containers with a shared batch_group_id
+// runBatchContainerOp executes a batch container operation with shared batch_group_id.
+func (s *Server) runBatchContainerOp(
+	w http.ResponseWriter, r *http.Request,
+	cfg containerOpConfig,
+	req BatchContainerRequest,
+	validate func(ctr *docker.Container) error,
+	execute func(ctx context.Context, ctrID string) error,
+) {
+	ctx := r.Context()
+	batchGroupID := uuid.New().String()
+	results := make([]BatchContainerResult, 0, len(req.Containers))
+
+	for _, containerName := range req.Containers {
+		ctr, err := s.findContainerByName(ctx, containerName)
+		if err != nil {
+			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "container not found"})
+			continue
+		}
+
+		if validate != nil {
+			if err := validate(ctr); err != nil {
+				results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: err.Error()})
+				continue
+			}
+		}
+
+		operationID := uuid.New().String()
+		now := time.Now()
+		op := storage.UpdateOperation{
+			OperationID:   operationID,
+			ContainerID:   ctr.ID,
+			ContainerName: containerName,
+			StackName:     ctr.Stack,
+			OperationType: cfg.opType,
+			Status:        "in_progress",
+			BatchGroupID:  batchGroupID,
+			StartedAt:     &now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		if s.storageService != nil {
+			s.storageService.SaveUpdateOperation(ctx, op)
+		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, cfg.stage, 30,
+			fmt.Sprintf("%s container...", capitalize(cfg.stage)))
+
+		if err := execute(ctx, ctr.ID); err != nil {
+			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
+			s.publishContainerUpdated(operationID, containerName, "failed")
+			if s.storageService != nil {
+				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
+			}
+			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
+			continue
+		}
+
+		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100,
+			fmt.Sprintf("Container %s %s successfully", containerName, cfg.successVerb))
+		s.publishContainerUpdated(operationID, containerName, "complete")
+
+		if s.storageService != nil {
+			completedAt := time.Now()
+			op.Status = "complete"
+			op.CompletedAt = &completedAt
+			op.UpdatedAt = completedAt
+			s.storageService.SaveUpdateOperation(ctx, op)
+		}
+
+		results = append(results, BatchContainerResult{Container: containerName, Success: true, OperationID: operationID})
+	}
+
+	RespondSuccess(w, map[string]any{
+		"results":        results,
+		"batch_group_id": batchGroupID,
+	})
+}
+
+// handleBatchStart starts multiple containers
 // POST /api/containers/batch/start
 func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 	var req BatchContainerRequest
 	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
-
 	if len(req.Containers) == 0 {
 		RespondBadRequest(w, fmt.Errorf("containers array is required"))
 		return
 	}
-
-	ctx := r.Context()
-	batchGroupID := uuid.New().String()
-	results := make([]BatchContainerResult, 0, len(req.Containers))
-
-	for _, containerName := range req.Containers {
-		ctr, err := s.findContainerByName(ctx, containerName)
-		if err != nil {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "container not found"})
-			continue
-		}
-
-		if ctr.State == "running" {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "already running"})
-			continue
-		}
-
-		operationID := uuid.New().String()
-		now := time.Now()
-		op := storage.UpdateOperation{
-			OperationID:   operationID,
-			ContainerID:   ctr.ID,
-			ContainerName: containerName,
-			StackName:     ctr.Stack,
-			OperationType: "start",
-			Status:        "in_progress",
-			BatchGroupID:  batchGroupID,
-			StartedAt:     &now,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}
-		if s.storageService != nil {
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "starting", 30, "Starting container...")
-
-		if err := s.dockerService.GetClient().ContainerStart(ctx, ctr.ID, container.StartOptions{}); err != nil {
-			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-			s.publishContainerUpdated(operationID, containerName, "failed")
-			if s.storageService != nil {
-				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
+	s.runBatchContainerOp(w, r,
+		containerOpConfig{"start", "starting", "started"}, req,
+		func(ctr *docker.Container) error {
+			if ctr.State == "running" {
+				return fmt.Errorf("already running")
 			}
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
-			continue
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s started successfully", containerName))
-		s.publishContainerUpdated(operationID, containerName, "complete")
-
-		if s.storageService != nil {
-			completedAt := time.Now()
-			op.Status = "complete"
-			op.CompletedAt = &completedAt
-			op.UpdatedAt = completedAt
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		results = append(results, BatchContainerResult{Container: containerName, Success: true, OperationID: operationID})
-	}
-
-	RespondSuccess(w, map[string]any{
-		"results":        results,
-		"batch_group_id": batchGroupID,
-	})
+			return nil
+		},
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+		},
+	)
 }
 
-// handleBatchStop stops multiple containers with a shared batch_group_id
+// handleBatchStop stops multiple containers
 // POST /api/containers/batch/stop
 func (s *Server) handleBatchStop(w http.ResponseWriter, r *http.Request) {
 	var req BatchContainerRequest
 	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
-
 	if len(req.Containers) == 0 {
 		RespondBadRequest(w, fmt.Errorf("containers array is required"))
 		return
 	}
-
 	timeout := 10
 	if req.Timeout != nil && *req.Timeout > 0 {
 		timeout = *req.Timeout
 	}
-
-	ctx := r.Context()
-	batchGroupID := uuid.New().String()
-	results := make([]BatchContainerResult, 0, len(req.Containers))
-
-	for _, containerName := range req.Containers {
-		ctr, err := s.findContainerByName(ctx, containerName)
-		if err != nil {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "container not found"})
-			continue
-		}
-
-		if ctr.State != "running" {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: fmt.Sprintf("not running (state: %s)", ctr.State)})
-			continue
-		}
-
-		operationID := uuid.New().String()
-		now := time.Now()
-		op := storage.UpdateOperation{
-			OperationID:   operationID,
-			ContainerID:   ctr.ID,
-			ContainerName: containerName,
-			StackName:     ctr.Stack,
-			OperationType: "stop",
-			Status:        "in_progress",
-			BatchGroupID:  batchGroupID,
-			StartedAt:     &now,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}
-		if s.storageService != nil {
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "stopping", 30, "Stopping container...")
-
-		stopOptions := container.StopOptions{Timeout: &timeout}
-		if err := s.dockerService.GetClient().ContainerStop(ctx, ctr.ID, stopOptions); err != nil {
-			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-			s.publishContainerUpdated(operationID, containerName, "failed")
-			if s.storageService != nil {
-				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
+	s.runBatchContainerOp(w, r,
+		containerOpConfig{"stop", "stopping", "stopped"}, req,
+		func(ctr *docker.Container) error {
+			if ctr.State != "running" {
+				return fmt.Errorf("not running (state: %s)", ctr.State)
 			}
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
-			continue
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s stopped successfully", containerName))
-		s.publishContainerUpdated(operationID, containerName, "complete")
-
-		if s.storageService != nil {
-			completedAt := time.Now()
-			op.Status = "complete"
-			op.CompletedAt = &completedAt
-			op.UpdatedAt = completedAt
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		results = append(results, BatchContainerResult{Container: containerName, Success: true, OperationID: operationID})
-	}
-
-	RespondSuccess(w, map[string]any{
-		"results":        results,
-		"batch_group_id": batchGroupID,
-	})
+			return nil
+		},
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+		},
+	)
 }
 
-// handleBatchRestart restarts multiple containers with a shared batch_group_id
+// handleBatchRestart restarts multiple containers
 // POST /api/containers/batch/restart
 func (s *Server) handleBatchRestart(w http.ResponseWriter, r *http.Request) {
 	var req BatchContainerRequest
 	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
-
 	if len(req.Containers) == 0 {
 		RespondBadRequest(w, fmt.Errorf("containers array is required"))
 		return
 	}
-
 	timeout := 10
 	if req.Timeout != nil && *req.Timeout > 0 {
 		timeout = *req.Timeout
 	}
-
-	ctx := r.Context()
-	batchGroupID := uuid.New().String()
-	results := make([]BatchContainerResult, 0, len(req.Containers))
-
-	for _, containerName := range req.Containers {
-		ctr, err := s.findContainerByName(ctx, containerName)
-		if err != nil {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "container not found"})
-			continue
-		}
-
-		operationID := uuid.New().String()
-		now := time.Now()
-		op := storage.UpdateOperation{
-			OperationID:   operationID,
-			ContainerID:   ctr.ID,
-			ContainerName: containerName,
-			StackName:     ctr.Stack,
-			OperationType: "restart",
-			Status:        "in_progress",
-			BatchGroupID:  batchGroupID,
-			StartedAt:     &now,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}
-		if s.storageService != nil {
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "restarting", 30, "Restarting container...")
-
-		restartOptions := container.StopOptions{Timeout: &timeout}
-		if err := s.dockerService.GetClient().ContainerRestart(ctx, ctr.ID, restartOptions); err != nil {
-			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-			s.publishContainerUpdated(operationID, containerName, "failed")
-			if s.storageService != nil {
-				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
-			}
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
-			continue
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s restarted successfully", containerName))
-		s.publishContainerUpdated(operationID, containerName, "complete")
-
-		if s.storageService != nil {
-			completedAt := time.Now()
-			op.Status = "complete"
-			op.CompletedAt = &completedAt
-			op.UpdatedAt = completedAt
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		results = append(results, BatchContainerResult{Container: containerName, Success: true, OperationID: operationID})
-	}
-
-	RespondSuccess(w, map[string]any{
-		"results":        results,
-		"batch_group_id": batchGroupID,
-	})
+	s.runBatchContainerOp(w, r,
+		containerOpConfig{"restart", "restarting", "restarted"}, req,
+		nil,
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerRestart(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+		},
+	)
 }
 
-// handleBatchRemove removes multiple containers with a shared batch_group_id
+// handleBatchRemove removes multiple containers
 // POST /api/containers/batch/remove
 func (s *Server) handleBatchRemove(w http.ResponseWriter, r *http.Request) {
 	var req BatchContainerRequest
 	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
-
 	if len(req.Containers) == 0 {
 		RespondBadRequest(w, fmt.Errorf("containers array is required"))
 		return
 	}
-
-	ctx := r.Context()
-	batchGroupID := uuid.New().String()
-	results := make([]BatchContainerResult, 0, len(req.Containers))
-
-	for _, containerName := range req.Containers {
-		ctr, err := s.findContainerByName(ctx, containerName)
-		if err != nil {
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, Error: "container not found"})
-			continue
-		}
-
-		operationID := uuid.New().String()
-		now := time.Now()
-		op := storage.UpdateOperation{
-			OperationID:   operationID,
-			ContainerID:   ctr.ID,
-			ContainerName: containerName,
-			StackName:     ctr.Stack,
-			OperationType: "remove",
-			Status:        "in_progress",
-			BatchGroupID:  batchGroupID,
-			StartedAt:     &now,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}
-		if s.storageService != nil {
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "removing", 30, "Removing container...")
-
-		removeOptions := container.RemoveOptions{
-			Force:         req.Force || ctr.State == "running",
-			RemoveVolumes: false,
-		}
-		if err := s.dockerService.GetClient().ContainerRemove(ctx, ctr.ID, removeOptions); err != nil {
-			s.publishContainerProgress(operationID, containerName, ctr.Stack, "failed", 0, err.Error())
-			s.publishContainerUpdated(operationID, containerName, "failed")
-			if s.storageService != nil {
-				s.storageService.UpdateOperationStatus(ctx, operationID, "failed", err.Error())
-			}
-			results = append(results, BatchContainerResult{Container: containerName, Success: false, OperationID: operationID, Error: err.Error()})
-			continue
-		}
-
-		s.publishContainerProgress(operationID, containerName, ctr.Stack, "complete", 100, fmt.Sprintf("Container %s removed successfully", containerName))
-		s.publishContainerUpdated(operationID, containerName, "complete")
-
-		if s.storageService != nil {
-			completedAt := time.Now()
-			op.Status = "complete"
-			op.CompletedAt = &completedAt
-			op.UpdatedAt = completedAt
-			s.storageService.SaveUpdateOperation(ctx, op)
-		}
-
-		results = append(results, BatchContainerResult{Container: containerName, Success: true, OperationID: operationID})
-	}
-
-	RespondSuccess(w, map[string]any{
-		"results":        results,
-		"batch_group_id": batchGroupID,
-	})
+	s.runBatchContainerOp(w, r,
+		containerOpConfig{"remove", "removing", "removed"}, req,
+		nil,
+		func(ctx context.Context, ctrID string) error {
+			return s.dockerService.GetClient().ContainerRemove(ctx, ctrID, container.RemoveOptions{Force: req.Force, RemoveVolumes: false})
+		},
+	)
 }
 
 // handleContainerStats returns container resource usage statistics
