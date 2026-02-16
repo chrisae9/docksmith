@@ -543,14 +543,13 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 	timeout := parsePositiveIntParam(r, "timeout", 10)
 	s.runSingleContainerOp(w, r,
 		containerOpConfig{"stop", "stopping", "stopped"},
-		func(ctr *docker.Container) error {
-			if ctr.State != "running" {
-				return fmt.Errorf("container is not running (state: %s)", ctr.State)
-			}
-			return nil
-		},
+		nil, // No validation — already-stopped containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			if err != nil && (strings.Contains(err.Error(), "is not running") || strings.Contains(err.Error(), "already stopped")) {
+				return nil // Already stopped — idempotent, like docker compose down
+			}
+			return err
 		},
 		nil,
 	)
@@ -561,14 +560,13 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 	s.runSingleContainerOp(w, r,
 		containerOpConfig{"start", "starting", "started"},
-		func(ctr *docker.Container) error {
-			if ctr.State == "running" {
-				return fmt.Errorf("container is already running")
-			}
-			return nil
-		},
+		nil, // No validation — already-running containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			if err != nil && strings.Contains(err.Error(), "already started") {
+				return nil // Already running — idempotent
+			}
+			return err
 		},
 		nil,
 	)
@@ -714,14 +712,13 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.runBatchContainerOp(w, r,
 		containerOpConfig{"start", "starting", "started"}, req,
-		func(ctr *docker.Container) error {
-			if ctr.State == "running" {
-				return fmt.Errorf("already running")
-			}
-			return nil
-		},
+		nil, // No validation — already-running containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			if err != nil && strings.Contains(err.Error(), "already started") {
+				return nil // Already running — idempotent
+			}
+			return err
 		},
 	)
 }
@@ -743,14 +740,13 @@ func (s *Server) handleBatchStop(w http.ResponseWriter, r *http.Request) {
 	}
 	s.runBatchContainerOp(w, r,
 		containerOpConfig{"stop", "stopping", "stopped"}, req,
-		func(ctr *docker.Container) error {
-			if ctr.State != "running" {
-				return fmt.Errorf("not running (state: %s)", ctr.State)
-			}
-			return nil
-		},
+		nil, // No validation — already-stopped containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			if err != nil && (strings.Contains(err.Error(), "is not running") || strings.Contains(err.Error(), "already stopped")) {
+				return nil // Already stopped — idempotent, like docker compose down
+			}
+			return err
 		},
 	)
 }

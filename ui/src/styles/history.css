@@ -514,6 +514,13 @@
   white-space: nowrap;
 }
 
+.batch-op-status {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+.batch-op-status.complete { color: var(--color-success); }
+.batch-op-status.failed { color: var(--color-danger); }
+
 /* Container count badge in group card */
 .op-container-count {
   font-size: var(--text-xs);

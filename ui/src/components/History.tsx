@@ -8,9 +8,6 @@ import { SearchBar } from './shared';
 import { SkeletonHistory } from './Skeleton/Skeleton';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
-interface HistoryProps {
-  onBack: () => void;
-}
 
 interface RollbackConfirmation {
   operationId: string;
@@ -73,7 +70,7 @@ function getRollbackStrategyNote(strategy: RollbackStrategy, detail: BatchContai
 // Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
 type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change' | 'stop' | 'remove' | 'fix_mismatch';
 
-export function History({ onBack: _onBack }: HistoryProps) {
+export function History() {
   const navigate = useNavigate();
   const [operations, setOperations] = useState<UpdateOperation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -734,10 +731,15 @@ export function History({ onBack: _onBack }: HistoryProps) {
               {getStatusIcon(item.aggregateStatus || 'complete', anyRolledBack)}
             </span>
             <span className="op-container">
-              {item.operations?.[0]?.operation_type === 'label_change'
-                ? <>Label Change <span className="op-type-badge label">LABELS</span></>
-                : <>Batch Update <span className="op-type-badge batch">BATCH</span></>
-              }
+              {(() => {
+                const opType = item.operations?.[0]?.operation_type;
+                if (opType === 'label_change') return <>Label Change <span className="op-type-badge label">LABELS</span></>;
+                if (opType === 'stop') return <>Batch Stop <span className="op-type-badge stop">STOP</span></>;
+                if (opType === 'start') return <>Batch Start <span className="op-type-badge restart">START</span></>;
+                if (opType === 'restart') return <>Batch Restart <span className="op-type-badge restart">RESTART</span></>;
+                if (opType === 'remove') return <>Batch Remove <span className="op-type-badge remove">REMOVE</span></>;
+                return <>Batch Update <span className="op-type-badge batch">BATCH</span></>;
+              })()}
             </span>
             <span className="op-container-count">{item.containerCount} containers</span>
             {anyRolledBack && (
@@ -815,10 +817,18 @@ export function History({ onBack: _onBack }: HistoryProps) {
                           <span className="batch-container-name">
                             {detail.container_name}
                           </span>
-                          <span className="batch-version-change">
-                            {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
-                          </span>
-                          {renderChangeTypeBadge(detail)}
+                          {detail.old_version || detail.new_version ? (
+                            <>
+                              <span className="batch-version-change">
+                                {formatVersionDisplay(detail.old_version, detail.old_resolved_version)} → {formatVersionDisplay(detail.new_version, detail.new_resolved_version)}
+                              </span>
+                              {renderChangeTypeBadge(detail)}
+                            </>
+                          ) : (
+                            <span className={`batch-op-status ${ownerOp?.status || 'complete'}`}>
+                              {ownerOp?.status === 'failed' ? ownerOp.error_message || 'Failed' : ownerOp?.status === 'complete' ? 'Done' : ownerOp?.status || ''}
+                            </span>
+                          )}
                         </div>
                         {strategyNote && (
                           <div className={`rollback-strategy-note ${strategy}`}>
