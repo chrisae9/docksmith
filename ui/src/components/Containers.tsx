@@ -933,14 +933,12 @@ export function Containers() {
                       <ActionMenuButton isActive={isMenuActive} isLoading={false} onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
                       <ActionMenu isActive={isMenuActive}>
                         {hasActiveContainers(items) && (
-                          <>
-                            <ActionMenuItem icon="fa-stop" label="Stop Stack" onClick={() => handleStackAction(groupName, 'stop')} />
-                            <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} />
-                          </>
+                          <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} />
                         )}
                         {!hasActiveContainers(items) && (
-                          <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} title="Start all containers" />
+                          <ActionMenuItem icon="fa-rotate" label="Start Stack" onClick={() => handleStackAction(groupName, 'restart')} title="Start all containers" />
                         )}
+                        <ActionMenuItem icon="fa-stop" label="Stop Stack" onClick={() => handleStackAction(groupName, 'stop')} />
                       </ActionMenu>
                     </div>
                   );

@@ -4,7 +4,7 @@ import type {
   BatchFixMismatchOperation,
 } from '../types';
 import type { ExecutorContext, OperationExecutor } from './types';
-import { stopContainer, fixComposeMismatch } from '../../api/client';
+import { stopContainer, removeContainer, fixComposeMismatch } from '../../api/client';
 import { addLog } from './log';
 
 export class SequentialExecutor implements OperationExecutor {
@@ -23,30 +23,44 @@ export class SequentialExecutor implements OperationExecutor {
     const { dispatch, runId, setSearchParams } = ctx;
     const { stackName, containers: containerNames } = info;
 
-    addLog(dispatch, runId, `Stopping ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
+    addLog(dispatch, runId, `Stopping and removing ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
 
     let successCount = 0;
     let failedCount = 0;
 
-    // Stop each container sequentially
+    // Stop and remove each container sequentially (like docker compose down)
     for (const containerName of containerNames) {
       dispatch({ type: 'CONTAINER_UPDATE', runId, containerName, updates: { status: 'in_progress', message: 'Stopping...' } });
       addLog(dispatch, runId, `Stopping ${containerName}...`, 'stage', 'fa-stop');
 
       try {
-        const response = await stopContainer(containerName);
+        const stopResponse = await stopContainer(containerName);
 
-        if (response.success) {
-          const opId = response.data?.operation_id;
-          if (opId) {
-            dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName, operationId: opId });
-            setSearchParams({ id: opId }, { replace: true });
+        if (!stopResponse.success) {
+          const errorMsg = stopResponse.error || 'Failed to stop container';
+          dispatch({ type: 'CONTAINER_FAILED', runId, containerName, message: errorMsg, error: errorMsg });
+          addLog(dispatch, runId, `${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
+          failedCount++;
+          continue;
+        }
+
+        // Now remove the container
+        dispatch({ type: 'CONTAINER_UPDATE', runId, containerName, updates: { status: 'in_progress', message: 'Removing...' } });
+        addLog(dispatch, runId, `Removing ${containerName}...`, 'stage', 'fa-trash');
+
+        const removeResponse = await removeContainer(containerName, { force: true });
+
+        if (removeResponse.success) {
+          const removeOpId = removeResponse.data?.operation_id;
+          if (removeOpId) {
+            dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName, operationId: removeOpId });
+            setSearchParams({ id: removeOpId }, { replace: true });
           }
-          dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName, message: 'Stopped successfully' });
-          addLog(dispatch, runId, `${containerName}: Stopped successfully`, 'success', 'fa-circle-check');
+          dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName, message: 'Removed' });
+          addLog(dispatch, runId, `${containerName}: Removed`, 'success', 'fa-circle-check');
           successCount++;
         } else {
-          const errorMsg = response.error || 'Failed to stop container';
+          const errorMsg = removeResponse.error || 'Failed to remove container';
           dispatch({ type: 'CONTAINER_FAILED', runId, containerName, message: errorMsg, error: errorMsg });
           addLog(dispatch, runId, `${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
           failedCount++;
@@ -62,14 +76,14 @@ export class SequentialExecutor implements OperationExecutor {
     // Final summary
     if (failedCount > 0) {
       if (successCount > 0) {
-        addLog(dispatch, runId, `Stack stop completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
+        addLog(dispatch, runId, `Stack down completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
         dispatch({ type: 'SET_STATUS', runId, status: 'success' }); // Partial success
       } else {
-        addLog(dispatch, runId, `Stack stop failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+        addLog(dispatch, runId, `Stack down failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
         dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
       }
     } else {
-      addLog(dispatch, runId, `Stack stop completed: ${successCount} container(s) stopped successfully`, 'success', 'fa-circle-check');
+      addLog(dispatch, runId, `Stack down completed: ${containerNames.length} container(s) removed`, 'success', 'fa-circle-check');
       dispatch({ type: 'SET_STATUS', runId, status: 'success' });
     }
   }
