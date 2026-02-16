@@ -692,38 +692,6 @@ func TestHandleScriptsUnassign_Validation(t *testing.T) {
 }
 
 // ============================================================================
-// Handler Tests - Settings Handlers (Deprecated)
-// ============================================================================
-
-func TestHandleSettingsIgnore_NoManager(t *testing.T) {
-	t.Run("returns error when script manager unavailable", func(t *testing.T) {
-		s := &Server{scriptManager: nil}
-		w := httptest.NewRecorder()
-		body := `{"container_name": "nginx", "ignore": true}`
-		r := httptest.NewRequest("POST", "/api/settings/ignore", strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-
-		s.handleSettingsIgnore(w, r)
-
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-	})
-}
-
-func TestHandleSettingsAllowLatest_NoManager(t *testing.T) {
-	t.Run("returns error when script manager unavailable", func(t *testing.T) {
-		s := &Server{scriptManager: nil}
-		w := httptest.NewRecorder()
-		body := `{"container_name": "nginx", "allow_latest": true}`
-		r := httptest.NewRequest("POST", "/api/settings/allow-latest", strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-
-		s.handleSettingsAllowLatest(w, r)
-
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-	})
-}
-
-// ============================================================================
 // Handler Tests - Labels Handlers
 // ============================================================================
 

@@ -3,11 +3,7 @@ import { checkContainers, getContainerStatus, getDockerConfig } from '../api/cli
 import type { DiscoveryResult, DockerRegistryInfo } from '../types/api';
 import { formatTimeAgo } from '../utils/time';
 
-interface SettingsProps {
-  onBack: () => void;
-}
-
-export function Settings({ onBack: _onBack }: SettingsProps) {
+export function Settings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResult | null>(null);

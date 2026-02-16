@@ -1,18 +1,14 @@
 import type {
   CheckResponse,
   OperationsResponse,
-  HistoryResponse,
-  HealthCheckResponse,
   DockerConfigResponse,
   APIResponse,
   ScriptsResponse,
-  ScriptAssignmentsResponse,
   RegistryTagsAPIResponse,
   SetLabelsRequest,
   SetLabelsResponse,
   ExplorerResponse,
   ContainerInfo,
-  UpdateOperation,
   LabelOperationResult,
 } from '../types/api';
 
@@ -45,11 +41,6 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<API
 
   const data = await response.json();
   return data as APIResponse<T>;
-}
-
-// Health check
-export async function checkHealth(): Promise<HealthCheckResponse> {
-  return fetchAPI('/health');
 }
 
 // Docker configuration
@@ -85,42 +76,6 @@ export async function getOperations(params?: {
 
   const query = searchParams.toString();
   return fetchAPI(`/operations${query ? `?${query}` : ''}`);
-}
-
-// Get single operation by ID
-export async function getOperation(operationId: string): Promise<APIResponse<UpdateOperation>> {
-  return fetchAPI(`/operations/${operationId}`);
-}
-
-// Check and update history
-export async function getHistory(params?: {
-  limit?: number;
-  type?: 'check' | 'update';
-  container?: string;
-}): Promise<HistoryResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.limit) searchParams.set('limit', params.limit.toString());
-  if (params?.type) searchParams.set('type', params.type);
-  if (params?.container) searchParams.set('container', params.container);
-
-  const query = searchParams.toString();
-  return fetchAPI(`/history${query ? `?${query}` : ''}`);
-}
-
-// Trigger container update
-export async function triggerUpdate(containerName: string, targetVersion?: string): Promise<APIResponse<{
-  operation_id: string;
-  container_name: string;
-  target_version: string;
-  status: string;
-}>> {
-  return fetchAPI('/update', {
-    method: 'POST',
-    body: JSON.stringify({
-      container_name: containerName,
-      target_version: targetVersion || '',
-    }),
-  });
 }
 
 // Trigger batch container update (grouped by stack)
@@ -184,70 +139,6 @@ export async function rollbackContainers(
 // Get list of available scripts
 export async function getScripts(): Promise<APIResponse<ScriptsResponse>> {
   return fetchAPI('/scripts');
-}
-
-// Get script assignments
-export async function getScriptAssignments(): Promise<APIResponse<ScriptAssignmentsResponse>> {
-  return fetchAPI('/scripts/assigned');
-}
-
-// Assign script to container
-export async function assignScript(containerName: string, scriptPath: string): Promise<APIResponse<{
-  success: boolean;
-  container: string;
-  script: string;
-  message: string;
-}>> {
-  return fetchAPI('/scripts/assign', {
-    method: 'POST',
-    body: JSON.stringify({
-      container_name: containerName,
-      script_path: scriptPath,
-    }),
-  });
-}
-
-// Unassign script from container
-export async function unassignScript(containerName: string): Promise<APIResponse<{
-  success: boolean;
-  container: string;
-  message: string;
-}>> {
-  return fetchAPI(`/scripts/assign/${containerName}`, {
-    method: 'DELETE',
-  });
-}
-
-// Set ignore flag for container
-export async function setIgnore(containerName: string, ignore: boolean): Promise<APIResponse<{
-  success: boolean;
-  container: string;
-  ignore: boolean;
-  message: string;
-}>> {
-  return fetchAPI('/settings/ignore', {
-    method: 'POST',
-    body: JSON.stringify({
-      container_name: containerName,
-      ignore,
-    }),
-  });
-}
-
-// Set allow-latest flag for container
-export async function setAllowLatest(containerName: string, allowLatest: boolean): Promise<APIResponse<{
-  success: boolean;
-  container: string;
-  allow_latest: boolean;
-  message: string;
-}>> {
-  return fetchAPI('/settings/allow-latest', {
-    method: 'POST',
-    body: JSON.stringify({
-      container_name: containerName,
-      allow_latest: allowLatest,
-    }),
-  });
 }
 
 // Label management (atomic: compose + restart)
@@ -330,13 +221,6 @@ export async function getRegistryTags(imageRef: string): Promise<RegistryTagsAPI
   return fetchAPI(`/registry/tags/${imageRef}`);
 }
 
-// Trigger background check (uses cached registry data)
-export async function triggerBackgroundCheck(): Promise<CheckResponse> {
-  return fetchAPI('/trigger-check', {
-    method: 'POST',
-  });
-}
-
 // Explorer data (containers, images, networks, volumes)
 export async function getExplorerData(): Promise<ExplorerResponse> {
   return fetchAPI('/explorer');
@@ -379,17 +263,6 @@ export async function startContainer(
   name: string
 ): Promise<APIResponse<{ container: string; status: string; message: string; operation_id?: string }>> {
   return fetchAPI(`/containers/${encodeURIComponent(name)}/start`, {
-    method: 'POST',
-  });
-}
-
-// Restart a container (explorer quick action)
-export async function restartContainerQuick(
-  name: string,
-  timeout?: number
-): Promise<APIResponse<{ container: string; status: string; message: string }>> {
-  const params = timeout ? `?timeout=${timeout}` : '';
-  return fetchAPI(`/containers/${encodeURIComponent(name)}/restart${params}`, {
     method: 'POST',
   });
 }
@@ -450,15 +323,6 @@ export interface PruneResponse {
   space_reclaimed?: number;
 }
 
-export interface SystemPruneResponse {
-  message: string;
-  containers_deleted: string[];
-  images_deleted: string[];
-  networks_deleted: string[];
-  volumes_deleted: string[];
-  space_reclaimed: number;
-}
-
 // Prune stopped containers
 export async function pruneContainers(): Promise<APIResponse<PruneResponse>> {
   return fetchAPI('/prune/containers', { method: 'POST' });
@@ -482,16 +346,6 @@ export async function pruneNetworks(): Promise<APIResponse<PruneResponse>> {
 // Prune unused volumes
 export async function pruneVolumes(): Promise<APIResponse<PruneResponse>> {
   return fetchAPI('/prune/volumes', { method: 'POST' });
-}
-
-// System prune - remove all unused resources
-export async function systemPrune(
-  options?: { volumes?: boolean }
-): Promise<APIResponse<SystemPruneResponse>> {
-  const params = new URLSearchParams();
-  if (options?.volumes) params.set('volumes', 'true');
-  const query = params.toString();
-  return fetchAPI(`/prune/system${query ? `?${query}` : ''}`, { method: 'POST' });
 }
 
 // Batch label operations - apply labels to multiple containers

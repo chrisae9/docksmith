@@ -31,30 +31,6 @@
    Migrate to: .button .button-primary .button-inline
    ============================================ */
 
-/* Scripts Button - Unique style, kept */
-.scripts-btn {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: none;
-  padding: var(--space-5) var(--space-8);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-xl);
-  font-weight: var(--font-medium);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  transition: background var(--transition-normal);
-}
-
-.scripts-btn:hover {
-  background: var(--color-bg-elevated);
-}
-
-.scripts-btn i {
-  font-size: var(--text-lg);
-}
-
 /* Button Group */
 .button-group {
   display: flex;
@@ -372,30 +348,6 @@
   color: var(--color-text-tertiary);
 }
 
-/* Current Script Indicator */
-.current-script-indicator {
-  margin-top: var(--space-4);
-  padding: var(--space-5) var(--space-6);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-dim);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-base);
-  color: var(--color-text-secondary);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.current-script-indicator i {
-  color: var(--color-accent);
-  font-size: var(--text-lg);
-  flex-shrink: 0;
-}
-
-.current-script-indicator strong {
-  color: var(--color-text-primary);
-}
-
 /* Settings Changes Warning */
 .settings-changes {
   margin-top: var(--space-10);
@@ -503,11 +455,6 @@
 }
 
 /* Scripts List */
-.scripts-list-section {
-  display: flex;
-  flex-direction: column;
-}
-
 .scripts-list {
   list-style: none;
   display: flex;
@@ -524,19 +471,6 @@
   align-items: flex-start;
 }
 
-.script-icon {
-  font-size: var(--text-5xl);
-  flex-shrink: 0;
-}
-
-.script-icon .fa-file-circle-check {
-  color: var(--color-success);
-}
-
-.script-icon .fa-file-circle-xmark {
-  color: var(--color-text-tertiary);
-}
-
 .script-info {
   flex: 1;
   display: flex;
@@ -549,101 +483,10 @@
   font-weight: var(--font-medium);
 }
 
-.script-meta {
-  font-size: var(--text-base);
-  color: var(--color-text-secondary);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.script-meta .executable-yes {
-  color: var(--color-success);
-}
-
-.script-meta .executable-no {
-  color: var(--color-text-tertiary);
-}
-
 .script-path {
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
   font-family: var(--font-mono);
-}
-
-/* Assignments List */
-.assign-scripts-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-12);
-}
-
-.assign-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-}
-
-.assignments-list h3 {
-  font-size: var(--text-3xl);
-  font-weight: var(--font-semibold);
-  margin-bottom: var(--space-6);
-}
-
-.assignments-list ul {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.assignment-item {
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-xl);
-  padding: var(--space-6) var(--space-7);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-6);
-}
-
-.assignment-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.assignment-container {
-  font-size: var(--text-xl);
-  font-weight: var(--font-medium);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.assignment-container i {
-  color: var(--color-accent);
-  font-size: var(--text-lg);
-}
-
-.assignment-script {
-  font-size: var(--text-lg);
-  color: var(--color-text-secondary);
-  font-family: var(--font-mono);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.assignment-script i {
-  color: var(--color-success);
-  font-size: var(--text-sm);
-}
-
-.assignment-meta {
-  font-size: var(--text-sm);
-  color: var(--color-text-tertiary);
 }
 
 /* Mobile Responsive for Components */
@@ -742,8 +585,4 @@
     padding: var(--space-4) var(--space-5);
   }
 
-  .current-script-indicator {
-    font-size: var(--text-sm);
-    padding: var(--space-4) var(--space-5);
-  }
 }

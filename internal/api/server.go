@@ -214,10 +214,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	// Registry tags (for regex testing UI)
 	mux.HandleFunc("GET /api/registry/tags/{imageRef...}", s.handleRegistryTags)
 
-	// Container settings (deprecated - use labels endpoints instead)
-	mux.HandleFunc("POST /api/settings/ignore", s.handleSettingsIgnore)
-	mux.HandleFunc("POST /api/settings/allow-latest", s.handleSettingsAllowLatest)
-
 	// Mutations (POST/PUT/DELETE)
 	mux.HandleFunc("POST /api/update", s.handleUpdate)
 	mux.HandleFunc("POST /api/update/batch", s.handleBatchUpdate)

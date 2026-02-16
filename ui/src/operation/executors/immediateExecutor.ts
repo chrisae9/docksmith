@@ -1,11 +1,7 @@
 import type { OperationInfo, OperationAction, StartOperation, StopOperation, RemoveOperation } from '../types';
-import type { LogEntry } from '../../constants/progress';
 import type { ExecutorContext, OperationExecutor } from './types';
 import { startContainer, stopContainer, removeContainer } from '../../api/client';
-
-function addLog(dispatch: React.Dispatch<OperationAction>, runId: string, message: string, type: LogEntry['type'] = 'info', icon?: string) {
-  dispatch({ type: 'ADD_LOG', runId, entry: { time: Date.now(), message, type, icon } });
-}
+import { addLog } from './log';
 
 export class ImmediateExecutor implements OperationExecutor {
   async execute(info: OperationInfo, ctx: ExecutorContext): Promise<void> {

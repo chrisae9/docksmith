@@ -207,8 +207,8 @@ function AppContent() {
           {/* Redirects from old routes */}
           <Route path="/updates" element={<Navigate to="/" replace />} />
           <Route path="/explorer" element={<Navigate to="/" replace />} />
-          <Route path="/history" element={<History onBack={() => setActiveTab('containers')} />} />
-          <Route path="/settings" element={<Settings onBack={() => setActiveTab('containers')} />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/container/:containerName" element={<ContainerPage />} />
           <Route path="/container/:containerName/tag-filter" element={<TagFilterPage />} />
           <Route path="/container/:containerName/script-selection" element={<ScriptSelectionPage />} />

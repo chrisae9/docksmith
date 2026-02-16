@@ -1,15 +1,11 @@
 import type {
   OperationInfo,
   OperationAction,
-  BatchStartOperation,
-  BatchStopOperation,
-  BatchRestartOperation,
-  BatchRemoveOperation,
   BatchLabelOperation,
   LabelRollbackOperation,
 } from '../types';
-import type { LogEntry } from '../../constants/progress';
 import type { ExecutorContext, OperationExecutor } from './types';
+import type { APIResponse } from '../../types/api';
 import { describeLabelOp } from '../utils';
 import {
   batchStartContainers,
@@ -19,15 +15,15 @@ import {
   batchSetLabels,
   rollbackLabels,
 } from '../../api/client';
+import { addLog } from './log';
 
-function addLog(dispatch: React.Dispatch<OperationAction>, runId: string, message: string, type: LogEntry['type'] = 'info', icon?: string) {
-  dispatch({ type: 'ADD_LOG', runId, entry: { time: Date.now(), message, type, icon } });
-}
+type BatchResult = { container: string; success: boolean; operation_id?: string; error?: string };
+type BatchResponse = APIResponse<{ batch_group_id?: string; results: BatchResult[] }>;
 
 function processBatchResults(
   dispatch: React.Dispatch<OperationAction>,
   runId: string,
-  results: Array<{ container: string; success: boolean; operation_id?: string; error?: string }>,
+  results: BatchResult[],
   successMessage: string,
   verb: string,
 ) {
@@ -63,13 +59,13 @@ export class BatchImmediateExecutor implements OperationExecutor {
   async execute(info: OperationInfo, ctx: ExecutorContext): Promise<void> {
     switch (info.type) {
       case 'batchStart':
-        return this.runBatchStart(info, ctx);
+        return this.runBatchOp(ctx, info.containers, (n) => batchStartContainers(n), 'Starting', 'fa-play', 'Started successfully', 'start');
       case 'batchStop':
-        return this.runBatchStop(info, ctx);
+        return this.runBatchOp(ctx, info.containers, (n) => batchStopContainers(n), 'Stopping', 'fa-stop', 'Stopped successfully', 'stop');
       case 'batchRestart':
-        return this.runBatchRestart(info, ctx);
+        return this.runBatchOp(ctx, info.containers, (n) => batchRestartContainers(n), 'Restarting', 'fa-rotate', 'Restarted successfully', 'restart');
       case 'batchRemove':
-        return this.runBatchRemove(info, ctx);
+        return this.runBatchOp(ctx, info.containers, (n) => batchRemoveContainers(n, true), 'Removing', 'fa-trash', 'Removed successfully', 'remove');
       case 'batchLabel':
         return this.runBatchLabel(info, ctx);
       case 'labelRollback':
@@ -79,18 +75,25 @@ export class BatchImmediateExecutor implements OperationExecutor {
     }
   }
 
-  private async runBatchStart(info: BatchStartOperation, ctx: ExecutorContext): Promise<void> {
+  private async runBatchOp(
+    ctx: ExecutorContext,
+    containerNames: string[],
+    apiFn: (names: string[]) => Promise<BatchResponse>,
+    gerund: string,
+    icon: string,
+    successMessage: string,
+    verb: string,
+  ): Promise<void> {
     const { dispatch, runId, setSearchParams } = ctx;
-    const { containers: containerNames } = info;
 
-    addLog(dispatch, runId, `Starting ${containerNames.length} container(s)`, 'info', 'fa-play');
+    addLog(dispatch, runId, `${gerund} ${containerNames.length} container(s)`, 'info', icon);
 
     try {
-      const response = await batchStartContainers(containerNames);
+      const response = await apiFn(containerNames);
 
       if (!response.success) {
-        dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: response.error || 'Batch start failed' } });
-        addLog(dispatch, runId, `Batch start failed: ${response.error}`, 'error', 'fa-circle-xmark');
+        dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: response.error || `Batch ${verb} failed` } });
+        addLog(dispatch, runId, `Batch ${verb} failed: ${response.error}`, 'error', 'fa-circle-xmark');
         dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
         return;
       }
@@ -101,100 +104,7 @@ export class BatchImmediateExecutor implements OperationExecutor {
         setSearchParams({ group: batchGroupId }, { replace: true });
       }
 
-      processBatchResults(dispatch, runId, response.data?.results || [], 'Started successfully', 'start');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: errorMsg } });
-      addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
-      dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-    }
-  }
-
-  private async runBatchStop(info: BatchStopOperation, ctx: ExecutorContext): Promise<void> {
-    const { dispatch, runId, setSearchParams } = ctx;
-    const { containers: containerNames } = info;
-
-    addLog(dispatch, runId, `Stopping ${containerNames.length} container(s)`, 'info', 'fa-stop');
-
-    try {
-      const response = await batchStopContainers(containerNames);
-
-      if (!response.success) {
-        dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: response.error || 'Batch stop failed' } });
-        addLog(dispatch, runId, `Batch stop failed: ${response.error}`, 'error', 'fa-circle-xmark');
-        dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-        return;
-      }
-
-      const batchGroupId = response.data?.batch_group_id;
-      if (batchGroupId) {
-        dispatch({ type: 'SET_BATCH_GROUP_ID', runId, batchGroupId });
-        setSearchParams({ group: batchGroupId }, { replace: true });
-      }
-
-      processBatchResults(dispatch, runId, response.data?.results || [], 'Stopped successfully', 'stop');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: errorMsg } });
-      addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
-      dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-    }
-  }
-
-  private async runBatchRestart(info: BatchRestartOperation, ctx: ExecutorContext): Promise<void> {
-    const { dispatch, runId, setSearchParams } = ctx;
-    const { containers: containerNames } = info;
-
-    addLog(dispatch, runId, `Restarting ${containerNames.length} container(s)`, 'info', 'fa-rotate');
-
-    try {
-      const response = await batchRestartContainers(containerNames);
-
-      if (!response.success) {
-        dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: response.error || 'Batch restart failed' } });
-        addLog(dispatch, runId, `Batch restart failed: ${response.error}`, 'error', 'fa-circle-xmark');
-        dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-        return;
-      }
-
-      const batchGroupId = response.data?.batch_group_id;
-      if (batchGroupId) {
-        dispatch({ type: 'SET_BATCH_GROUP_ID', runId, batchGroupId });
-        setSearchParams({ group: batchGroupId }, { replace: true });
-      }
-
-      processBatchResults(dispatch, runId, response.data?.results || [], 'Restarted successfully', 'restart');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: errorMsg } });
-      addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
-      dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-    }
-  }
-
-  private async runBatchRemove(info: BatchRemoveOperation, ctx: ExecutorContext): Promise<void> {
-    const { dispatch, runId, setSearchParams } = ctx;
-    const { containers: containerNames } = info;
-
-    addLog(dispatch, runId, `Removing ${containerNames.length} container(s)`, 'info', 'fa-trash');
-
-    try {
-      const response = await batchRemoveContainers(containerNames, true);
-
-      if (!response.success) {
-        dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: response.error || 'Batch remove failed' } });
-        addLog(dispatch, runId, `Batch remove failed: ${response.error}`, 'error', 'fa-circle-xmark');
-        dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
-        return;
-      }
-
-      const batchGroupId = response.data?.batch_group_id;
-      if (batchGroupId) {
-        dispatch({ type: 'SET_BATCH_GROUP_ID', runId, batchGroupId });
-        setSearchParams({ group: batchGroupId }, { replace: true });
-      }
-
-      processBatchResults(dispatch, runId, response.data?.results || [], 'Removed successfully', 'remove');
+      processBatchResults(dispatch, runId, response.data?.results || [], successMessage, verb);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       dispatch({ type: 'CONTAINERS_WHERE_UPDATE', runId, predicate: () => true, updates: { status: 'failed', message: errorMsg } });
