@@ -1,16 +1,11 @@
 import type {
   OperationInfo,
-  OperationAction,
   StackStopOperation,
   BatchFixMismatchOperation,
 } from '../types';
-import type { LogEntry } from '../../constants/progress';
 import type { ExecutorContext, OperationExecutor } from './types';
 import { stopContainer, fixComposeMismatch } from '../../api/client';
-
-function addLog(dispatch: React.Dispatch<OperationAction>, runId: string, message: string, type: LogEntry['type'] = 'info', icon?: string) {
-  dispatch({ type: 'ADD_LOG', runId, entry: { time: Date.now(), message, type, icon } });
-}
+import { addLog } from './log';
 
 export class SequentialExecutor implements OperationExecutor {
   async execute(info: OperationInfo, ctx: ExecutorContext): Promise<void> {
@@ -25,7 +20,7 @@ export class SequentialExecutor implements OperationExecutor {
   }
 
   private async runStackStop(info: StackStopOperation, ctx: ExecutorContext): Promise<void> {
-    const { dispatch, runId } = ctx;
+    const { dispatch, runId, setSearchParams } = ctx;
     const { stackName, containers: containerNames } = info;
 
     addLog(dispatch, runId, `Stopping ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
@@ -42,6 +37,11 @@ export class SequentialExecutor implements OperationExecutor {
         const response = await stopContainer(containerName);
 
         if (response.success) {
+          const opId = response.data?.operation_id;
+          if (opId) {
+            dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName, operationId: opId });
+            setSearchParams({ id: opId }, { replace: true });
+          }
           dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName, message: 'Stopped successfully' });
           addLog(dispatch, runId, `${containerName}: Stopped successfully`, 'success', 'fa-circle-check');
           successCount++;

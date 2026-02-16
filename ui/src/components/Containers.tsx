@@ -873,7 +873,7 @@ export function Containers() {
       return <div className="empty-state"><i className="fa-solid fa-box-open"></i><h2>No containers found</h2><p>No containers match the current filter</p></div>;
     }
 
-    const hasRunningContainers = (items: UnifiedContainerItem[]) => items.some(c => c.state === 'running');
+    const hasActiveContainers = (items: UnifiedContainerItem[]) => items.some(c => c.state === 'running' || c.state === 'restarting');
 
     return (
       <div className="explorer-list-container">
@@ -931,13 +931,13 @@ export function Containers() {
                     <div className="stack-actions" onClick={(e) => e.stopPropagation()}>
                       <ActionMenuButton isActive={isMenuActive} isLoading={false} onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
                       <ActionMenu isActive={isMenuActive}>
-                        {hasRunningContainers(items) && (
+                        {hasActiveContainers(items) && (
                           <>
                             <ActionMenuItem icon="fa-stop" label="Stop Stack" onClick={() => handleStackAction(groupName, 'stop')} />
                             <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} />
                           </>
                         )}
-                        {!hasRunningContainers(items) && (
+                        {!hasActiveContainers(items) && (
                           <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} title="Start all containers" />
                         )}
                       </ActionMenu>
