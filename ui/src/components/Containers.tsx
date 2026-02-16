@@ -890,13 +890,14 @@ export function Containers() {
             id={`stack-${groupName}`}
             actions={
               <>
-                {searchQuery && explorerSettings.containers.groupBy === 'stack' && groupName !== '_standalone' && containerStacks[groupName] && items.length < containerStacks[groupName].length && (
+                {(searchQuery || viewSettings.filter === 'updates') && explorerSettings.containers.groupBy === 'stack' && groupName !== '_standalone' && containerStacks[groupName] && items.length < containerStacks[groupName].length && (
                   <button
                     className="show-full-stack-btn"
                     onClick={(e) => {
                       e.stopPropagation();
                       const stackId = `stack-${groupName}`;
-                      setSearchQuery('');
+                      if (searchQuery) setSearchQuery('');
+                      if (viewSettings.filter === 'updates') updateViewSettings({ filter: 'all' });
                       setCollapsedStacks(prev => {
                         const next = new Set(prev);
                         next.delete(groupName);
