@@ -4,7 +4,7 @@ import type {
   BatchFixMismatchOperation,
 } from '../types';
 import type { ExecutorContext, OperationExecutor } from './types';
-import { stopContainer, removeContainer, fixComposeMismatch } from '../../api/client';
+import { batchStopContainers, batchRemoveContainers, fixComposeMismatch } from '../../api/client';
 import { addLog } from './log';
 
 export class SequentialExecutor implements OperationExecutor {
@@ -25,66 +25,111 @@ export class SequentialExecutor implements OperationExecutor {
 
     addLog(dispatch, runId, `Stopping and removing ${containerNames.length} container(s) in stack "${stackName}"`, 'info', 'fa-layer-group');
 
-    let successCount = 0;
-    let failedCount = 0;
-
-    // Stop and remove each container sequentially (like docker compose down)
-    for (const containerName of containerNames) {
-      dispatch({ type: 'CONTAINER_UPDATE', runId, containerName, updates: { status: 'in_progress', message: 'Stopping...' } });
-      addLog(dispatch, runId, `Stopping ${containerName}...`, 'stage', 'fa-stop');
-
-      try {
-        const stopResponse = await stopContainer(containerName);
-
-        if (!stopResponse.success) {
-          const errorMsg = stopResponse.error || 'Failed to stop container';
-          dispatch({ type: 'CONTAINER_FAILED', runId, containerName, message: errorMsg, error: errorMsg });
-          addLog(dispatch, runId, `${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-          failedCount++;
-          continue;
-        }
-
-        // Now remove the container
-        dispatch({ type: 'CONTAINER_UPDATE', runId, containerName, updates: { status: 'in_progress', message: 'Removing...' } });
-        addLog(dispatch, runId, `Removing ${containerName}...`, 'stage', 'fa-trash');
-
-        const removeResponse = await removeContainer(containerName, { force: true });
-
-        if (removeResponse.success) {
-          const removeOpId = removeResponse.data?.operation_id;
-          if (removeOpId) {
-            dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName, operationId: removeOpId });
-            setSearchParams({ id: removeOpId }, { replace: true });
-          }
-          dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName, message: 'Removed' });
-          addLog(dispatch, runId, `${containerName}: Removed`, 'success', 'fa-circle-check');
-          successCount++;
-        } else {
-          const errorMsg = removeResponse.error || 'Failed to remove container';
-          dispatch({ type: 'CONTAINER_FAILED', runId, containerName, message: errorMsg, error: errorMsg });
-          addLog(dispatch, runId, `${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-          failedCount++;
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        dispatch({ type: 'CONTAINER_FAILED', runId, containerName, message: errorMsg, error: errorMsg });
-        addLog(dispatch, runId, `${containerName}: ${errorMsg}`, 'error', 'fa-circle-xmark');
-        failedCount++;
+    try {
+      // Populate containerToOpId with sentinels so the SSE hook's name-fallback
+      // (which fires when containerToOpId is empty) doesn't pick up stop events
+      // and prematurely mark containers as complete.
+      for (const name of containerNames) {
+        dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName: name, operationId: `pending-${runId}` });
       }
-    }
 
-    // Final summary
-    if (failedCount > 0) {
-      if (successCount > 0) {
-        addLog(dispatch, runId, `Stack down completed with issues: ${successCount} succeeded, ${failedCount} failed`, 'warning', 'fa-triangle-exclamation');
-        dispatch({ type: 'SET_STATUS', runId, status: 'success' }); // Partial success
-      } else {
-        addLog(dispatch, runId, `Stack down failed: all ${failedCount} container(s) failed`, 'error', 'fa-circle-xmark');
+      // Step 1: Batch stop all containers
+      addLog(dispatch, runId, 'Stopping containers...', 'stage', 'fa-stop');
+      for (const name of containerNames) {
+        dispatch({ type: 'CONTAINER_UPDATE', runId, containerName: name, updates: { status: 'in_progress', message: 'Stopping...' } });
+      }
+
+      const stopResponse = await batchStopContainers(containerNames);
+
+      if (!stopResponse.success) {
+        const errorMsg = stopResponse.error || 'Batch stop failed';
+        for (const name of containerNames) {
+          dispatch({ type: 'CONTAINER_FAILED', runId, containerName: name, message: errorMsg, error: errorMsg });
+        }
+        addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
         dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
+        return;
       }
-    } else {
-      addLog(dispatch, runId, `Stack down completed: ${containerNames.length} container(s) removed`, 'success', 'fa-circle-check');
-      dispatch({ type: 'SET_STATUS', runId, status: 'success' });
+
+      // Check stop results — track which containers stopped successfully
+      const stopResults = stopResponse.data?.results || [];
+      const stoppedNames: string[] = [];
+      let stopFailed = 0;
+      for (const result of stopResults) {
+        if (result.success) {
+          stoppedNames.push(result.container);
+          addLog(dispatch, runId, `${result.container}: Stopped`, 'info', 'fa-circle-check');
+        } else {
+          dispatch({ type: 'CONTAINER_FAILED', runId, containerName: result.container, message: result.error || 'Failed to stop', error: result.error });
+          addLog(dispatch, runId, `${result.container}: ${result.error || 'Failed to stop'}`, 'error', 'fa-circle-xmark');
+          stopFailed++;
+        }
+      }
+
+      if (stoppedNames.length === 0) {
+        addLog(dispatch, runId, 'All containers failed to stop', 'error', 'fa-circle-xmark');
+        dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
+        return;
+      }
+
+      // Step 2: Batch remove stopped containers
+      addLog(dispatch, runId, 'Removing containers...', 'stage', 'fa-trash');
+      for (const name of stoppedNames) {
+        dispatch({ type: 'CONTAINER_UPDATE', runId, containerName: name, updates: { status: 'in_progress', message: 'Removing...' } });
+      }
+
+      const removeResponse = await batchRemoveContainers(stoppedNames, true);
+
+      if (!removeResponse.success) {
+        const errorMsg = removeResponse.error || 'Batch remove failed';
+        for (const name of stoppedNames) {
+          dispatch({ type: 'CONTAINER_FAILED', runId, containerName: name, message: errorMsg, error: errorMsg });
+        }
+        addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
+        dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
+        return;
+      }
+
+      // Use the remove batch_group_id for history grouping
+      const batchGroupId = removeResponse.data?.batch_group_id;
+      if (batchGroupId) {
+        dispatch({ type: 'SET_BATCH_GROUP_ID', runId, batchGroupId });
+        setSearchParams({ group: batchGroupId }, { replace: true });
+      }
+
+      // Process remove results
+      const removeResults = removeResponse.data?.results || [];
+      let removeSuccess = 0;
+      let removeFailed = 0;
+      for (const result of removeResults) {
+        if (result.operation_id) {
+          dispatch({ type: 'SET_CONTAINER_OP_ID', runId, containerName: result.container, operationId: result.operation_id });
+        }
+        if (result.success) {
+          dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName: result.container, message: 'Removed' });
+          removeSuccess++;
+        } else {
+          dispatch({ type: 'CONTAINER_FAILED', runId, containerName: result.container, message: result.error || 'Failed to remove', error: result.error });
+          addLog(dispatch, runId, `${result.container}: ${result.error || 'Failed to remove'}`, 'error', 'fa-circle-xmark');
+          removeFailed++;
+        }
+      }
+
+      const totalFailed = stopFailed + removeFailed;
+      if (totalFailed > 0) {
+        addLog(dispatch, runId, `Stack down completed with issues: ${removeSuccess} removed, ${totalFailed} failed`, 'warning', 'fa-triangle-exclamation');
+        dispatch({ type: 'SET_STATUS', runId, status: removeSuccess > 0 ? 'success' : 'failed' });
+      } else {
+        addLog(dispatch, runId, `Stack down completed: ${removeSuccess} container(s) removed`, 'success', 'fa-circle-check');
+        dispatch({ type: 'SET_STATUS', runId, status: 'success' });
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      for (const name of containerNames) {
+        dispatch({ type: 'CONTAINER_FAILED', runId, containerName: name, message: errorMsg, error: errorMsg });
+      }
+      addLog(dispatch, runId, errorMsg, 'error', 'fa-circle-xmark');
+      dispatch({ type: 'SET_STATUS', runId, status: 'failed' });
     }
   }
 
