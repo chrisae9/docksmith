@@ -474,6 +474,68 @@ export class APIHelper {
     );
   }
 
+  // ==================== Batch Container Operations ====================
+
+  /**
+   * Stop multiple containers in a batch
+   */
+  async batchStopContainers(containers: string[]): Promise<{
+    success: boolean;
+    data?: { batch_group_id: string; results: Array<{ container: string; operation_id: string; success: boolean; error?: string }> };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.post(`${this.baseUrl}/api/containers/batch/stop`, {
+        data: { containers },
+      })
+    );
+  }
+
+  /**
+   * Start multiple containers in a batch
+   */
+  async batchStartContainers(containers: string[]): Promise<{
+    success: boolean;
+    data?: { batch_group_id: string; results: Array<{ container: string; operation_id: string; success: boolean; error?: string }> };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.post(`${this.baseUrl}/api/containers/batch/start`, {
+        data: { containers },
+      })
+    );
+  }
+
+  /**
+   * Restart multiple containers in a batch
+   */
+  async batchRestartContainers(containers: string[]): Promise<{
+    success: boolean;
+    data?: { batch_group_id: string; results: Array<{ container: string; operation_id: string; success: boolean; error?: string }> };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.post(`${this.baseUrl}/api/containers/batch/restart`, {
+        data: { containers },
+      })
+    );
+  }
+
+  /**
+   * Remove multiple containers in a batch
+   */
+  async batchRemoveContainers(containers: string[], removeVolumes = false): Promise<{
+    success: boolean;
+    data?: { batch_group_id: string; results: Array<{ container: string; operation_id: string; success: boolean; error?: string }> };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.post(`${this.baseUrl}/api/containers/batch/remove`, {
+        data: { containers, remove_volumes: removeVolumes },
+      })
+    );
+  }
+
   // ==================== Labels ====================
 
   /**
@@ -700,6 +762,19 @@ export class APIHelper {
   }
 
   /**
+   * Get operations by batch group ID
+   */
+  async getOperationsByGroup(groupId: string): Promise<{
+    success: boolean;
+    data?: { operations: Operation[]; count: number };
+    error?: string;
+  }> {
+    return this.parseWithRateLimitRetry(
+      () => this.request.get(`${this.baseUrl}/api/operations/group/${groupId}`)
+    );
+  }
+
+  /**
    * Get history entries
    */
   async getHistory(limit = 10): Promise<{
@@ -871,6 +946,7 @@ export interface Operation {
   status: string;
   container_name?: string;
   stack_name?: string;
+  batch_group_id?: string;
   old_version?: string;
   new_version?: string;
   error_message?: string;

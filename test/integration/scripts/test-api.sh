@@ -295,9 +295,9 @@ test_stop_container() {
     sleep 3
 }
 
-# Test 16: POST /api/containers/{name}/stop (already stopped - should fail)
+# Test 16: POST /api/containers/{name}/stop (already stopped - idempotent)
 test_stop_already_stopped() {
-    print_info "Test: POST /api/containers/{name}/stop (already stopped)"
+    print_info "Test: POST /api/containers/{name}/stop (already stopped - idempotent)"
 
     # Create a temporary stopped container for this test
     local container="test-stop-temp"
@@ -306,14 +306,55 @@ test_stop_already_stopped() {
     docker stop "$container" 2>/dev/null || true
     sleep 1
 
-    # Try to stop already stopped container
+    # Stop already stopped container — should succeed (idempotent)
     local response=$(curl_api POST "/containers/$container/stop")
-    local success=$(echo "$response" | jq -r '.success')
+    assert_api_success "$response" "Stop on already stopped container returns success (idempotent)"
 
-    if [ "$success" = "false" ]; then
-        print_success "Stop on already stopped container correctly returns error"
+    # Verify container is still stopped
+    local state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo "true")
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$state" = "false" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Container remains stopped after idempotent stop"
     else
-        print_error "Stop on already stopped container should have failed"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Container should still be stopped"
+    fi
+
+    # Cleanup
+    docker rm -f "$container" 2>/dev/null || true
+}
+
+# Test 16b: POST /api/containers/{name}/start (already running - idempotent)
+test_start_already_running() {
+    print_info "Test: POST /api/containers/{name}/start (already running - idempotent)"
+
+    # Create a running container for this test
+    local container="test-start-temp"
+    docker run -d --name "$container" alpine:latest sleep 3600 2>/dev/null || true
+    sleep 1
+
+    # Verify it's running
+    local state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo "false")
+    if [ "$state" != "true" ]; then
+        print_error "Container should be running before test"
+        docker rm -f "$container" 2>/dev/null || true
+        return 1
+    fi
+
+    # Start already running container — should succeed (idempotent)
+    local response=$(curl_api POST "/containers/$container/start")
+    assert_api_success "$response" "Start on already running container returns success (idempotent)"
+
+    # Verify container is still running
+    local new_state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo "false")
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$new_state" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Container remains running after idempotent start"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Container should still be running"
     fi
 
     # Cleanup
@@ -479,6 +520,292 @@ test_batch_update_with_metadata() {
     fi
 }
 
+# Test 21: POST /api/containers/batch/stop
+test_batch_stop() {
+    print_info "Test: POST /api/containers/batch/stop"
+
+    # Ensure both containers are running
+    local c1="test-nginx-basic"
+    local c2="test-redis-basic"
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "false")
+        if [ "$state" != "true" ]; then
+            print_info "Starting $c before batch stop test..."
+            docker start "$c" 2>/dev/null || true
+            sleep 2
+        fi
+    done
+
+    local body='{"containers":["'"$c1"'","'"$c2"'"]}'
+    local response=$(curl_api POST "/containers/batch/stop" "$body")
+    assert_api_success "$response" "Batch stop returns success"
+
+    # Verify batch_group_id is returned
+    local batch_group_id=$(echo "$response" | jq -r '.data.batch_group_id // empty')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ -n "$batch_group_id" ] && [ "$batch_group_id" != "null" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Batch stop returned batch_group_id: ${batch_group_id:0:8}..."
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Batch stop did not return batch_group_id"
+    fi
+
+    # Verify individual results
+    local result_count=$(echo "$response" | jq -r '.data.results | length')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$result_count" = "2" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Batch stop returned $result_count results"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Expected 2 results, got $result_count"
+    fi
+
+    # Verify each result has success and operation_id
+    local all_success=$(echo "$response" | jq -r '.data.results | all(.success == true)')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$all_success" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "All batch stop results report success"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Not all batch stop results succeeded"
+    fi
+
+    sleep 3
+
+    # Verify containers are actually stopped
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "true")
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if [ "$state" = "false" ]; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "$c stopped after batch stop"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "$c still running after batch stop"
+        fi
+    done
+
+    # Verify batch_group_id links operations via group endpoint
+    if [ -n "$batch_group_id" ] && [ "$batch_group_id" != "null" ]; then
+        local group_response=$(curl_api GET "/operations/group/$batch_group_id")
+        local group_count=$(echo "$group_response" | jq -r '.data.operations | length // 0')
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if [ "$group_count" -ge 2 ]; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "batch_group_id links $group_count stop operations"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "batch_group_id query returned $group_count operations (expected >= 2)"
+        fi
+    fi
+}
+
+# Test 22: POST /api/containers/batch/start
+test_batch_start() {
+    print_info "Test: POST /api/containers/batch/start"
+
+    # Containers should be stopped from previous test
+    local c1="test-nginx-basic"
+    local c2="test-redis-basic"
+
+    local body='{"containers":["'"$c1"'","'"$c2"'"]}'
+    local response=$(curl_api POST "/containers/batch/start" "$body")
+    assert_api_success "$response" "Batch start returns success"
+
+    # Verify batch_group_id is returned
+    local batch_group_id=$(echo "$response" | jq -r '.data.batch_group_id // empty')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ -n "$batch_group_id" ] && [ "$batch_group_id" != "null" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Batch start returned batch_group_id: ${batch_group_id:0:8}..."
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Batch start did not return batch_group_id"
+    fi
+
+    # Verify all results succeeded
+    local all_success=$(echo "$response" | jq -r '.data.results | all(.success == true)')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$all_success" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "All batch start results report success"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Not all batch start results succeeded"
+    fi
+
+    sleep 3
+
+    # Verify containers are actually running
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "false")
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if [ "$state" = "true" ]; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "$c running after batch start"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "$c not running after batch start"
+        fi
+    done
+}
+
+# Test 23: POST /api/containers/batch/restart
+test_batch_restart() {
+    print_info "Test: POST /api/containers/batch/restart"
+
+    local c1="test-nginx-basic"
+    local c2="test-redis-basic"
+
+    # Record start times before restart
+    local old_time_c1=$(get_restart_time "$c1")
+    local old_time_c2=$(get_restart_time "$c2")
+
+    local body='{"containers":["'"$c1"'","'"$c2"'"]}'
+    local response=$(curl_api POST "/containers/batch/restart" "$body")
+    assert_api_success "$response" "Batch restart returns success"
+
+    # Verify batch_group_id is returned
+    local batch_group_id=$(echo "$response" | jq -r '.data.batch_group_id // empty')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ -n "$batch_group_id" ] && [ "$batch_group_id" != "null" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "Batch restart returned batch_group_id: ${batch_group_id:0:8}..."
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Batch restart did not return batch_group_id"
+    fi
+
+    # Verify all results succeeded
+    local all_success=$(echo "$response" | jq -r '.data.results | all(.success == true)')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$all_success" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "All batch restart results report success"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Not all batch restart results succeeded"
+    fi
+
+    sleep 5
+
+    # Verify containers actually restarted (start times changed)
+    local new_time_c1=$(get_restart_time "$c1")
+    local new_time_c2=$(get_restart_time "$c2")
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$new_time_c1" != "$old_time_c1" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "$c1 restarted (start time changed)"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "$c1 start time unchanged after batch restart"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$new_time_c2" != "$old_time_c2" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "$c2 restarted (start time changed)"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "$c2 start time unchanged after batch restart"
+    fi
+}
+
+# Test 24: POST /api/containers/batch/stop (idempotent - already stopped)
+test_batch_stop_idempotent() {
+    print_info "Test: POST /api/containers/batch/stop (idempotent - already stopped)"
+
+    local c1="test-nginx-basic"
+    local c2="test-redis-basic"
+
+    # Stop containers first
+    docker stop "$c1" "$c2" 2>/dev/null || true
+    sleep 2
+
+    # Batch stop already-stopped containers — should succeed (idempotent)
+    local body='{"containers":["'"$c1"'","'"$c2"'"]}'
+    local response=$(curl_api POST "/containers/batch/stop" "$body")
+    assert_api_success "$response" "Batch stop on already-stopped containers returns success (idempotent)"
+
+    # Verify all results succeeded
+    local all_success=$(echo "$response" | jq -r '.data.results | all(.success == true)')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$all_success" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "All idempotent batch stop results report success"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Idempotent batch stop had failures"
+    fi
+
+    # Verify containers are still stopped
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "true")
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if [ "$state" = "false" ]; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "$c remains stopped after idempotent batch stop"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "$c should still be stopped"
+        fi
+    done
+
+    # Start containers back up for subsequent tests
+    docker start "$c1" "$c2" 2>/dev/null || true
+    sleep 3
+}
+
+# Test 25: POST /api/containers/batch/start (idempotent - already running)
+test_batch_start_idempotent() {
+    print_info "Test: POST /api/containers/batch/start (idempotent - already running)"
+
+    local c1="test-nginx-basic"
+    local c2="test-redis-basic"
+
+    # Ensure containers are running
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "false")
+        if [ "$state" != "true" ]; then
+            docker start "$c" 2>/dev/null || true
+            sleep 2
+        fi
+    done
+
+    # Batch start already-running containers — should succeed (idempotent)
+    local body='{"containers":["'"$c1"'","'"$c2"'"]}'
+    local response=$(curl_api POST "/containers/batch/start" "$body")
+    assert_api_success "$response" "Batch start on already-running containers returns success (idempotent)"
+
+    # Verify all results succeeded
+    local all_success=$(echo "$response" | jq -r '.data.results | all(.success == true)')
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$all_success" = "true" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        print_success "All idempotent batch start results report success"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        print_error "Idempotent batch start had failures"
+    fi
+
+    # Verify containers are still running
+    for c in "$c1" "$c2"; do
+        local state=$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo "false")
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if [ "$state" = "true" ]; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "$c remains running after idempotent batch start"
+        else
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "$c should still be running"
+        fi
+    done
+}
+
 # Main test execution
 main() {
     check_docksmith || exit 1
@@ -512,10 +839,16 @@ main() {
     test_restart_container
     test_stop_container
     test_stop_already_stopped
+    test_start_already_running
     test_remove_container
     test_remove_container_force
     test_batch_update
     test_batch_update_with_metadata
+    test_batch_stop
+    test_batch_start
+    test_batch_restart
+    test_batch_stop_idempotent
+    test_batch_start_idempotent
 
     # Print summary
     print_test_summary

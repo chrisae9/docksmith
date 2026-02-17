@@ -159,7 +159,7 @@ test.describe('Label Functionality', () => {
     // Navigate and restart primary
     const detailPage = new ContainerDetailPage(page);
     await detailPage.navigate(primaryContainer);
-    await detailPage.clickRestart();
+    await detailPage.clickRestartButton();
 
     // Wait for restart
     const restartPage = new RestartProgressPage(page);

@@ -21,7 +21,6 @@ import { RestartProgressPage } from '../pages/restart-progress.page';
 
 // Use container that has UPDATE_AVAILABLE status for update tests
 const TEST_CONTAINER = TEST_CONTAINERS.NGINX_BASIC;
-const UPDATE_TEST_CONTAINER = TEST_CONTAINERS.UPDATE_AVAILABLE;
 
 // Store operation ID across tests for rollback
 let lastUpdateOperationId: string | null = null;
