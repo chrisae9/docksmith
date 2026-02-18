@@ -10,6 +10,8 @@ type Version struct {
 	Major       int
 	Minor       int
 	Patch       int
+	Revision    int        // 4th version segment (e.g., 10156 from "1.42.2.10156")
+	HasRevision bool       // Whether a 4th segment was present
 	Prerelease  string     // e.g., "alpha", "beta.1", "rc.2"
 	Build       string     // e.g., build metadata
 	BuildNumber int        // Numeric build number for comparison (e.g., 285 from "-ls285")
@@ -25,6 +27,9 @@ func (v Version) String() string {
 	}
 
 	s := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+	if v.HasRevision {
+		s += fmt.Sprintf(".%d", v.Revision)
+	}
 	if v.Prerelease != "" {
 		s += "-" + v.Prerelease
 	}

@@ -45,8 +45,8 @@ func TestParseImageTag(t *testing.T) {
 			expectMajor:    5,
 			expectMinor:    28,
 			expectPatch:    0,
-			// Build numbers are normalized (ls285 removed), leaving just the build number
-			expectSuffix:   "10274",
+			// 4th segment (10274) is now captured as Revision, ls285 normalized away
+			expectSuffix:   "",
 		},
 		{
 			name:           "linuxserver sonarr format with dot-separated build number",
@@ -184,7 +184,7 @@ func TestLinuxServerBuildNumber(t *testing.T) {
 			name:              "plex with 5-digit build number and ls suffix",
 			imageTag:          "ghcr.io/linuxserver/plex:5.28.0.10274-ls285",
 			expectBuildNumber: 285,
-			expectSuffix:      "10274",
+			expectSuffix:      "",
 		},
 		{
 			name:              "sonarr with 4-digit build number and ls suffix",

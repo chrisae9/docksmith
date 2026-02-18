@@ -71,6 +71,24 @@ func TestCompare(t *testing.T) {
 			v2:       &Version{Major: 3, Minor: 0, Patch: 0, Original: "v3.0"},
 			expected: -1,
 		},
+		{
+			name:     "4-segment v1 < v2 (revision)",
+			v1:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10156, HasRevision: true},
+			v2:       &Version{Major: 1, Minor: 43, Patch: 0, Revision: 10492, HasRevision: true},
+			expected: -1,
+		},
+		{
+			name:     "4-segment same major.minor.patch, different revision",
+			v1:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10156, HasRevision: true},
+			v2:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10200, HasRevision: true},
+			expected: -1,
+		},
+		{
+			name:     "4-segment equal",
+			v1:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10156, HasRevision: true},
+			v2:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10156, HasRevision: true},
+			expected: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -127,6 +145,12 @@ func TestGetChangeType(t *testing.T) {
 			from:     &Version{Major: 1, Minor: 2, Patch: 5},
 			to:       &Version{Major: 1, Minor: 3, Patch: 0},
 			expected: MinorChange,
+		},
+		{
+			name:     "revision-only change is patch level",
+			from:     &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10156, HasRevision: true},
+			to:       &Version{Major: 1, Minor: 42, Patch: 2, Revision: 10200, HasRevision: true},
+			expected: PatchChange,
 		},
 	}
 

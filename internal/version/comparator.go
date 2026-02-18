@@ -49,6 +49,14 @@ func (c *Comparator) Compare(v1, v2 *Version) int {
 		return 1
 	}
 
+	// Compare revision (4th segment, e.g., 10156 from "1.42.2.10156")
+	if v1.Revision != v2.Revision {
+		if v1.Revision < v2.Revision {
+			return -1
+		}
+		return 1
+	}
+
 	// Compare prerelease
 	// Per semver spec: pre-release versions have lower precedence
 	// 1.0.0-alpha < 1.0.0
@@ -109,6 +117,7 @@ func (c *Comparator) GetChangeType(from, to *Version) ChangeType {
 		return MinorChange
 	}
 
+	// Patch or revision change both count as PatchChange
 	return PatchChange
 }
 

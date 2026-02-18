@@ -13,7 +13,7 @@ var (
 	// - Major.minor: 7.2, v3.1
 	// - Major.minor.patch: 1.2.3, v2.10.5
 	// Does NOT match prerelease or build - those are handled separately
-	semverPattern = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?`)
+	semverPattern = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?`)
 
 	// True prerelease identifiers (for semantic versioning)
 	prereleaseIdentifiers = map[string]bool{
@@ -54,6 +54,7 @@ var (
 		regexp.MustCompile(`-\d+$`),         // Trailing numbers: -1, -2
 		regexp.MustCompile(`_\d+$`),         // Trailing numbers with underscore: _1, _2
 		regexp.MustCompile(`^\.\d{4}$`),     // 4-digit LinuxServer build numbers: .2946 (keep longer ones like .10274)
+		regexp.MustCompile(`^[0-9a-f]{7,40}$`), // Bare git commit hashes: f737b826c, c0dd5a73e
 	}
 )
 
@@ -204,6 +205,12 @@ func (p *Parser) extractVersion(tag string) (*Version, string) {
 	// Parse patch version
 	if len(matches) > 3 && matches[3] != "" {
 		version.Patch, _ = strconv.Atoi(matches[3])
+	}
+
+	// Parse revision (4th segment, e.g., 10156 from "1.42.2.10156")
+	if len(matches) > 4 && matches[4] != "" {
+		version.Revision, _ = strconv.Atoi(matches[4])
+		version.HasRevision = true
 	}
 
 	// Reject suspicious bare numeric tags (likely CI/build numbers, not versions)
@@ -375,6 +382,12 @@ func (p *Parser) CompareVersions(v1, v2 *Version) int {
 			}
 			if v1.Patch != v2.Patch {
 				if v1.Patch < v2.Patch {
+					return -1
+				}
+				return 1
+			}
+			if v1.Revision != v2.Revision {
+				if v1.Revision < v2.Revision {
 					return -1
 				}
 				return 1

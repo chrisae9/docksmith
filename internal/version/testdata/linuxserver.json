@@ -13,8 +13,8 @@
         "1.41.2.9200-c6bbc1b53-ls295"
       ],
       "expected_latest": "1.41.2.9200-c6bbc1b53-ls295",
-      "expected_version": "1.41.2",
-      "notes": "Build numbers (.7998, .8227, etc.) and LinuxServer build (-ls280) should be normalized"
+      "expected_version": "1.41.2.9200",
+      "notes": "4th segment (.9200) is revision, git hash and LinuxServer build (-ls295) are normalized"
     },
     {
       "image": "linuxserver/sonarr",
@@ -47,8 +47,8 @@
     {
       "issue": "Multiple version components in tag",
       "example": "5.28.0.10274-ls285",
-      "expected_behavior": "Extract 5.28.0 as version, normalize .10274 and -ls285",
-      "pattern": "^(\\d+\\.\\d+\\.\\d+)\\.\\d+-.*-ls\\d+$"
+      "expected_behavior": "Extract 5.28.0.10274 as version (4-segment), normalize git hash and -ls285",
+      "pattern": "^(\\d+\\.\\d+\\.\\d+\\.\\d+)-.*-ls\\d+$"
     },
     {
       "issue": "Git commit hash embedded",
