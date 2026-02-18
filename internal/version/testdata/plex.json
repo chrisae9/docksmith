@@ -1,0 +1,66 @@
+{
+  "name": "linuxserver/plex",
+  "description": "Plex Media Server with 4-segment versions, git hashes, and LinuxServer build numbers",
+  "docker_hub_url": "https://github.com/linuxserver/docker-plex/packages",
+  "test_cases": [
+    {
+      "image": "ghcr.io/linuxserver/plex",
+      "current_tag": "1.42.2.10156-f737b826c-ls292",
+      "available_tags": [
+        "1.42.2.10156-f737b826c-ls292",
+        "1.42.2.10156-f737b826c-ls291",
+        "1.42.1.10060-4e8b05daf-ls279",
+        "1.43.0.10467-2b1ba6e69-ls290",
+        "1.43.0.10492-121068a07-ls293",
+        "1.41.9.9961-46083195d-ls276",
+        "1.41.8.9834-071366d65-ls272",
+        "1.40.5.8921-836b34c27-ls234",
+        "latest"
+      ],
+      "expected_latest": "1.43.0.10492-121068a07-ls293",
+      "expected_version": "1.43.0.10492",
+      "notes": "4-segment version: major.minor.patch.revision with git hash and ls build number normalized away"
+    },
+    {
+      "image": "ghcr.io/linuxserver/plex",
+      "current_tag": "1.41.8.9834-071366d65-ls272",
+      "available_tags": [
+        "1.41.8.9834-071366d65-ls272",
+        "1.41.8.9834-071366d65-ls271",
+        "1.41.9.9961-46083195d-ls276",
+        "1.42.1.10060-4e8b05daf-ls279",
+        "1.42.2.10156-f737b826c-ls292",
+        "1.43.0.10492-121068a07-ls293"
+      ],
+      "expected_latest": "1.43.0.10492-121068a07-ls293",
+      "expected_version": "1.43.0.10492",
+      "notes": "Older Plex version should find the newest 4-segment tag"
+    }
+  ],
+  "edge_cases": [
+    {
+      "issue": "4-segment version with revision",
+      "example": "1.42.2.10156-f737b826c-ls292",
+      "expected_behavior": "Parse as version 1.42.2.10156, normalize git hash and -ls292",
+      "pattern": "^(\\d+\\.\\d+\\.\\d+\\.\\d+)-[a-f0-9]+-ls\\d+$"
+    },
+    {
+      "issue": "Architecture prefix tags must not parse",
+      "example": "amd64-1.43.0.10492-121068a07-ls293",
+      "expected_behavior": "Not recognized as versioned (prefix blocks semver regex)",
+      "notes": "These are platform-specific tags, not primary version tags"
+    },
+    {
+      "issue": "version- prefix tags must not parse",
+      "example": "version-1.43.0.10492-121068a07",
+      "expected_behavior": "Not recognized as versioned",
+      "notes": "LinuxServer publishes these as alternative references"
+    },
+    {
+      "issue": "Bare git hash in suffix after 4-segment extraction",
+      "example": "f737b826c remaining as suffix after version extraction",
+      "expected_behavior": "Stripped by bare hex hash normalization pattern",
+      "pattern": "^[0-9a-f]{7,40}$"
+    }
+  ]
+}

@@ -118,6 +118,16 @@ func (p *Parser) ParseImageTag(imageTag string) *TagInfo {
 		return info
 	}
 
+	// Check if it's a commit hash BEFORE trying semantic version.
+	// Hex hashes starting with 0-9 (e.g., "8adcd0b4-ls46") would otherwise
+	// be misinterpreted as a major version number by the semver regex.
+	if p.isCommitHash(tag) {
+		info.IsVersioned = false // Hashes aren't really "versioned"
+		info.VersionType = "hash"
+		info.Hash = tag
+		return info
+	}
+
 	// Try to extract semantic version
 	version, suffix := p.extractVersion(tag)
 	if version != nil {
@@ -125,14 +135,6 @@ func (p *Parser) ParseImageTag(imageTag string) *TagInfo {
 		info.IsVersioned = true
 		info.Suffix = suffix
 		info.VersionType = "semantic"
-		return info
-	}
-
-	// Check if it's a commit hash
-	if p.isCommitHash(tag) {
-		info.IsVersioned = false // Hashes aren't really "versioned"
-		info.VersionType = "hash"
-		info.Hash = tag
 		return info
 	}
 
