@@ -20,6 +20,7 @@ import type {
 } from '../types/api';
 import { ChangeType } from '../types/api';
 import { isUpdatable, isMismatch } from '../utils/status';
+import { parseImageRef } from '../utils/registry';
 import { useToast } from './Toast';
 import {
   SearchBar,
@@ -321,7 +322,7 @@ export function Containers() {
       }
     } else if (groupBy === 'image') {
       for (const c of sortContainers(containers.filter(filterContainer))) {
-        const imageName = c.image.split(':')[0] || c.image;
+        const imageName = parseImageRef(c.image).repository || c.image;
         if (!groups[imageName]) groups[imageName] = [];
         groups[imageName].push(c);
       }
@@ -590,7 +591,7 @@ export function Containers() {
   const getRepository = (image: ImageInfo): string => {
     const tag = image.tags?.[0];
     if (!tag || tag === '<none>') return '<none>';
-    return tag.split(':')[0] || '<none>';
+    return parseImageRef(tag).repository || '<none>';
   };
 
   const sortImages = useCallback((imgs: ImageInfo[]) => {
@@ -715,8 +716,8 @@ export function Containers() {
 
     if (c.update_status === 'LOCAL_IMAGE') return 'Local image';
     if (c.update_status === 'COMPOSE_MISMATCH') {
-      const runningTag = c.image.includes(':') ? c.image.split(':').pop() : c.current_tag || 'unknown';
-      const composeTag = c.compose_image?.includes(':') ? c.compose_image.split(':').pop() : c.compose_image || 'unknown';
+      const runningTag = parseImageRef(c.image).tag || c.current_tag || 'unknown';
+      const composeTag = c.compose_image ? (parseImageRef(c.compose_image).tag || c.compose_image) : 'unknown';
       return `${runningTag} \u2192 ${composeTag}`;
     }
     if (c.update_status === 'IGNORED') return 'Ignored';

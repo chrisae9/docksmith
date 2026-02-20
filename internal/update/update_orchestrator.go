@@ -29,6 +29,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// replaceImageTag replaces the tag portion of a Docker image reference.
+// It correctly handles registry ports (e.g. "registry:5000/repo:1.2").
+func replaceImageTag(imageRef, newTag string) string {
+	// The tag delimiter is the colon AFTER the last slash.
+	// e.g. "registry:5000/repo:1.2" → base="registry:5000/repo", tag="1.2"
+	lastSlash := strings.LastIndex(imageRef, "/")
+	tagPart := imageRef
+	if lastSlash >= 0 {
+		tagPart = imageRef[lastSlash:]
+	}
+	if colonIdx := strings.LastIndex(tagPart, ":"); colonIdx >= 0 {
+		// Absolute position in the original string
+		absIdx := colonIdx
+		if lastSlash >= 0 {
+			absIdx = lastSlash + colonIdx
+		}
+		return imageRef[:absIdx] + ":" + newTag
+	}
+	// No existing tag — just append
+	return imageRef + ":" + newTag
+}
+
 // UpdateOrchestrator manages the complete update workflow for containers.
 type UpdateOrchestrator struct {
 	dockerClient   docker.Client
@@ -131,13 +153,13 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 	}
 
 	if targetContainer == nil {
-		return "", fmt.Errorf("container not found: %s", containerName)
+		return "", NewNotFoundError("container not found: %s", containerName)
 	}
 
 	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
 
 	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "single"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "single", map[string]string{containerName: targetVersion}); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		return operationID, nil
@@ -158,7 +180,7 @@ func (o *UpdateOrchestrator) UpdateSingleContainer(ctx context.Context, containe
 			log.Printf("UPDATE: Empty target version for :latest image %s, using 'latest' as target", containerName)
 		} else {
 			o.releaseStackLock(stackName)
-			return "", fmt.Errorf("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
+			return "", NewBadRequestError("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
 		}
 	}
 
@@ -204,13 +226,13 @@ func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, c
 	}
 
 	if targetContainer == nil {
-		return "", fmt.Errorf("container not found: %s", containerName)
+		return "", NewNotFoundError("container not found: %s", containerName)
 	}
 
 	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
 
 	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "single"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "single", map[string]string{containerName: targetVersion}); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		return operationID, nil
@@ -226,7 +248,7 @@ func (o *UpdateOrchestrator) UpdateSingleContainerInGroup(ctx context.Context, c
 			targetVersion = "latest"
 		} else {
 			o.releaseStackLock(stackName)
-			return "", fmt.Errorf("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
+			return "", NewBadRequestError("cannot update container %s: no target version specified and current version is '%s' (not :latest)", containerName, currentVersion)
 		}
 	}
 
@@ -407,11 +429,12 @@ func (o *UpdateOrchestrator) updateBatchContainersInternal(ctx context.Context, 
 			return "", fmt.Errorf("failed to save queued operation: %w", err)
 		}
 		queue := storage.UpdateQueue{
-			OperationID:   operationID,
-			StackName:     stackName,
-			Containers:    containerNames,
-			OperationType: operationType,
-			QueuedAt:      time.Now(),
+			OperationID:    operationID,
+			StackName:      stackName,
+			Containers:     containerNames,
+			OperationType:  operationType,
+			TargetVersions: targetVersions,
+			QueuedAt:       time.Now(),
 		}
 		if err := o.storage.QueueUpdate(ctx, queue); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
@@ -482,7 +505,7 @@ func (o *UpdateOrchestrator) UpdateStack(ctx context.Context, stackName string) 
 		for i, c := range stackContainers {
 			containerNames[i] = c.Name
 		}
-		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "stack"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "stack", nil); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		return operationID, nil
@@ -600,7 +623,7 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	o.publishProgress(operationID, container.Name, stackName, "recreating", 60, "Recreating container and dependents")
 
 	// Build the full image reference with new version
-	newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
+	newImageRef := replaceImageTag(container.Image, targetVersion)
 
 	if _, err := o.restartContainerWithDependents(ctx, operationID, container.Name, stackName, newImageRef); err != nil {
 		o.failOperation(ctx, operationID, "recreating", fmt.Sprintf("Recreation failed: %v", err))
@@ -967,7 +990,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 
 	for i, container := range updateContainers {
 		targetVersion := targetVersions[container.Name]
-		newImageRef := strings.Split(container.Image, ":")[0] + ":" + targetVersion
+		newImageRef := replaceImageTag(container.Image, targetVersion)
 
 		baseProgress := 30 + (i * 30 / len(updateContainers))
 		progressPerContainer := 30 / len(updateContainers)
@@ -1059,7 +1082,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 
 	for i, cont := range orderedContainers {
 		targetVersion := targetVersions[cont.Name]
-		newImageRef := strings.Split(cont.Image, ":")[0] + ":" + targetVersion
+		newImageRef := replaceImageTag(cont.Image, targetVersion)
 
 		baseProgress := 60 + (i * 35 / len(orderedContainers))
 
@@ -2575,7 +2598,7 @@ func (o *UpdateOrchestrator) FixComposeMismatch(ctx context.Context, containerNa
 	}
 
 	if targetContainer == nil {
-		return "", fmt.Errorf("container not found: %s", containerName)
+		return "", NewNotFoundError("container not found: %s", containerName)
 	}
 
 	// Get compose file path to read the expected image
@@ -2592,7 +2615,7 @@ func (o *UpdateOrchestrator) FixComposeMismatch(ctx context.Context, containerNa
 	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
 
 	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "fix_mismatch"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "fix_mismatch", nil); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		return operationID, nil
@@ -3004,17 +3027,25 @@ func (o *UpdateOrchestrator) cleanupStaleLocks(ctx context.Context) {
 }
 
 // queueOperation adds an operation to the queue.
-func (o *UpdateOrchestrator) queueOperation(ctx context.Context, operationID, stackName string, containers []string, operationType string) error {
+func (o *UpdateOrchestrator) queueOperation(ctx context.Context, operationID, stackName string, containers []string, operationType string, targetVersions map[string]string) error {
 	queue := storage.UpdateQueue{
-		OperationID:   operationID,
-		StackName:     stackName,
-		Containers:    containers,
-		OperationType: operationType,
-		QueuedAt:      time.Now(),
+		OperationID:    operationID,
+		StackName:      stackName,
+		Containers:     containers,
+		OperationType:  operationType,
+		TargetVersions: targetVersions,
+		QueuedAt:       time.Now(),
 	}
 
 	if err := o.storage.QueueUpdate(ctx, queue); err != nil {
 		return err
+	}
+
+	// Check if an operation record already exists (e.g., saved by the caller with full details).
+	// Only create a sparse record if none exists, to avoid overwriting detailed metadata.
+	if existing, found, _ := o.storage.GetUpdateOperation(ctx, operationID); found {
+		existing.Status = "queued"
+		return o.storage.SaveUpdateOperation(ctx, existing)
 	}
 
 	op := storage.UpdateOperation{
@@ -3060,11 +3091,26 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 
 			for _, q := range queued {
 				if o.acquireStackLock(q.StackName) {
-					o.storage.DequeueUpdate(ctx, q.StackName)
+					if _, dequeued, deqErr := o.storage.DequeueUpdate(ctx, q.StackName); deqErr != nil || !dequeued {
+						log.Printf("QUEUE: Failed to dequeue operation %s (err=%v, dequeued=%v), releasing lock", q.OperationID, deqErr, dequeued)
+						o.releaseStackLock(q.StackName)
+						continue
+					}
 
-					_, found, _ := o.storage.GetUpdateOperation(ctx, q.OperationID)
-					if found {
-						containers, _ := o.dockerClient.ListContainers(ctx)
+					_, found, opErr := o.storage.GetUpdateOperation(ctx, q.OperationID)
+					if !found {
+						log.Printf("QUEUE: Operation %s not found (err=%v), releasing stack lock", q.OperationID, opErr)
+						o.releaseStackLock(q.StackName)
+						continue
+					}
+					{
+						containers, listErr := o.dockerClient.ListContainers(ctx)
+						if listErr != nil {
+							log.Printf("QUEUE: Failed to list containers for operation %s: %v", q.OperationID, listErr)
+							o.releaseStackLock(q.StackName)
+							o.failOperation(ctx, q.OperationID, "queued", fmt.Sprintf("Failed to list containers: %v", listErr))
+							continue
+						}
 						targetContainers := make([]*docker.Container, 0)
 						for _, name := range q.Containers {
 							for _, c := range containers {
@@ -3133,9 +3179,13 @@ func (o *UpdateOrchestrator) processQueue(ctx context.Context) {
 							go o.executeBatchUpdate(opCtx, q.OperationID, targetContainers, targetVersions, q.StackName, nil)
 						default: // "single", "batch", "stack"
 							if len(targetContainers) == 1 {
-								go o.executeSingleUpdate(opCtx, q.OperationID, targetContainers[0], "latest", q.StackName, false)
+								tv := "latest"
+								if v, ok := q.TargetVersions[targetContainers[0].Name]; ok && v != "" {
+									tv = v
+								}
+								go o.executeSingleUpdate(opCtx, q.OperationID, targetContainers[0], tv, q.StackName, false)
 							} else {
-								go o.executeBatchUpdate(opCtx, q.OperationID, targetContainers, nil, q.StackName, nil)
+								go o.executeBatchUpdate(opCtx, q.OperationID, targetContainers, q.TargetVersions, q.StackName, nil)
 							}
 						}
 					}
@@ -3208,7 +3258,7 @@ func (o *UpdateOrchestrator) RestartSingleContainer(ctx context.Context, contain
 	}
 
 	if targetContainer == nil {
-		return "", fmt.Errorf("container not found: %s", containerName)
+		return "", NewNotFoundError("container not found: %s", containerName)
 	}
 
 	stackName := o.stackManager.DetermineStack(ctx, *targetContainer)
@@ -3235,7 +3285,7 @@ func (o *UpdateOrchestrator) RestartSingleContainer(ctx context.Context, contain
 	// Check if stack is locked
 	if stackName != "" && !o.acquireStackLock(stackName) {
 		// Queue the operation
-		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "restart"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, []string{containerName}, "restart", nil); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		o.publishProgress(operationID, containerName, stackName, "queued", 0, "Operation queued - stack is busy")
@@ -3486,7 +3536,7 @@ func (o *UpdateOrchestrator) RestartStack(ctx context.Context, stackName string,
 
 	// Acquire stack lock
 	if !o.acquireStackLock(stackName) {
-		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "restart"); err != nil {
+		if err := o.queueOperation(ctx, operationID, stackName, containerNames, "restart", nil); err != nil {
 			return "", fmt.Errorf("failed to queue operation: %w", err)
 		}
 		o.publishProgress(operationID, "", stackName, "queued", 0, "Operation queued - stack is busy")

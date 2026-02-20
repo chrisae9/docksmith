@@ -1,7 +1,24 @@
+/**
+ * Parse a Docker image reference into its repository and tag parts.
+ * Handles registry ports correctly (e.g., registry.example.com:5000/myimage:latest).
+ * The tag separator is the last colon that appears after the last slash.
+ */
+export function parseImageRef(imageRef: string): { repository: string; tag: string } {
+  const lastSlash = imageRef.lastIndexOf('/');
+  const colonAfterSlash = imageRef.indexOf(':', lastSlash + 1);
+  if (colonAfterSlash === -1) {
+    return { repository: imageRef, tag: '' };
+  }
+  return {
+    repository: imageRef.substring(0, colonAfterSlash),
+    tag: imageRef.substring(colonAfterSlash + 1),
+  };
+}
+
 // Generate a clickable URL for an image repository
 export function getRegistryUrl(image: string): string | null {
   // Remove tag if present
-  const imageWithoutTag = image.split(':')[0];
+  const imageWithoutTag = parseImageRef(image).repository;
 
   // GHCR
   if (imageWithoutTag.startsWith('ghcr.io/')) {

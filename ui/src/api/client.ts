@@ -35,6 +35,8 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<API
       return {
         success: false,
         error: `HTTP ${response.status}: ${response.statusText}`,
+        timestamp: new Date().toISOString(),
+        version: '',
       } as APIResponse<T>;
     }
   }

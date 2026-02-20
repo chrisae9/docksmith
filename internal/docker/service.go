@@ -90,6 +90,10 @@ func (s *Service) GetImageVersion(ctx context.Context, imageName string) (string
 		"VERSION",
 	}
 
+	if imageInfo.Config == nil {
+		return "", nil
+	}
+
 	for _, label := range versionLabels {
 		if val, ok := imageInfo.Config.Labels[label]; ok && val != "" {
 			// For build_version from LinuxServer, extract just the version part

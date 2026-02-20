@@ -179,7 +179,7 @@ func (s *Server) handleStartRestart(w http.ResponseWriter, r *http.Request) {
 	operationID, err := s.updateOrchestrator.RestartSingleContainer(ctx, containerName, force)
 	if err != nil {
 		log.Printf("Failed to start restart for %s: %v", containerName, err)
-		RespondInternalError(w, err)
+		RespondOrchestratorError(w, err)
 		return
 	}
 
@@ -437,7 +437,7 @@ func (s *Server) handleStartStackRestart(w http.ResponseWriter, r *http.Request)
 	operationID, err := s.updateOrchestrator.RestartStack(ctx, stackName, req.Containers, force)
 	if err != nil {
 		log.Printf("Failed to start stack restart for %s: %v", stackName, err)
-		RespondInternalError(w, err)
+		RespondOrchestratorError(w, err)
 		return
 	}
 

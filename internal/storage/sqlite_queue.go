@@ -19,15 +19,26 @@ func (s *SQLiteStorage) QueueUpdate(ctx context.Context, queue UpdateQueue) erro
 			return fmt.Errorf("failed to serialize containers: %w", err)
 		}
 
+		// Serialize target versions to JSON
+		targetVersions := queue.TargetVersions
+		if targetVersions == nil {
+			targetVersions = map[string]string{}
+		}
+		targetVersionsJSON, err := json.Marshal(targetVersions)
+		if err != nil {
+			log.Printf("Failed to serialize target versions: %v", err)
+			return fmt.Errorf("failed to serialize target versions: %w", err)
+		}
+
 		query := `
 			INSERT INTO update_queue
-			(operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			(operation_id, stack_name, containers, operation_type, target_versions, priority, queued_at, estimated_start_time)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`
 
 		_, err = s.db.ExecContext(ctx, query,
 			queue.OperationID, queue.StackName, string(containersJSON),
-			queue.OperationType, queue.Priority, queue.QueuedAt, queue.EstimatedStartTime)
+			queue.OperationType, string(targetVersionsJSON), queue.Priority, queue.QueuedAt, queue.EstimatedStartTime)
 		if err != nil {
 			log.Printf("Failed to queue update for operation %s: %v", queue.OperationID, err)
 			return fmt.Errorf("failed to queue update: %w", err)
@@ -54,7 +65,7 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 
 		// Find oldest queued operation for this stack
 		query := `
-			SELECT id, operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time
+			SELECT id, operation_id, stack_name, containers, operation_type, target_versions, priority, queued_at, estimated_start_time
 			FROM update_queue
 			WHERE stack_name = ?
 			ORDER BY priority DESC, queued_at ASC
@@ -62,11 +73,12 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 		`
 
 		var containersJSON string
+		var targetVersionsJSON string
 		var estimatedStartTime sql.NullTime
 
 		err = tx.QueryRowContext(ctx, query, stackName).Scan(
 			&queue.ID, &queue.OperationID, &queue.StackName, &containersJSON,
-			&queue.OperationType, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
+			&queue.OperationType, &targetVersionsJSON, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
 		)
 
 		if err == sql.ErrNoRows {
@@ -90,6 +102,17 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 			tx.Rollback()
 			log.Printf("Failed to deserialize containers: %v", err)
 			return fmt.Errorf("failed to deserialize containers: %w", err)
+		}
+
+		// Deserialize target versions from JSON
+		if targetVersionsJSON != "" && targetVersionsJSON != "{}" {
+			queue.TargetVersions = make(map[string]string)
+			err = json.Unmarshal([]byte(targetVersionsJSON), &queue.TargetVersions)
+			if err != nil {
+				tx.Rollback()
+				log.Printf("Failed to deserialize target versions: %v", err)
+				return fmt.Errorf("failed to deserialize target versions: %w", err)
+			}
 		}
 
 		// Delete the entry
@@ -122,7 +145,7 @@ func (s *SQLiteStorage) DequeueUpdate(ctx context.Context, stackName string) (Up
 // Retrieves all queued operations ordered by queued_at.
 func (s *SQLiteStorage) GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, error) {
 	query := `
-		SELECT id, operation_id, stack_name, containers, operation_type, priority, queued_at, estimated_start_time
+		SELECT id, operation_id, stack_name, containers, operation_type, target_versions, priority, queued_at, estimated_start_time
 		FROM update_queue
 		ORDER BY priority DESC, queued_at ASC
 	`
@@ -138,11 +161,12 @@ func (s *SQLiteStorage) GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, er
 	for rows.Next() {
 		var queue UpdateQueue
 		var containersJSON string
+		var targetVersionsJSON string
 		var estimatedStartTime sql.NullTime
 
 		err := rows.Scan(
 			&queue.ID, &queue.OperationID, &queue.StackName, &containersJSON,
-			&queue.OperationType, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
+			&queue.OperationType, &targetVersionsJSON, &queue.Priority, &queue.QueuedAt, &estimatedStartTime,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan queued update: %w", err)
@@ -157,6 +181,16 @@ func (s *SQLiteStorage) GetQueuedUpdates(ctx context.Context) ([]UpdateQueue, er
 		if err != nil {
 			log.Printf("Failed to deserialize containers: %v", err)
 			return nil, fmt.Errorf("failed to deserialize containers: %w", err)
+		}
+
+		// Deserialize target versions from JSON
+		if targetVersionsJSON != "" && targetVersionsJSON != "{}" {
+			queue.TargetVersions = make(map[string]string)
+			err = json.Unmarshal([]byte(targetVersionsJSON), &queue.TargetVersions)
+			if err != nil {
+				log.Printf("Failed to deserialize target versions: %v", err)
+				return nil, fmt.Errorf("failed to deserialize target versions: %w", err)
+			}
 		}
 
 		queues = append(queues, queue)

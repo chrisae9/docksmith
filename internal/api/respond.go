@@ -1,9 +1,11 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/chis/docksmith/internal/output"
+	"github.com/chis/docksmith/internal/update"
 )
 
 // RespondError writes an error response with the specified HTTP status code.
@@ -42,4 +44,18 @@ func RespondSuccess(w http.ResponseWriter, data any) {
 // RespondNoContent writes a 204 No Content response
 func RespondNoContent(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RespondOrchestratorError maps orchestrator errors to appropriate HTTP status codes.
+func RespondOrchestratorError(w http.ResponseWriter, err error) {
+	var notFoundErr *update.NotFoundError
+	var badReqErr *update.BadRequestError
+	switch {
+	case errors.As(err, &notFoundErr):
+		RespondNotFound(w, err)
+	case errors.As(err, &badReqErr):
+		RespondBadRequest(w, err)
+	default:
+		RespondInternalError(w, err)
+	}
 }

@@ -75,6 +75,7 @@ func (bc *BackgroundChecker) Start() {
 		return
 	}
 	bc.running = true
+	bc.stopChan = make(chan struct{})
 	bc.runningMu.Unlock()
 
 	log.Printf("BACKGROUND_CHECKER: Starting with interval %v", bc.interval)

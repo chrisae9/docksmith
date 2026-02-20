@@ -325,14 +325,15 @@ type RollbackPolicy struct {
 // UpdateQueue represents a queued update operation waiting for stack lock.
 // Implements FIFO queue with persistence across restarts.
 type UpdateQueue struct {
-	ID                 int64      `json:"id"`
-	OperationID        string     `json:"operation_id"`
-	StackName          string     `json:"stack_name"`
-	Containers         []string   `json:"containers"` // JSON array of container names
-	OperationType      string     `json:"operation_type"`
-	Priority           int        `json:"priority"`
-	QueuedAt           time.Time  `json:"queued_at"`
-	EstimatedStartTime *time.Time `json:"estimated_start_time,omitempty"`
+	ID                 int64             `json:"id"`
+	OperationID        string            `json:"operation_id"`
+	StackName          string            `json:"stack_name"`
+	Containers         []string          `json:"containers"` // JSON array of container names
+	OperationType      string            `json:"operation_type"`
+	TargetVersions     map[string]string `json:"target_versions,omitempty"` // container name -> target version
+	Priority           int               `json:"priority"`
+	QueuedAt           time.Time         `json:"queued_at"`
+	EstimatedStartTime *time.Time        `json:"estimated_start_time,omitempty"`
 }
 
 // ScriptAssignment represents container settings including script, ignore, and allow-latest.

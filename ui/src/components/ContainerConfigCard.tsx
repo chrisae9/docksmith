@@ -1,5 +1,5 @@
 import type { ContainerInfo } from '../types/api';
-import { getRegistryUrl } from '../utils/registry';
+import { getRegistryUrl, parseImageRef } from '../utils/registry';
 
 interface ContainerConfigCardProps {
   container: ContainerInfo;
@@ -12,7 +12,7 @@ interface ContainerConfigCardProps {
  */
 export function ContainerConfigCard({ container, title = 'Current Configuration' }: ContainerConfigCardProps) {
   const currentTag = container.current_tag || '';
-  const imageRef = container.image?.split(':')[0] || '';
+  const imageRef = container.image ? parseImageRef(container.image).repository : '';
 
   return (
     <section className="config-section">

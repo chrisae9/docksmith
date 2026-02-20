@@ -126,8 +126,9 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			err := handleHTTPError(resp, "docker hub tags request")
 			resp.Body.Close()
-			return nil, handleHTTPError(resp, "docker hub tags request")
+			return nil, err
 		}
 
 		var tagsResp dockerHubTagsResponse
@@ -279,8 +280,9 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			err := handleHTTPError(resp, "docker hub tags request")
 			resp.Body.Close()
-			return nil, handleHTTPError(resp, "docker hub tags request")
+			return nil, err
 		}
 
 		var tagsResp dockerHubTagsResponse

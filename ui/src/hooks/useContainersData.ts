@@ -132,9 +132,10 @@ export function useContainersData(): ContainersDataResult {
         setStatusData(statusRes.data);
       }
 
-      if (!explorerRes.success && !statusRes.success) {
+      if (!explorerRes.success) {
+        // Explorer is required for the container list — without it, data is empty
         if (!hasInitialData.current) {
-          setError(explorerRes.error || statusRes.error || 'Failed to fetch data');
+          setError(explorerRes.error || 'Failed to fetch container data');
         }
       } else {
         setError(null);
@@ -152,7 +153,10 @@ export function useContainersData(): ContainersDataResult {
   // Background refresh — trigger background check, then fetch cached data
   const backgroundRefresh = useCallback(async () => {
     try {
-      await fetch('/api/trigger-check', { method: 'POST' });
+      const triggerRes = await fetch('/api/trigger-check', { method: 'POST' });
+      if (!triggerRes.ok) {
+        console.warn('Background check trigger failed:', triggerRes.status);
+      }
       await new Promise(resolve => setTimeout(resolve, 500));
       const [explorerRes, statusRes] = await Promise.all([
         getExplorerData(),

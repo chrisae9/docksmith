@@ -4,6 +4,7 @@ import { List } from 'react-window';
 import { useRegistryTags } from '../hooks/useRegistryTags';
 import { useContainerData } from '../hooks/useContainerData';
 import { ContainerConfigCard } from '../components/ContainerConfigCard';
+import { parseImageRef } from '../utils/registry';
 import './TagFilterPage.css';
 
 interface TagInfo {
@@ -38,7 +39,7 @@ export function TagFilterPage() {
 
   // Get container details
   const currentTag = container?.current_tag || '';
-  const imageRef = container?.image?.split(':')[0] || '';
+  const imageRef = container?.image ? parseImageRef(container.image).repository : '';
 
   // Fetch tags from registry
   const { tags, loading, error: fetchError } = useRegistryTags(imageRef);

@@ -36,8 +36,8 @@ export function useOperationPoller({
       return;
     }
 
-    // Deduplicate operationIds
-    const uniqueOpIds = [...new Set(operationIds)];
+    // Deduplicate operationIds and filter out sentinel/pending IDs
+    const uniqueOpIds = [...new Set(operationIds)].filter(id => !id.startsWith('pending-'));
     if (uniqueOpIds.length === 0 && !batchGroupId) return;
 
     const controller = new AbortController();
@@ -67,6 +67,7 @@ export function useOperationPoller({
             if (!data.success || !data.data) continue;
 
             const ops = data.data.operations;
+            if (!ops || ops.length === 0) continue; // No operations yet, keep polling
             let allDone = true;
 
             for (const op of ops) {

@@ -165,16 +165,22 @@ export class BatchTrackedExecutor implements OperationExecutor {
 
               if (opData.success && opData.data) {
                 const op = opData.data;
-                if (op.status === 'complete') {
+                const isTerminal = op.status === 'complete' || op.status === 'failed';
+                if (isTerminal) {
                   pendingUpdates.delete(name);
-                  successCount++;
-                  dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName: name, message: 'Updated' });
-                  addLog(dispatch, runId, `${name} updated successfully`, 'success', 'fa-circle-check');
-                } else if (op.status === 'failed') {
-                  pendingUpdates.delete(name);
-                  failedCount++;
-                  dispatch({ type: 'CONTAINER_FAILED', runId, containerName: name, message: op.error_message || 'Update failed', error: op.error_message });
-                  addLog(dispatch, runId, `${name} update failed: ${op.error_message || 'Unknown error'}`, 'error', 'fa-circle-xmark');
+                  // Check per-container status from batch_details if available
+                  const detail = op.batch_details?.find((d: any) => d.container_name === name);
+                  const containerFailed = detail ? detail.status === 'failed' : op.status === 'failed';
+                  if (containerFailed) {
+                    failedCount++;
+                    const msg = detail?.message || op.error_message || 'Update failed';
+                    dispatch({ type: 'CONTAINER_FAILED', runId, containerName: name, message: msg, error: msg });
+                    addLog(dispatch, runId, `${name} update failed: ${msg}`, 'error', 'fa-circle-xmark');
+                  } else {
+                    successCount++;
+                    dispatch({ type: 'CONTAINER_COMPLETED', runId, containerName: name, message: 'Updated' });
+                    addLog(dispatch, runId, `${name} updated successfully`, 'success', 'fa-circle-check');
+                  }
                 }
               }
             } catch {

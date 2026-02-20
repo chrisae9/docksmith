@@ -249,7 +249,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// Start update - same function as CLI
 	operationID, err := s.updateOrchestrator.UpdateSingleContainer(ctx, req.ContainerName, req.TargetVersion)
 	if err != nil {
-		RespondInternalError(w, err)
+		RespondOrchestratorError(w, err)
 		return
 	}
 
@@ -427,7 +427,7 @@ func (s *Server) handleFixComposeMismatch(w http.ResponseWriter, r *http.Request
 	operationID, err := s.updateOrchestrator.FixComposeMismatch(ctx, containerName)
 	if err != nil {
 		log.Printf("Fix compose mismatch failed for %s: %v", containerName, err)
-		RespondInternalError(w, err)
+		RespondOrchestratorError(w, err)
 		return
 	}
 
