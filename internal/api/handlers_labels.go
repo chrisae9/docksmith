@@ -131,6 +131,14 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate tag regex synchronously before launching async operation
+	if req.TagRegex != nil && *req.TagRegex != "" {
+		if err := validateRegexPattern(*req.TagRegex); err != nil {
+			RespondBadRequest(w, fmt.Errorf("invalid tag regex: %w", err))
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), LabelOperationTimeout)
 	defer cancel()
 
@@ -875,6 +883,18 @@ func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
 				Error:     "container name required",
 			})
 			continue
+		}
+
+		// Validate tag regex synchronously before launching async operation
+		if op.TagRegex != nil && *op.TagRegex != "" {
+			if err := validateRegexPattern(*op.TagRegex); err != nil {
+				results = append(results, BatchLabelResult{
+					Container: op.Container,
+					Success:   false,
+					Error:     fmt.Sprintf("invalid tag regex: %v", err),
+				})
+				continue
+			}
 		}
 
 		// Reuse the existing setLabels logic with batch group ID
