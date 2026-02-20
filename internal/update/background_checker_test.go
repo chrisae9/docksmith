@@ -489,3 +489,93 @@ func TestCheckResultCache(t *testing.T) {
 		assert.False(t, cache.cacheCleared)
 	})
 }
+
+func TestCacheCleanupReturnsRemovedCount(t *testing.T) {
+	t.Run("returns zero when no entries expired", func(t *testing.T) {
+		cache := NewCache()
+		cache.Set("a", "val", time.Hour)
+		cache.Set("b", "val", time.Hour)
+
+		removed := cache.Cleanup()
+		assert.Equal(t, 0, removed)
+	})
+
+	t.Run("returns count of expired entries", func(t *testing.T) {
+		cache := NewCache()
+		// Add entries that are already expired
+		cache.mu.Lock()
+		cache.entries["expired1"] = &CacheEntry{
+			Value:     "val",
+			ExpiresAt: time.Now().Add(-time.Second),
+			CreatedAt: time.Now().Add(-time.Hour),
+		}
+		cache.entries["expired2"] = &CacheEntry{
+			Value:     "val",
+			ExpiresAt: time.Now().Add(-time.Second),
+			CreatedAt: time.Now().Add(-time.Hour),
+		}
+		cache.entries["valid"] = &CacheEntry{
+			Value:     "val",
+			ExpiresAt: time.Now().Add(time.Hour),
+			CreatedAt: time.Now(),
+		}
+		cache.mu.Unlock()
+
+		removed := cache.Cleanup()
+		assert.Equal(t, 2, removed)
+		// Valid entry should remain
+		_, found := cache.Get("valid")
+		assert.True(t, found)
+	})
+}
+
+func TestLastCacheRefreshUpdatesWithStaggeredEntries(t *testing.T) {
+	// This test verifies the fix for a bug where lastCacheRefresh never updated
+	// because concurrent cache entry creation caused staggered expiry times,
+	// meaning the cache never fully emptied.
+	t.Run("updates when some entries expire even if others remain", func(t *testing.T) {
+		bc := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+
+		// Simulate staggered cache entries: some expired, some still valid
+		orchestratorCache := NewCache()
+
+		// "Early" entries that have expired
+		orchestratorCache.mu.Lock()
+		orchestratorCache.entries["container1"] = &CacheEntry{
+			Value:     ContainerUpdate{ContainerName: "c1", Status: UpToDate},
+			ExpiresAt: time.Now().Add(-time.Second),
+			CreatedAt: time.Now().Add(-time.Hour),
+		}
+		// "Late" entry still valid (created slightly later, hasn't expired yet)
+		orchestratorCache.entries["container2"] = &CacheEntry{
+			Value:     ContainerUpdate{ContainerName: "c2", Status: UpToDate},
+			ExpiresAt: time.Now().Add(time.Minute),
+			CreatedAt: time.Now().Add(-59 * time.Minute),
+		}
+		orchestratorCache.mu.Unlock()
+
+		// Before cleanup: cache is not empty
+		assert.False(t, orchestratorCache.GetOldestEntryTime().IsZero())
+
+		// Cleanup removes some entries but not all
+		removed := orchestratorCache.Cleanup()
+		assert.Equal(t, 1, removed)
+		assert.False(t, orchestratorCache.GetOldestEntryTime().IsZero(), "cache should not be fully empty")
+
+		// With the fix, cacheRefreshed should be true because entries were removed
+		cacheWasEmpty := false // cache was not empty before cleanup
+		cacheRefreshed := cacheWasEmpty || removed > 0
+		assert.True(t, cacheRefreshed, "should detect cache refresh when entries are evicted")
+
+		// Simulate updateLastCacheRefreshIfNeeded
+		now := time.Now()
+		bc.cache.mu.Lock()
+		bc.updateLastCacheRefreshIfNeeded(now, cacheRefreshed)
+		bc.cache.mu.Unlock()
+
+		// Verify lastCacheRefresh was updated
+		_, lastRefresh, _, _ := bc.GetCachedResults()
+		assert.False(t, lastRefresh.IsZero(), "lastCacheRefresh should have been updated")
+		assert.WithinDuration(t, now, lastRefresh, time.Second)
+	})
+}

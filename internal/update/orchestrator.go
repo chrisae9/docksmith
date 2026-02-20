@@ -108,9 +108,9 @@ func (o *Orchestrator) GetCacheOldestEntryTime() time.Time {
 	return o.cache.GetOldestEntryTime()
 }
 
-// CleanupCache removes expired cache entries
-func (o *Orchestrator) CleanupCache() {
-	o.cache.Cleanup()
+// CleanupCache removes expired cache entries and returns how many were removed
+func (o *Orchestrator) CleanupCache() int {
+	return o.cache.Cleanup()
 }
 
 // SetStorage sets the storage service for the orchestrator's checker
@@ -642,17 +642,20 @@ func (c *Cache) Clear() {
 	c.entries = make(map[string]*CacheEntry)
 }
 
-// Cleanup removes expired entries
-func (c *Cache) Cleanup() {
+// Cleanup removes expired entries and returns how many were removed
+func (c *Cache) Cleanup() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	removed := 0
 	now := time.Now()
 	for key, entry := range c.entries {
 		if now.After(entry.ExpiresAt) {
 			delete(c.entries, key)
+			removed++
 		}
 	}
+	return removed
 }
 
 // GetOldestEntryTime returns the creation time of the oldest cache entry

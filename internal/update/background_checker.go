@@ -171,14 +171,14 @@ func (bc *BackgroundChecker) checkLoop() {
 	}
 }
 
-// updateLastCacheRefreshIfNeeded updates lastCacheRefresh when cache was cleared or empty
+// updateLastCacheRefreshIfNeeded updates lastCacheRefresh when fresh registry data was fetched
 // Must be called while holding bc.cache.mu lock
-func (bc *BackgroundChecker) updateLastCacheRefreshIfNeeded(now time.Time, cacheWasEmpty bool) {
-	if !bc.cache.cacheCleared && !cacheWasEmpty {
+func (bc *BackgroundChecker) updateLastCacheRefreshIfNeeded(now time.Time, cacheRefreshed bool) {
+	if !bc.cache.cacheCleared && !cacheRefreshed {
 		return
 	}
 
-	log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheWasEmpty=%v)", bc.cache.cacheCleared, cacheWasEmpty)
+	log.Printf("BACKGROUND_CHECKER: Updated lastCacheRefresh (manualRefresh=%v, cacheRefreshed=%v)", bc.cache.cacheCleared, cacheRefreshed)
 	bc.cache.lastCacheRefresh = now
 	bc.cache.cacheCleared = false
 
@@ -215,18 +215,15 @@ func (bc *BackgroundChecker) runCheck() {
 	log.Printf("BACKGROUND_CHECKER: Running check")
 	startTime := time.Now()
 
-	// Check if cache is empty before cleanup (indicates fresh data will be fetched)
-	oldestCacheTime := bc.orchestrator.GetCacheOldestEntryTime()
-	cacheWasEmpty := oldestCacheTime.IsZero()
-
 	// Clean up expired cache entries before check
-	bc.orchestrator.CleanupCache()
+	cacheWasEmpty := bc.orchestrator.GetCacheOldestEntryTime().IsZero()
+	removedCount := bc.orchestrator.CleanupCache()
 
-	// Re-check after cleanup - if cache is now empty, we'll fetch fresh data
-	oldestAfterCleanup := bc.orchestrator.GetCacheOldestEntryTime()
-	if !cacheWasEmpty && oldestAfterCleanup.IsZero() {
-		cacheWasEmpty = true // Cache became empty after cleanup (TTL expired)
-		log.Printf("BACKGROUND_CHECKER: Cache expired, will fetch fresh registry data")
+	// A cache refresh happens when any entries expired (fresh registry data will be fetched)
+	// or when the cache was already empty (first run or after Clear)
+	cacheRefreshed := cacheWasEmpty || removedCount > 0
+	if removedCount > 0 {
+		log.Printf("BACKGROUND_CHECKER: Cleaned %d expired cache entries, will fetch fresh registry data", removedCount)
 	}
 
 	ctx := context.Background()
@@ -237,7 +234,7 @@ func (bc *BackgroundChecker) runCheck() {
 		now := time.Now()
 		bc.cache.mu.Lock()
 		bc.cache.result = &DiscoveryResult{Containers: []ContainerInfo{}}
-		bc.updateLastCacheRefreshIfNeeded(now, cacheWasEmpty)
+		bc.updateLastCacheRefreshIfNeeded(now, cacheRefreshed)
 		bc.cache.lastBackgroundRun = now
 		bc.cache.mu.Unlock()
 		return
@@ -247,7 +244,7 @@ func (bc *BackgroundChecker) runCheck() {
 	now := time.Now()
 	bc.cache.mu.Lock()
 	bc.cache.result = result
-	bc.updateLastCacheRefreshIfNeeded(now, cacheWasEmpty)
+	bc.updateLastCacheRefreshIfNeeded(now, cacheRefreshed)
 	bc.cache.lastBackgroundRun = now
 	bc.cache.mu.Unlock()
 
