@@ -65,7 +65,7 @@ func TestVersionPinMinor(t *testing.T) {
 
 			// Use the findLatestVersion logic directly
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest %s, got %s", tt.expectedLatest, result)
@@ -120,7 +120,7 @@ func TestVersionPinMajor(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest %s, got %s", tt.expectedLatest, result)
@@ -177,7 +177,7 @@ func TestVersionMin(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest '%s', got '%s'", tt.expectedLatest, result)
@@ -234,7 +234,7 @@ func TestVersionMax(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest '%s', got '%s'", tt.expectedLatest, result)
@@ -353,7 +353,7 @@ func TestCombinedConstraints(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest '%s', got '%s'", tt.expectedLatest, result)
@@ -512,7 +512,7 @@ func TestSuffixMatchingWithConstraints(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, tt.suffix, currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, tt.suffix, currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest '%s', got '%s'", tt.expectedLatest, result)

@@ -634,8 +634,8 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 
 	// Find the latest version from tags (filtered by suffix)
 	// Used for semver comparison when not using meta tags
-	log.Printf("Container %s: Calling findLatestVersion with suffix='%s', currentVer=%v", container.Name, currentSuffix, currentVer)
-	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels)
+	log.Printf("Container %s: Calling findLatestVersion with suffix='%s', currentVer=%v, currentTag='%s'", container.Name, currentSuffix, currentVer, checkTag)
+	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels, checkTag)
 	log.Printf("Container %s: findLatestVersion returned: '%s'", container.Name, latestVersion)
 
 	// For non-meta tags, set LatestVersion to the latest semver tag from registry
@@ -930,7 +930,9 @@ func (c *Checker) getCurrentVersion(ctx context.Context, imageName string) strin
 // Only considers tags that match the given suffix (variant filter).
 // If currentVersion is stable (no prerelease), skips prerelease versions.
 // Applies custom filters from container labels (regex, min/max versions, minor pinning).
-func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, currentVersion *version.Version, labels map[string]string) string {
+// currentTag is used to prefer tags with matching format (e.g., prefer "8.1.0" over "v8.1.0"
+// when the current tag is "8.0.1" without a v-prefix).
+func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, currentVersion *version.Version, labels map[string]string, currentTag string) string {
 	// Apply regex filter first (if specified)
 	if regexPattern := labels[scripts.TagRegexLabel]; regexPattern != "" {
 		tags = filterTagsByRegex(tags, regexPattern)
@@ -1062,10 +1064,25 @@ func (c *Checker) findLatestVersion(tags []string, requiredSuffix string, curren
 		return ""
 	}
 
+	// Determine if current tag uses a v-prefix (e.g., "v8.0.1" vs "8.0.1")
+	currentHasVPrefix := strings.HasPrefix(currentTag, "v") || strings.HasPrefix(currentTag, "V")
+
 	// Sort versions in descending order (newest first)
-	sort.Slice(versions, func(i, j int) bool {
-		// Compare returns 1 if i > j, so we want that for descending sort
-		return c.versionComp.Compare(versions[i], versions[j]) > 0
+	// When versions are equal, prefer the tag whose v-prefix format matches the current tag
+	sort.SliceStable(versions, func(i, j int) bool {
+		cmp := c.versionComp.Compare(versions[i], versions[j])
+		if cmp != 0 {
+			return cmp > 0
+		}
+		// Tiebreaker: prefer tag format matching current tag's v-prefix convention
+		iTag := versionToTag[versions[i].Original]
+		jTag := versionToTag[versions[j].Original]
+		iHasV := strings.HasPrefix(iTag, "v") || strings.HasPrefix(iTag, "V")
+		jHasV := strings.HasPrefix(jTag, "v") || strings.HasPrefix(jTag, "V")
+		if iHasV != jHasV {
+			return iHasV == currentHasVPrefix
+		}
+		return false
 	})
 
 	latest := versions[0]

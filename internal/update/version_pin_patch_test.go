@@ -80,7 +80,7 @@ func TestVersionPinPatch(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest %s, got %s", tt.expectedLatest, result)
@@ -130,7 +130,7 @@ func TestVersionPinPatchCombined(t *testing.T) {
 			}
 
 			checker := &Checker{versionParser: parser}
-			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels)
+			result := checker.findLatestVersion(tt.availableTags, "", currentVer, tt.labels, "")
 
 			if result != tt.expectedLatest {
 				t.Errorf("Expected latest '%s', got '%s'", tt.expectedLatest, result)
