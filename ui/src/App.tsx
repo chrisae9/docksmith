@@ -104,7 +104,21 @@ function AppContent() {
         const pinnableCount = result.data.containers.filter(
           c => c.status === 'UP_TO_DATE_PINNABLE'
         ).length;
-        setUpdateCount(result.data.updates_found + pinnableCount);
+        let count = result.data.updates_found + pinnableCount;
+
+        // Subtract standalone container updates if hidden in view settings
+        try {
+          const saved = localStorage.getItem('containers_view_settings');
+          const viewSettings = saved ? JSON.parse(saved) : null;
+          if (viewSettings && !viewSettings.showStandalone) {
+            const standaloneUpdates = (result.data.standalone_containers || []).filter(
+              c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE'
+            ).length;
+            count -= standaloneUpdates;
+          }
+        } catch { /* ignore parse errors */ }
+
+        setUpdateCount(count);
       }
     } catch {
       // Silently fail - badge will show 0
@@ -124,6 +138,13 @@ function AppContent() {
       setTimeout(fetchUpdateCount, 1000);
     }
   }, [lastEvent, fetchUpdateCount]);
+
+  // Refresh badge count when view settings change (e.g., show/hide standalone)
+  useEffect(() => {
+    const handler = () => fetchUpdateCount();
+    window.addEventListener('viewSettingsChanged', handler);
+    return () => window.removeEventListener('viewSettingsChanged', handler);
+  }, [fetchUpdateCount]);
 
   // Refresh badge count when container status changes
   useEffect(() => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -188,6 +189,74 @@ func (pt *PathTranslator) GetMappings() map[string]string {
 		result[k] = v
 	}
 	return result
+}
+
+// ResolveUnknownPath attempts to find a file by progressively stripping leading
+// path components and checking against known mount destinations. This handles
+// cases where a compose file label contains a path from a different container's
+// mount namespace (e.g., /www/caddy/docker-compose.yaml when our mount is
+// /home/chis/www -> /home/chis/www).
+// Returns the container-side path where the file was found.
+func (pt *PathTranslator) ResolveUnknownPath(path string) string {
+	containerPath, _ := pt.resolveUnknownPathBoth(path)
+	return containerPath
+}
+
+// ResolveUnknownPathBoth is like ResolveUnknownPath but returns both the container
+// path and the corresponding host path for the resolved file.
+func (pt *PathTranslator) ResolveUnknownPathBoth(path string) (containerPath, hostPath string) {
+	return pt.resolveUnknownPathBoth(path)
+}
+
+func (pt *PathTranslator) resolveUnknownPathBoth(path string) (containerPath, hostPath string) {
+	if !pt.inDocker {
+		return "", ""
+	}
+
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+
+	// Split path into components: /www/caddy/docker-compose.yaml -> ["www", "caddy", "docker-compose.yaml"]
+	cleaned := filepath.Clean(path)
+	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
+	if len(parts) < 2 {
+		return "", ""
+	}
+
+	// Try stripping 1, 2, ... leading components
+	for strip := 1; strip < len(parts); strip++ {
+		suffix := filepath.Join(parts[strip:]...)
+		for source, dest := range pt.mappings {
+			candidate := filepath.Join(dest, suffix)
+			if _, err := os.Stat(candidate); err == nil {
+				host := filepath.Join(source, suffix)
+				log.Printf("Path fallback resolution: %s -> container:%s host:%s (stripped %d components, mount %s->%s)", path, candidate, host, strip, source, dest)
+				return candidate, host
+			}
+			// Try alternate extension
+			alt := alternateComposeExt(candidate)
+			if alt != "" {
+				if _, err := os.Stat(alt); err == nil {
+					hostAlt := alternateComposeExt(filepath.Join(source, suffix))
+					log.Printf("Path fallback resolution: %s -> container:%s host:%s (stripped %d components, alt ext, mount %s->%s)", path, alt, hostAlt, strip, source, dest)
+					return alt, hostAlt
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// alternateComposeExt swaps .yaml <-> .yml extensions.
+func alternateComposeExt(path string) string {
+	if strings.HasSuffix(path, ".yaml") {
+		return strings.TrimSuffix(path, ".yaml") + ".yml"
+	}
+	if strings.HasSuffix(path, ".yml") {
+		return strings.TrimSuffix(path, ".yml") + ".yaml"
+	}
+	return ""
 }
 
 // IsRunningInDocker returns true if docksmith is running inside a Docker container

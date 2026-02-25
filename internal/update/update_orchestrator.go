@@ -541,6 +541,19 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		return
 	}
 
+	// Set started_at timestamp immediately so failed operations appear in history
+	// (ORDER BY started_at DESC would push NULL rows to the bottom, hiding failures)
+	now := time.Now()
+	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
+	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	if found {
+		if op.OldVersion == "" {
+			op.OldVersion = currentVersion
+		}
+		op.StartedAt = &now
+		o.storage.SaveUpdateOperation(ctx, op)
+	}
+
 	// Update batch detail status so poller can report progress even if SSE drops
 	o.updateBatchDetailStatus(ctx, operationID, container.Name, "in_progress", "Starting update")
 
@@ -568,20 +581,6 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 		} else {
 			log.Printf("UPDATE: Skipping pre-update check (force=true) for %s", container.Name)
 		}
-	}
-
-	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
-
-	// Set started_at timestamp and old version before beginning actual update work
-	now := time.Now()
-	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
-	if found {
-		if op.OldVersion == "" {
-			// Only set OldVersion if not already set (e.g., by batch update initialization)
-			op.OldVersion = currentVersion
-		}
-		op.StartedAt = &now
-		o.storage.SaveUpdateOperation(ctx, op)
 	}
 
 	o.publishProgress(operationID, container.Name, stackName, "updating_compose", 20, "Updating compose file")
@@ -1347,6 +1346,15 @@ func (o *UpdateOrchestrator) resolveComposeFile(path string) (string, error) {
 			return alternatePath, nil
 		} else if errors.Is(err, os.ErrPermission) {
 			return "", fmt.Errorf("permission denied accessing %s", alternatePath)
+		}
+	}
+
+	// Fallback: try resolving via mount destinations by stripping leading path components.
+	// This handles paths from other containers' mount namespaces (e.g., /www/caddy/docker-compose.yaml
+	// when our mount is /home/chis/www -> /home/chis/www).
+	if o.pathTranslator != nil {
+		if resolved := o.pathTranslator.ResolveUnknownPath(path); resolved != "" {
+			return resolved, nil
 		}
 	}
 
@@ -2869,38 +2877,51 @@ func extractImageFromCompose(content []byte, serviceName string) (string, error)
 	return "", fmt.Errorf("no services section found in compose file")
 }
 
+// getComposeFilePaths extracts the compose file path from container labels and returns
+// both the container-side path (for reading/editing the file) and the host-side path
+// (for docker compose --project-directory). It handles path translation and fallback
+// resolution for labels set from other containers' mount namespaces.
+func (o *UpdateOrchestrator) getComposeFilePaths(container *docker.Container) (containerPath, hostPath string) {
+	path, ok := container.Labels["com.docker.compose.project.config_files"]
+	if !ok {
+		return "", ""
+	}
+	paths := strings.Split(path, ",")
+	if len(paths) == 0 {
+		return "", ""
+	}
+	raw := strings.TrimSpace(paths[0])
+	if o.pathTranslator == nil {
+		return raw, raw
+	}
+
+	// Standard translation
+	cp := o.pathTranslator.TranslateToContainer(raw)
+	hp := o.pathTranslator.TranslateToHost(raw)
+
+	// If the container path doesn't exist, try fallback resolution
+	if _, err := os.Stat(cp); err != nil {
+		if fallbackCP, fallbackHP := o.pathTranslator.ResolveUnknownPathBoth(raw); fallbackCP != "" {
+			return fallbackCP, fallbackHP
+		}
+	}
+
+	return cp, hp
+}
+
 // getComposeFilePath extracts the compose file path from container labels.
 // It translates host paths to container paths based on volume mounts.
 func (o *UpdateOrchestrator) getComposeFilePath(container *docker.Container) string {
-	if path, ok := container.Labels["com.docker.compose.project.config_files"]; ok {
-		paths := strings.Split(path, ",")
-		if len(paths) > 0 {
-			hostPath := strings.TrimSpace(paths[0])
-			if o.pathTranslator != nil {
-				return o.pathTranslator.TranslateToContainer(hostPath)
-			}
-			return hostPath
-		}
-	}
-	return ""
+	cp, _ := o.getComposeFilePaths(container)
+	return cp
 }
 
 // getComposeFilePathForHost extracts the compose file path from container labels.
-// Returns the ORIGINAL host path WITHOUT translation for use with docker compose commands.
+// Returns the host path for use with docker compose commands.
 // Docker compose runs on the host (via Docker socket), so it needs host paths, not container paths.
 func (o *UpdateOrchestrator) getComposeFilePathForHost(container *docker.Container) string {
-	if path, ok := container.Labels["com.docker.compose.project.config_files"]; ok {
-		paths := strings.Split(path, ",")
-		if len(paths) > 0 {
-			containerPath := strings.TrimSpace(paths[0])
-			// Translate container path back to host path
-			if o.pathTranslator != nil {
-				return o.pathTranslator.TranslateToHost(containerPath)
-			}
-			return containerPath
-		}
-	}
-	return ""
+	_, hp := o.getComposeFilePaths(container)
+	return hp
 }
 
 // buildImageRef constructs the full image reference with tag.

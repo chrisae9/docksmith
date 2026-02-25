@@ -56,6 +56,7 @@ interface ContainerViewSettings {
   showIgnored: boolean;
   showLocalImages: boolean;
   showMismatch: boolean;
+  showStandalone: boolean;
 }
 
 const DEFAULT_CONTAINER_VIEW: ContainerViewSettings = {
@@ -63,6 +64,7 @@ const DEFAULT_CONTAINER_VIEW: ContainerViewSettings = {
   showIgnored: false,
   showLocalImages: false,
   showMismatch: true,
+  showStandalone: false,
 };
 
 function loadContainerViewSettings(): ContainerViewSettings {
@@ -80,6 +82,7 @@ function loadContainerViewSettings(): ContainerViewSettings {
         showIgnored: parsed.showIgnored ?? false,
         showLocalImages: parsed.showLocalImages ?? false,
         showMismatch: parsed.showMismatch ?? true,
+        showStandalone: parsed.showStandalone ?? false,
       };
     } catch { /* */ }
   }
@@ -201,7 +204,10 @@ export function Containers() {
   useEffect(() => { localStorage.setItem(STORAGE_KEY_ACTIVE_SUBTAB, activeSubTab); }, [activeSubTab]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY_COLLAPSED, JSON.stringify([...collapsedStacks])); }, [collapsedStacks]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(explorerSettings)); }, [explorerSettings]);
-  useEffect(() => { localStorage.setItem('containers_view_settings', JSON.stringify(viewSettings)); }, [viewSettings]);
+  useEffect(() => {
+    localStorage.setItem('containers_view_settings', JSON.stringify(viewSettings));
+    window.dispatchEvent(new Event('viewSettingsChanged'));
+  }, [viewSettings]);
 
   const updateViewSettings = (updates: Partial<ContainerViewSettings>) => {
     setViewSettings(prev => ({ ...prev, ...updates }));
@@ -263,6 +269,8 @@ export function Containers() {
       }
     }
     if (explorerSettings.containers.showRunningOnly && c.state !== 'running') return false;
+    // Hide standalone containers (not in a stack) unless toggled on or in "all" view
+    if (!c.stack && viewSettings.filter !== 'all' && !viewSettings.showStandalone) return false;
     if (c.has_update_data) {
       if (c.update_status === 'LOCAL_IMAGE' && !viewSettings.showLocalImages) return false;
       if (c.update_status === 'IGNORED' && !viewSettings.showIgnored) return false;
@@ -1247,6 +1255,9 @@ export function Containers() {
                         </div>
                         <div className="settings-group">
                           <label className="settings-checkbox"><input type="checkbox" checked={viewSettings.showMismatch} onChange={(e) => updateViewSettings({ showMismatch: e.target.checked })} /><span>Show mismatched</span></label>
+                        </div>
+                        <div className="settings-group">
+                          <label className="settings-checkbox"><input type="checkbox" checked={viewSettings.showStandalone} onChange={(e) => updateViewSettings({ showStandalone: e.target.checked })} /><span>Show standalone</span></label>
                         </div>
                         <div className="settings-group">
                           <label className="settings-checkbox"><input type="checkbox" checked={explorerSettings.containers.showRunningOnly} onChange={(e) => setExplorerSettings(s => ({ ...s, containers: { ...s.containers, showRunningOnly: e.target.checked } }))} /><span>Running only</span></label>
