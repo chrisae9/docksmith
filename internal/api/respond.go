@@ -11,6 +11,7 @@ import (
 // RespondError writes an error response with the specified HTTP status code.
 // This is the unified error response function - prefer using this over specific status functions.
 func RespondError(w http.ResponseWriter, statusCode int, err error) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	output.WriteJSONError(w, err)
 }
@@ -32,12 +33,14 @@ func RespondInternalError(w http.ResponseWriter, err error) {
 
 // RespondErrorWithData writes an error response that includes data (e.g., for partial failures)
 func RespondErrorWithData(w http.ResponseWriter, statusCode int, err error, data any) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	output.WriteJSONErrorWithData(w, err, data)
 }
 
 // RespondSuccess writes a 200 OK response with data
 func RespondSuccess(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
 	output.WriteJSONData(w, data)
 }
 

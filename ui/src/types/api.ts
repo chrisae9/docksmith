@@ -35,6 +35,7 @@ export interface ContainerInfo {
   compose_image?: string; // Image specified in compose file (for COMPOSE_MISMATCH)
   env_controlled?: boolean; // True if image is controlled by .env variable
   env_var_name?: string; // Name of the controlling env var (e.g., "OPENCLAW_IMAGE")
+  note?: string; // Informational note (e.g., ghost tag warning)
   id: string;
   stack?: string;
   service?: string;
@@ -452,6 +453,7 @@ export interface UnifiedContainerItem {
   labels_out_of_sync?: boolean;
   dependencies?: string[];
   service?: string;
+  note?: string;
 
   has_update_data: boolean;  // true if matched in /api/status
 }

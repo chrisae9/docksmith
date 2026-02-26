@@ -138,8 +138,12 @@ export function Containers() {
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedStacks, setCollapsedStacks] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_COLLAPSED);
-    return saved ? new Set(JSON.parse(saved)) : new Set();
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_COLLAPSED);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
   });
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
   const [blockedExcluded, setBlockedExcluded] = useState(false);
@@ -819,6 +823,7 @@ export function Containers() {
           {hasTagRegex && <span className="label-icon regex" title="Tag regex filter"><i className="fa-solid fa-filter"></i></span>}
           {hasPreUpdateScript && !c.pre_update_check_pass && !c.pre_update_check_fail && <span className="label-icon script" title="Pre-update script"><i className="fa-solid fa-terminal"></i></span>}
           {allowsLatest && <span className="label-icon latest" title="Allows :latest"><i className="fa-solid fa-tag"></i></span>}
+          {c.note && <span className="label-icon ghost" title={c.note}><i className="fa-solid fa-ghost"></i></span>}
           {getStatusBadge(c)}
         </div>
         <div className="item-actions">

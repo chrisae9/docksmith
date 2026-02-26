@@ -35,12 +35,6 @@
   margin-bottom: var(--space-6);
 }
 
-.history-stats {
-  display: flex;
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-
 .history-list {
   flex: 1;
   overflow-y: auto;

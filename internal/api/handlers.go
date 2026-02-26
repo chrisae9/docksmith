@@ -563,11 +563,10 @@ func mergeHistory(checks []storage.CheckHistoryEntry, updates []storage.UpdateLo
 
 // handleEvents provides Server-Sent Events for real-time update progress
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	// Set SSE headers
+	// Set SSE headers (CORS is handled by the middleware)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Accel-Buffering", "no") // Prevent proxy buffering
 
 	// Flush headers immediately

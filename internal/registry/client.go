@@ -253,10 +253,74 @@ func (c *HTTPClient) GetLatestTag(ctx context.Context, repository string) (strin
 	return "", fmt.Errorf("no tags found for repository %s", repository)
 }
 
-// GetTagDigest returns the SHA256 digest for a specific tag.
-// TODO: Implement digest fetching for generic registries
+// GetTagDigest returns the SHA256 digest for a specific tag using the V2 manifest API.
 func (c *HTTPClient) GetTagDigest(ctx context.Context, repository, tag string) (string, error) {
-	return "", fmt.Errorf("digest fetching not yet implemented for generic registries")
+	registry, repo := c.parseRepository(repository)
+
+	protocol := "https"
+	if c.config.Insecure {
+		protocol = "http"
+	}
+
+	url := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", protocol, registry, repo, tag)
+
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create manifest request: %w", err)
+	}
+
+	// Accept manifest list and OCI index formats to get the multi-arch digest
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+
+	if c.config.Username != "" && c.config.Password != "" {
+		req.SetBasicAuth(c.config.Username, c.config.Password)
+	}
+
+	resp, err := c.doWithRetry(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle 401 — get bearer token and retry
+	if resp.StatusCode == http.StatusUnauthorized {
+		token, err := c.getAuthToken(ctx, resp, repo)
+		if err != nil {
+			return "", fmt.Errorf("failed to authenticate for digest: %w", err)
+		}
+
+		req, err = http.NewRequestWithContext(ctx, "HEAD", url, nil)
+		if err != nil {
+			return "", fmt.Errorf("failed to create manifest request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", strings.Join([]string{
+			"application/vnd.docker.distribution.manifest.list.v2+json",
+			"application/vnd.oci.image.index.v1+json",
+			"application/vnd.docker.distribution.manifest.v2+json",
+		}, ", "))
+
+		resp, err = c.doWithRetry(req)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch manifest: %w", err)
+		}
+		defer resp.Body.Close()
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", handleHTTPError(resp, "manifest digest request")
+	}
+
+	digest := resp.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		return "", fmt.Errorf("no digest found in response headers")
+	}
+
+	return digest, nil
 }
 
 // ListTagsWithDigests is not implemented for generic HTTP client.

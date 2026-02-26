@@ -16,17 +16,40 @@ type RegistryCache struct {
 	mu      sync.RWMutex
 	entries map[string]*CacheEntry
 	ttl     time.Duration
+	stopCh  chan struct{}
 }
 
-// NewRegistryCache creates a new registry cache
+// NewRegistryCache creates a new registry cache with periodic cleanup.
 func NewRegistryCache(ttl time.Duration) *RegistryCache {
 	if ttl == 0 {
 		ttl = 15 * time.Minute // Default to 15 minutes
 	}
-	return &RegistryCache{
+	c := &RegistryCache{
 		entries: make(map[string]*CacheEntry),
 		ttl:     ttl,
+		stopCh:  make(chan struct{}),
 	}
+	go c.cleanupLoop()
+	return c
+}
+
+// cleanupLoop periodically removes expired entries.
+func (c *RegistryCache) cleanupLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.Cleanup()
+		case <-c.stopCh:
+			return
+		}
+	}
+}
+
+// Stop terminates the background cleanup goroutine.
+func (c *RegistryCache) Stop() {
+	close(c.stopCh)
 }
 
 // Get retrieves an item from cache

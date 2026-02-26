@@ -26,6 +26,7 @@ type RegistryClient interface {
 	GetTagDigest(ctx context.Context, imageRef, tag string) (string, error)
 	GetLatestTag(ctx context.Context, imageRef string) (string, error)
 	ListTagsWithDigests(ctx context.Context, imageRef string) (map[string][]string, error)
+	GetGhostTags(imageRef string) []string
 }
 
 // Checker checks for available container updates.
@@ -835,6 +836,25 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		} else {
 			log.Printf("Container %s: Pre-update check passed", container.Name)
 			update.PreUpdateCheckPass = true
+		}
+	}
+
+	// Check for ghost tags — newer version numbers that exist in the registry but have no published images
+	if currentVer != nil {
+		ghostTags := c.registryManager.GetGhostTags(imageRef)
+		for _, gt := range ghostTags {
+			tagInfo := c.versionParser.ParseImageTag("dummy:" + gt)
+			if tagInfo == nil || !tagInfo.IsVersioned || tagInfo.Version == nil {
+				continue
+			}
+			if tagInfo.Suffix != currentSuffix {
+				continue
+			}
+			if c.versionComp.IsNewer(currentVer, tagInfo.Version) {
+				update.Note = fmt.Sprintf("Tag %s exists but has no published images", gt)
+				log.Printf("Container %s: Ghost tag note: %s", container.Name, update.Note)
+				break
+			}
 		}
 	}
 

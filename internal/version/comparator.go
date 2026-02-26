@@ -98,11 +98,21 @@ func (c *Comparator) Compare(v1, v2 *Version) int {
 // GetChangeType determines the type of change between two versions.
 // from is the current version, to is the new version.
 func (c *Comparator) GetChangeType(from, to *Version) ChangeType {
-	cmp := c.Compare(from, to)
+	// Check if all semantic version components are equal
+	// (Compare may return non-zero due to formatting tie-breakers like dot count,
+	// but those don't represent actual version changes)
+	semanticallyEqual := from.Major == to.Major &&
+		from.Minor == to.Minor &&
+		from.Patch == to.Patch &&
+		from.Revision == to.Revision &&
+		from.Prerelease == to.Prerelease &&
+		from.BuildNumber == to.BuildNumber
 
-	if cmp == 0 {
+	if semanticallyEqual {
 		return NoChange
 	}
+
+	cmp := c.Compare(from, to)
 
 	if cmp > 0 {
 		return Downgrade

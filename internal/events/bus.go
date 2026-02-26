@@ -71,8 +71,14 @@ func (b *Bus) Subscribe(eventType string) (Subscriber, func()) {
 // Publish sends an event to all subscribers of that event type.
 // Uses a brief retry with backoff before dropping events to handle transient congestion.
 func (b *Bus) Publish(event Event) {
+	// Snapshot subscribers under lock, then release before sending.
+	// This avoids deadlock: sendWithRetry -> recordDroppedEvent -> RLock (reentrant).
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+	typeSubs := make([]Subscriber, len(b.subscribers[event.Type]))
+	copy(typeSubs, b.subscribers[event.Type])
+	wildcardSubs := make([]Subscriber, len(b.subscribers["*"]))
+	copy(wildcardSubs, b.subscribers["*"])
+	b.mu.RUnlock()
 
 	// Don't retry for drop warning events to avoid recursion
 	maxRetries := 3
@@ -81,12 +87,12 @@ func (b *Bus) Publish(event Event) {
 	}
 
 	// Publish to event type subscribers
-	for _, ch := range b.subscribers[event.Type] {
+	for _, ch := range typeSubs {
 		b.sendWithRetry(ch, event, maxRetries)
 	}
 
 	// Publish to wildcard subscribers ("*")
-	for _, ch := range b.subscribers["*"] {
+	for _, ch := range wildcardSubs {
 		b.sendWithRetry(ch, event, maxRetries)
 	}
 }

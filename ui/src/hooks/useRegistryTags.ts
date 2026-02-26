@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getRegistryTags } from '../api/client';
 
 interface UseRegistryTagsReturn {
@@ -17,7 +17,7 @@ export function useRegistryTags(imageRef: string): UseRegistryTagsReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTags = async () => {
+  const fetchTags = useCallback(async () => {
     if (!imageRef) {
       setTags([]);
       setLoading(false);
@@ -42,11 +42,11 @@ export function useRegistryTags(imageRef: string): UseRegistryTagsReturn {
     } finally {
       setLoading(false);
     }
-  };
+  }, [imageRef]);
 
   useEffect(() => {
     fetchTags();
-  }, [imageRef]);
+  }, [fetchTags]);
 
   return {
     tags,

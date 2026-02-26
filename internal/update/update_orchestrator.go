@@ -29,26 +29,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// replaceImageTag replaces the tag portion of a Docker image reference.
-// It correctly handles registry ports (e.g. "registry:5000/repo:1.2").
-func replaceImageTag(imageRef, newTag string) string {
-	// The tag delimiter is the colon AFTER the last slash.
-	// e.g. "registry:5000/repo:1.2" → base="registry:5000/repo", tag="1.2"
+// splitImageRef splits a Docker image reference into repository and tag.
+// It correctly handles registry ports (e.g. "registry:5000/repo:1.2" → "registry:5000/repo", "1.2").
+// If no tag is present, tag is empty.
+func splitImageRef(imageRef string) (repo, tag string) {
 	lastSlash := strings.LastIndex(imageRef, "/")
 	tagPart := imageRef
 	if lastSlash >= 0 {
 		tagPart = imageRef[lastSlash:]
 	}
 	if colonIdx := strings.LastIndex(tagPart, ":"); colonIdx >= 0 {
-		// Absolute position in the original string
 		absIdx := colonIdx
 		if lastSlash >= 0 {
 			absIdx = lastSlash + colonIdx
 		}
-		return imageRef[:absIdx] + ":" + newTag
+		return imageRef[:absIdx], imageRef[absIdx+1:]
 	}
-	// No existing tag — just append
-	return imageRef + ":" + newTag
+	return imageRef, ""
+}
+
+// replaceImageTag replaces the tag portion of a Docker image reference.
+// It correctly handles registry ports (e.g. "registry:5000/repo:1.2").
+func replaceImageTag(imageRef, newTag string) string {
+	repo, _ := splitImageRef(imageRef)
+	return repo + ":" + newTag
 }
 
 // UpdateOrchestrator manages the complete update workflow for containers.
@@ -544,14 +548,22 @@ func (o *UpdateOrchestrator) executeSingleUpdate(ctx context.Context, operationI
 	// Set started_at timestamp immediately so failed operations appear in history
 	// (ORDER BY started_at DESC would push NULL rows to the bottom, hiding failures)
 	now := time.Now()
-	currentVersion, _ := o.dockerClient.GetImageVersion(ctx, container.Image)
-	op, found, _ := o.storage.GetUpdateOperation(ctx, operationID)
+	currentVersion, err := o.dockerClient.GetImageVersion(ctx, container.Image)
+	if err != nil {
+		log.Printf("UPDATE: Failed to get current version for %s: %v", container.Name, err)
+	}
+	op, found, err := o.storage.GetUpdateOperation(ctx, operationID)
+	if err != nil {
+		log.Printf("UPDATE: Failed to get operation %s: %v", operationID, err)
+	}
 	if found {
 		if op.OldVersion == "" {
 			op.OldVersion = currentVersion
 		}
 		op.StartedAt = &now
-		o.storage.SaveUpdateOperation(ctx, op)
+		if err := o.storage.SaveUpdateOperation(ctx, op); err != nil {
+			log.Printf("UPDATE: Failed to save started_at for operation %s: %v", operationID, err)
+		}
 	}
 
 	// Update batch detail status so poller can report progress even if SSE drops
@@ -960,6 +972,15 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		o.storage.SaveUpdateOperation(ctx, op)
 	}
 
+	// Build a map of container name → old tag for compose revert on failure
+	oldTags := make(map[string]string)
+	for _, container := range updateContainers {
+		_, tag := splitImageRef(container.Image)
+		if tag != "" {
+			oldTags[container.Name] = tag
+		}
+	}
+
 	// Phase 1: Update all compose files first (10-30%)
 	o.publishProgress(operationID, "", stackName, "updating_compose", 10, fmt.Sprintf("Updating %d compose files", len(updateContainers)))
 
@@ -987,6 +1008,8 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	// Phase 2: Pull all images (30-60%)
 	o.publishProgress(operationID, "", stackName, "pulling_image", 30, fmt.Sprintf("Pulling %d images", len(updateContainers)))
 
+	pullFailed := make(map[string]bool)
+
 	for i, container := range updateContainers {
 		targetVersion := targetVersions[container.Name]
 		newImageRef := replaceImageTag(container.Image, targetVersion)
@@ -1011,7 +1034,23 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 
 		if err := <-pullDone; err != nil {
-			log.Printf("BATCH UPDATE: Warning - failed to pull %s: %v", newImageRef, err)
+			log.Printf("BATCH UPDATE: Failed to pull %s: %v", newImageRef, err)
+			pullFailed[container.Name] = true
+			o.updateBatchDetailStatus(ctx, operationID, container.Name, "failed", fmt.Sprintf("Failed to pull image: %v", err))
+
+			// Revert compose file to old tag so the container doesn't have a mismatch
+			if oldTag, ok := oldTags[container.Name]; ok {
+				composeFilePath := o.getComposeFilePath(container)
+				if composeFilePath != "" {
+					if resolvedPath, err := o.resolveComposeFile(composeFilePath); err == nil {
+						if revertErr := o.updateComposeFile(ctx, resolvedPath, container, oldTag); revertErr != nil {
+							log.Printf("BATCH UPDATE: Failed to revert compose for %s: %v", container.Name, revertErr)
+						} else {
+							log.Printf("BATCH UPDATE: Reverted compose for %s to %s after pull failure", container.Name, oldTag)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1080,12 +1119,20 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	failedContainers := make(map[string]bool)
 
 	for i, cont := range orderedContainers {
+		// Skip containers whose image pull failed — they are already marked failed
+		if pullFailed[cont.Name] {
+			failCount++
+			failedContainers[cont.Name] = true
+			log.Printf("BATCH UPDATE: Skipping recreation of %s — image pull failed", cont.Name)
+			continue
+		}
+
 		targetVersion := targetVersions[cont.Name]
 		newImageRef := replaceImageTag(cont.Image, targetVersion)
 
 		baseProgress := 60 + (i * 35 / len(orderedContainers))
 
-		containerFailed := false
+		var failReason string // tracks why a container failed for the batch detail message
 
 		// Update DB status so poller can report progress even if SSE drops
 		o.updateBatchDetailStatus(ctx, operationID, cont.Name, "in_progress", fmt.Sprintf("Updating %s", cont.Name))
@@ -1096,7 +1143,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			log.Printf("BATCH UPDATE: Using compose recreation for %s (network_mode dependency)", cont.Name)
 			if err := o.recreateContainerWithCompose(ctx, cont); err != nil {
 				log.Printf("BATCH UPDATE: Compose recreation failed for %s: %v", cont.Name, err)
-				containerFailed = true
+				failReason = fmt.Sprintf("Compose recreation failed: %v", err)
 			} else {
 				log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
 			}
@@ -1113,7 +1160,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
 			if err != nil {
 				log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
-				containerFailed = true
+				failReason = fmt.Sprintf("Failed to inspect container: %v", err)
 			} else {
 				// Save old image for recovery if creation fails
 				oldImage := inspect.Config.Image
@@ -1122,7 +1169,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 				o.publishProgress(operationID, cont.Name, stackName, "removing", baseProgress+1, fmt.Sprintf("Removing %s", cont.Name))
 				if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
 					log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
-					containerFailed = true
+					failReason = fmt.Sprintf("Failed to remove container: %v", err)
 				} else {
 					// Create with new image
 					o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress+2, fmt.Sprintf("Creating %s with new image", cont.Name))
@@ -1170,14 +1217,14 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 									log.Printf("BATCH UPDATE: Restored %s with old image (update failed but container recovered)", cont.Name)
 								}
 							}
-							containerFailed = true
+							failReason = fmt.Sprintf("Recreation failed: %v", createErr)
 						}
 					} else {
 						// Start container
 						o.publishProgress(operationID, cont.Name, stackName, "starting", baseProgress+3, fmt.Sprintf("Starting %s", cont.Name))
 						if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
 							log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
-							containerFailed = true
+							failReason = fmt.Sprintf("Failed to start container: %v", err)
 						} else {
 							log.Printf("BATCH UPDATE: Successfully recreated %s with %s", cont.Name, newImageRef)
 						}
@@ -1186,10 +1233,40 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			}
 		}
 
-		if containerFailed {
+		if failReason != "" {
 			failCount++
 			failedContainers[cont.Name] = true
-			o.updateBatchDetailStatus(ctx, operationID, cont.Name, "failed", fmt.Sprintf("Failed to update %s", cont.Name))
+			o.updateBatchDetailStatus(ctx, operationID, cont.Name, "failed", failReason)
+
+			// Revert compose file to old tag so the container doesn't have a mismatch
+			if oldTag, ok := oldTags[cont.Name]; ok {
+				composeFilePath := o.getComposeFilePath(cont)
+				if composeFilePath != "" {
+					if resolvedPath, err := o.resolveComposeFile(composeFilePath); err == nil {
+						if revertErr := o.updateComposeFile(ctx, resolvedPath, cont, oldTag); revertErr != nil {
+							log.Printf("BATCH UPDATE: Failed to revert compose for %s: %v", cont.Name, revertErr)
+						} else {
+							log.Printf("BATCH UPDATE: Reverted compose for %s to %s after recreation failure", cont.Name, oldTag)
+						}
+					}
+				}
+
+				// If the container is not running (killed during failed recreation), relaunch it
+				// with the old tag via compose up (compose file is now reverted)
+				containerRunning := false
+				if inspected, inspectErr := o.dockerSDK.ContainerInspect(ctx, cont.Name); inspectErr == nil {
+					containerRunning = inspected.State.Running
+				}
+				if !containerRunning {
+					log.Printf("BATCH UPDATE: Container %s is not running after failure, relaunching with old tag %s", cont.Name, oldTag)
+					if relaunchErr := o.recreateContainerWithCompose(ctx, cont); relaunchErr != nil {
+						log.Printf("BATCH UPDATE: Failed to relaunch %s with old tag: %v", cont.Name, relaunchErr)
+					} else {
+						log.Printf("BATCH UPDATE: Successfully relaunched %s with old tag %s", cont.Name, oldTag)
+					}
+				}
+			}
+
 			continue
 		}
 
@@ -2382,11 +2459,8 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 	}
 
 	// Build full image reference (e.g., "traefik:3.6.1")
-	imageParts := strings.Split(container.Image, ":")
-	oldImageTag := container.Image
-	if len(imageParts) > 0 {
-		oldImageTag = imageParts[0] + ":" + oldVersion
-	}
+	// Use replaceImageTag to correctly handle registry ports (e.g. "registry:5000/repo:tag")
+	oldImageTag := replaceImageTag(container.Image, oldVersion)
 
 	o.publishProgress(rollbackOpID, container.Name, stackName, "validating", 20, fmt.Sprintf("Target image: %s", oldImageTag))
 	log.Printf("ROLLBACK: Old image reference: %s", oldImageTag)
@@ -2487,12 +2561,11 @@ func (o *UpdateOrchestrator) executeRollback(ctx context.Context, rollbackOpID, 
 func (o *UpdateOrchestrator) executeDigestRollback(ctx context.Context, rollbackOpID string, container *docker.Container, detail storage.BatchContainerDetail) {
 	stackName := container.Labels["com.docker.compose.project"]
 
-	// Extract repo from image (e.g., "ghcr.io/user/repo" from "ghcr.io/user/repo:latest")
-	imageParts := strings.Split(container.Image, ":")
-	repo := imageParts[0]
-	currentTag := "latest"
-	if len(imageParts) > 1 {
-		currentTag = imageParts[len(imageParts)-1]
+	// Extract repo and tag from image, handling registry ports correctly
+	// (e.g. "registry:5000/repo:latest" → repo="registry:5000/repo", tag="latest")
+	repo, currentTag := splitImageRef(container.Image)
+	if currentTag == "" {
+		currentTag = "latest"
 	}
 
 	// Stage 1: Pull old image by digest (10-50%)
@@ -2829,54 +2902,6 @@ func (o *UpdateOrchestrator) executeFixMismatch(ctx context.Context, operationID
 	}
 }
 
-// extractImageFromCompose extracts the image for a service from compose file content
-func extractImageFromCompose(content []byte, serviceName string) (string, error) {
-	var root yaml.Node
-	if err := yaml.Unmarshal(content, &root); err != nil {
-		return "", fmt.Errorf("failed to parse compose file: %w", err)
-	}
-
-	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return "", fmt.Errorf("invalid compose file structure")
-	}
-
-	doc := root.Content[0]
-	if doc.Kind != yaml.MappingNode {
-		return "", fmt.Errorf("compose file root is not a mapping")
-	}
-
-	// Find services section
-	for i := 0; i < len(doc.Content)-1; i += 2 {
-		if doc.Content[i].Value == "services" {
-			servicesNode := doc.Content[i+1]
-			if servicesNode.Kind != yaml.MappingNode {
-				return "", fmt.Errorf("services section is not a mapping")
-			}
-
-			// Find the service
-			for j := 0; j < len(servicesNode.Content)-1; j += 2 {
-				if servicesNode.Content[j].Value == serviceName {
-					serviceNode := servicesNode.Content[j+1]
-					if serviceNode.Kind != yaml.MappingNode {
-						return "", fmt.Errorf("service %s is not a mapping", serviceName)
-					}
-
-					// Find the image key
-					for k := 0; k < len(serviceNode.Content)-1; k += 2 {
-						if serviceNode.Content[k].Value == "image" {
-							return serviceNode.Content[k+1].Value, nil
-						}
-					}
-					return "", fmt.Errorf("no image key found for service %s", serviceName)
-				}
-			}
-			return "", fmt.Errorf("service %s not found in compose file", serviceName)
-		}
-	}
-
-	return "", fmt.Errorf("no services section found in compose file")
-}
-
 // getComposeFilePaths extracts the compose file path from container labels and returns
 // both the container-side path (for reading/editing the file) and the host-side path
 // (for docker compose --project-directory). It handles path translation and fallback
@@ -2886,11 +2911,7 @@ func (o *UpdateOrchestrator) getComposeFilePaths(container *docker.Container) (c
 	if !ok {
 		return "", ""
 	}
-	paths := strings.Split(path, ",")
-	if len(paths) == 0 {
-		return "", ""
-	}
-	raw := strings.TrimSpace(paths[0])
+	raw := strings.TrimSpace(strings.Split(path, ",")[0])
 	if o.pathTranslator == nil {
 		return raw, raw
 	}
@@ -2900,7 +2921,8 @@ func (o *UpdateOrchestrator) getComposeFilePaths(container *docker.Container) (c
 	hp := o.pathTranslator.TranslateToHost(raw)
 
 	// If the container path doesn't exist, try fallback resolution
-	if _, err := os.Stat(cp); err != nil {
+	// (but not for permission errors — those should propagate)
+	if _, err := os.Stat(cp); err != nil && !errors.Is(err, os.ErrPermission) {
 		if fallbackCP, fallbackHP := o.pathTranslator.ResolveUnknownPathBoth(raw); fallbackCP != "" {
 			return fallbackCP, fallbackHP
 		}
@@ -3229,17 +3251,22 @@ func (o *UpdateOrchestrator) deriveExpectedImage(container *docker.Container) (s
 		return "", fmt.Errorf("failed to resolve compose file: %w", err)
 	}
 
-	serviceName := container.Labels["com.docker.compose.service"]
-	if serviceName == "" {
-		return "", fmt.Errorf("container %s has no compose service label", container.Name)
-	}
-
-	content, err := os.ReadFile(resolvedPath)
+	cf, err := compose.LoadComposeFileOrIncluded(resolvedPath, container.Name)
 	if err != nil {
-		return "", fmt.Errorf("failed to read compose file: %w", err)
+		return "", fmt.Errorf("failed to load compose file: %w", err)
 	}
 
-	return extractImageFromCompose(content, serviceName)
+	svc, err := cf.FindServiceByContainerName(container.Name)
+	if err != nil {
+		return "", fmt.Errorf("failed to find service for %s: %w", container.Name, err)
+	}
+
+	img := compose.GetServiceImage(svc)
+	if img == "" {
+		return "", fmt.Errorf("no image key found for container %s", container.Name)
+	}
+
+	return img, nil
 }
 
 // CancelQueuedOperation cancels a queued operation.

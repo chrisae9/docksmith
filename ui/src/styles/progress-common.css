@@ -64,8 +64,8 @@
   color: var(--color-warning);
 }
 
-/* Error Banner */
-.error-banner {
+/* Error Banner — scoped to progress pages to avoid conflict with components.css */
+.progress-page .error-banner {
   display: flex;
   align-items: center;
   gap: var(--space-6);
@@ -78,7 +78,7 @@
   font-size: var(--text-md);
 }
 
-.error-banner i {
+.progress-page .error-banner i {
   font-size: var(--text-3xl);
   flex-shrink: 0;
 }
@@ -217,14 +217,14 @@
     word-break: break-word;
   }
 
-  .error-banner {
+  .progress-page .error-banner {
     flex-wrap: wrap;
     gap: var(--space-4);
     padding: var(--space-5) var(--space-6);
     font-size: var(--text-sm);
   }
 
-  .error-banner i {
+  .progress-page .error-banner i {
     font-size: var(--text-2xl);
   }
 }

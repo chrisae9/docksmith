@@ -32,6 +32,13 @@ func NewManager(githubToken string) *Manager {
 	}
 }
 
+// Close releases resources held by the manager and its clients.
+func (m *Manager) Close() {
+	m.cache.Stop()
+	m.dockerHubClient.Close()
+	m.ghcrClient.Close()
+}
+
 // EnableCache enables the caching layer
 func (m *Manager) EnableCache(enabled bool) {
 	m.cacheEnabled = enabled
@@ -182,6 +189,16 @@ func (m *Manager) ListTagsWithDigests(ctx context.Context, imageRef string) (map
 			})
 		},
 	)
+}
+
+// GetGhostTags returns Docker Hub tags that have no published images for a given image.
+// Returns nil for non-Docker Hub images (GHCR, etc. don't have ghost tags).
+func (m *Manager) GetGhostTags(imageRef string) []string {
+	registry, repository := m.parseImageRef(imageRef)
+	if registry != "docker.io" {
+		return nil
+	}
+	return m.dockerHubClient.GetGhostTags(repository)
 }
 
 // parseImageRef splits an image reference into registry and repository.

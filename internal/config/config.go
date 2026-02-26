@@ -139,35 +139,27 @@ func (c *Config) Save(ctx context.Context, store storage.Storage, changedBy stri
 
 	fmt.Printf("Config snapshot created: %d keys by %s\n", len(valuesCopy), changedBy)
 
-	// Save scan_directories
-	if len(scanDirs) > 0 {
-		data, _ := json.Marshal(scanDirs)
-		if err := store.SetConfig(ctx, "scan_directories", string(data)); err != nil {
-			return fmt.Errorf("failed to save scan_directories: %w", err)
-		}
+	// Save scan_directories (always write so clearing to empty is persisted)
+	scanDirsData, _ := json.Marshal(scanDirs)
+	if err := store.SetConfig(ctx, "scan_directories", string(scanDirsData)); err != nil {
+		return fmt.Errorf("failed to save scan_directories: %w", err)
 	}
 
 	// Save exclude_patterns
-	if len(excludePatterns) > 0 {
-		data, _ := json.Marshal(excludePatterns)
-		if err := store.SetConfig(ctx, "exclude_patterns", string(data)); err != nil {
-			return fmt.Errorf("failed to save exclude_patterns: %w", err)
-		}
+	excludeData, _ := json.Marshal(excludePatterns)
+	if err := store.SetConfig(ctx, "exclude_patterns", string(excludeData)); err != nil {
+		return fmt.Errorf("failed to save exclude_patterns: %w", err)
 	}
 
 	// Save cache_ttl_days
-	if cacheTTL > 0 {
-		if err := store.SetConfig(ctx, "cache_ttl_days", strconv.Itoa(cacheTTL)); err != nil {
-			return fmt.Errorf("failed to save cache_ttl_days: %w", err)
-		}
+	if err := store.SetConfig(ctx, "cache_ttl_days", strconv.Itoa(cacheTTL)); err != nil {
+		return fmt.Errorf("failed to save cache_ttl_days: %w", err)
 	}
 
 	// Save compose_file_paths
-	if len(composePaths) > 0 {
-		data, _ := json.Marshal(composePaths)
-		if err := store.SetConfig(ctx, "compose_file_paths", string(data)); err != nil {
-			return fmt.Errorf("failed to save compose_file_paths: %w", err)
-		}
+	composeData, _ := json.Marshal(composePaths)
+	if err := store.SetConfig(ctx, "compose_file_paths", string(composeData)); err != nil {
+		return fmt.Errorf("failed to save compose_file_paths: %w", err)
 	}
 
 	return nil

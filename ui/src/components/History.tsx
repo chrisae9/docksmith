@@ -517,8 +517,17 @@ export function History() {
           )}
         </div>
         <div className="op-info">
-          {op.operation_type === 'batch' && op.error_message && (
-            <span className="op-batch-summary">{op.error_message.replace('Batch update completed: ', '')}</span>
+          {op.operation_type === 'batch' && (
+            <span className="op-batch-summary">
+              {op.batch_details && op.batch_details.length > 0
+                ? (() => {
+                    const names = op.batch_details.map(d => d.container_name);
+                    const maxShow = 3;
+                    if (names.length <= maxShow) return names.join(', ');
+                    return `${names.slice(0, maxShow).join(', ')} +${names.length - maxShow} more`;
+                  })()
+                : op.error_message?.replace('Batch update completed: ', '') || ''}
+            </span>
           )}
           {op.operation_type === 'label_change' && (
             <span className="op-label-info">Label configuration changed</span>
@@ -747,8 +756,17 @@ export function History() {
             )}
           </div>
           <div className="op-info">
-            {item.aggregateStatus === 'partial' && (
+            {item.aggregateStatus === 'partial' ? (
               <span className="op-batch-summary">Some operations failed</span>
+            ) : item.allContainers && item.allContainers.length > 0 && (
+              <span className="op-batch-summary">
+                {(() => {
+                  const names = item.allContainers!.map(c => c.container_name);
+                  const maxShow = 3;
+                  if (names.length <= maxShow) return names.join(', ');
+                  return `${names.slice(0, maxShow).join(', ')} +${names.length - maxShow} more`;
+                })()}
+              </span>
             )}
           </div>
           <div className="op-meta">

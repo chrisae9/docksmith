@@ -43,6 +43,7 @@ type ContainerUpdate struct {
 	ComposeImage       string              `json:"compose_image,omitempty"`         // Image specified in compose file (for COMPOSE_MISMATCH)
 	EnvControlled      bool                `json:"env_controlled,omitempty"`        // True if image is controlled by .env variable
 	EnvVarName         string              `json:"env_var_name,omitempty"`          // Name of the controlling env var (e.g., "OPENCLAW_IMAGE")
+	Note               string              `json:"note,omitempty"`                  // Informational note (e.g., ghost tag warning)
 }
 
 // CheckResult contains the results of checking for updates.

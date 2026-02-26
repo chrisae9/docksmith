@@ -40,7 +40,7 @@ export interface EventStreamState {
   containerUpdated: ContainerUpdatedEvent | null; // Last container update event with full details
 }
 
-export function useEventStream(enabled: boolean = true) {
+export function useEventStreamCore() {
   const [state, setState] = useState<EventStreamState>({
     connected: false,
     reconnecting: false,
@@ -63,7 +63,7 @@ export function useEventStream(enabled: boolean = true) {
   const reconnectAttemptRef = useRef(0);
 
   const connect = useCallback(() => {
-    if (!enabled || eventSourceRef.current) return;
+    if (eventSourceRef.current) return;
 
     const eventSource = new EventSource('/api/events');
     eventSourceRef.current = eventSource;
@@ -174,7 +174,7 @@ export function useEventStream(enabled: boolean = true) {
         // Silently ignore parsing errors
       }
     });
-  }, [enabled]);
+  }, []);
 
   const disconnect = useCallback(() => {
     // Clear any pending reconnect timeout
@@ -198,16 +198,11 @@ export function useEventStream(enabled: boolean = true) {
   }, []);
 
   useEffect(() => {
-    if (enabled) {
-      connect();
-    } else {
-      disconnect();
-    }
-
+    connect();
     return () => {
       disconnect();
     };
-  }, [enabled, connect, disconnect]);
+  }, [connect, disconnect]);
 
   return {
     ...state,

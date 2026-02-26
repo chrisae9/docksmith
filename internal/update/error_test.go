@@ -106,6 +106,8 @@ func (m *MockFailingRegistryManager) ListTagsWithDigests(ctx context.Context, im
 	return map[string][]string{}, nil
 }
 
+func (m *MockFailingRegistryManager) GetGhostTags(imageRef string) []string { return nil }
+
 // TestDockerDaemonUnavailable tests handling of Docker daemon failures
 func TestDockerDaemonUnavailable(t *testing.T) {
 	dockerService := &MockFailingDockerService{shouldFail: true}
@@ -400,3 +402,5 @@ func (m *MockSuccessRegistryManager) GetTagDigest(ctx context.Context, imageRef,
 func (m *MockSuccessRegistryManager) ListTagsWithDigests(ctx context.Context, imageRef string) (map[string][]string, error) {
 	return map[string][]string{}, nil
 }
+
+func (m *MockSuccessRegistryManager) GetGhostTags(imageRef string) []string { return nil }

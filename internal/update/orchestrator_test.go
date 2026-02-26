@@ -75,6 +75,8 @@ func (m *mockRegistryManager) ListTags(ctx context.Context, imageRef string) ([]
 	return []string{}, nil
 }
 
+func (m *mockRegistryManager) GetGhostTags(imageRef string) []string { return nil }
+
 func (m *mockRegistryManager) GetTagDigest(ctx context.Context, imageRef, tag string) (string, error) {
 	if m.getDigestError != nil {
 		return "", m.getDigestError

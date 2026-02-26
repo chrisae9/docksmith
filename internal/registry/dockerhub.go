@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,7 @@ import (
 type DockerHubClient struct {
 	httpClient  *http.Client
 	rateLimiter *time.Ticker
+	ghostTags   sync.Map // repository -> []string (tags with no published images)
 }
 
 // NewDockerHubClient creates a new Docker Hub client.
@@ -23,6 +25,11 @@ func NewDockerHubClient() *DockerHubClient {
 		},
 		rateLimiter: time.NewTicker(DefaultRateLimitInterval), // 10 requests per second max
 	}
+}
+
+// Close stops the rate limiter ticker and releases resources.
+func (c *DockerHubClient) Close() {
+	c.rateLimiter.Stop()
 }
 
 // doWithRetry executes an HTTP request with exponential backoff retry on transient errors.
@@ -107,6 +114,7 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", repository)
 
 	tags := []string{}
+	var ghosts []string
 	// Adaptive maxPages based on repository type (reduces API calls for smaller repos)
 	maxPages := c.getMaxPages(repository)
 	pageCount := 0
@@ -139,6 +147,10 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 		resp.Body.Close()
 
 		for _, tag := range tagsResp.Results {
+			if len(tag.Images) == 0 {
+				ghosts = append(ghosts, tag.Name)
+				continue // Skip ghost tags with no manifests
+			}
 			tags = append(tags, tag.Name)
 		}
 
@@ -152,7 +164,23 @@ func (c *DockerHubClient) ListTags(ctx context.Context, repository string) ([]st
 		}
 	}
 
+	// Store ghost tags for this repository so callers can check for unpublished newer versions
+	if len(ghosts) > 0 {
+		c.ghostTags.Store(repository, ghosts)
+	} else {
+		c.ghostTags.Delete(repository)
+	}
+
 	return tags, nil
+}
+
+// GetGhostTags returns tags that were filtered out because they have no published images.
+// These are "ghost tags" that exist in Docker Hub but have no actual manifests.
+func (c *DockerHubClient) GetGhostTags(repository string) []string {
+	if val, ok := c.ghostTags.Load(repository); ok {
+		return val.([]string)
+	}
+	return nil
 }
 
 // GetLatestTag returns "latest" if it exists, otherwise the first tag.
@@ -293,6 +321,10 @@ func (c *DockerHubClient) ListTagsWithDigests(ctx context.Context, repository st
 		resp.Body.Close()
 
 		for _, tag := range tagsResp.Results {
+			if len(tag.Images) == 0 {
+				continue // Skip ghost tags with no manifests
+			}
+
 			// Collect digests from all architectures for this tag
 			var digests []string
 

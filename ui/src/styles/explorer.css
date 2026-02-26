@@ -4,48 +4,6 @@
    Clean & Minimal
    ============================================ */
 
-/* Explorer page layout */
-.explorer {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: var(--color-bg-primary);
-  position: relative;
-}
-
-/* Pull-to-refresh indicator */
-.pull-refresh-indicator {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
-  transition: background var(--transition-fast);
-}
-
-/* Header - contains title, search, and tabs like Dashboard */
-.explorer-header {
-  flex-shrink: 0;
-  padding: var(--space-8) var(--space-8) var(--space-6);
-  padding-left: calc(var(--space-8) + var(--safe-area-inset-left));
-  padding-right: calc(var(--space-8) + var(--safe-area-inset-right));
-  border-bottom: 1px solid var(--color-separator);
-}
-
-.explorer-header h1 {
-  font-size: var(--text-4xl);
-  font-weight: var(--font-semibold);
-  margin: 0 0 var(--space-6) 0;
-  color: var(--color-text-primary);
-  letter-spacing: -0.03em;
-}
-
 /* Tab bar - extends shared .segmented-control from page-layout.css */
 .explorer-tabs {
   margin-top: var(--space-6);
@@ -395,11 +353,6 @@
   transform: translateY(-50%) translateX(20px);
 }
 
-/* Search bar - extends shared .search-bar from page-layout.css */
-.explorer-search {
-  margin: 0;
-}
-
 /* Loading state - subtle dimming for consistency */
 .explorer-search .search-input:disabled {
   opacity: 0.7;
@@ -409,17 +362,6 @@
 .explorer-tabs button:disabled {
   opacity: 0.7;
   cursor: default;
-}
-
-/* Main content area */
-.explorer-content {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: var(--space-8) var(--space-8) var(--space-bottom-nav);
-  padding-left: calc(var(--space-8) + var(--safe-area-inset-left));
-  padding-right: calc(var(--space-8) + var(--safe-area-inset-right));
-  -webkit-overflow-scrolling: touch;
 }
 
 /* NOTE: Stack base styles (.stack-group, .stack-header, .stack-list) are in page-layout.css */
@@ -602,12 +544,6 @@
 }
 
 /* Responsive - Mobile */
-@media (max-width: 640px) {
-  .explorer-header h1 {
-    font-size: var(--text-3xl);
-  }
-}
-
 @media (max-width: 480px) {
   .explorer-tabs {
     margin-top: var(--space-5);
@@ -616,10 +552,6 @@
   .explorer-tabs button {
     padding: var(--space-4) var(--space-6);
     font-size: var(--text-md);
-  }
-
-  .explorer-content {
-    padding: var(--space-8) var(--space-7) var(--space-bottom-nav);
   }
 
   .stack-header {
@@ -637,16 +569,5 @@
 
   .item-meta {
     font-size: var(--text-xs);
-  }
-}
-
-/* Responsive - Large Desktop */
-@media (min-width: 1200px) {
-  .explorer-header {
-    padding: var(--space-10) var(--space-16);
-  }
-
-  .explorer-content {
-    padding: var(--space-8) var(--space-20) 100px;
   }
 }

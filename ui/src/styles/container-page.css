@@ -404,6 +404,26 @@
   font-family: var(--font-mono);
 }
 
+/* Ghost Tag Note */
+.container-page .ghost-note-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.container-page .ghost-note-card > i {
+  font-size: var(--text-lg);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
 /* Sync Warning */
 .container-page .sync-warning {
   background: rgba(255, 159, 10, 0.1);
@@ -1391,7 +1411,7 @@
   font-size: var(--text-lg);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   transition: all var(--transition-fast);
-  z-index: 10;
+  z-index: var(--z-dropdown);
   opacity: 0;
   transform: translateY(10px);
   pointer-events: none;

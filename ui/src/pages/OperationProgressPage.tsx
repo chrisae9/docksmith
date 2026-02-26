@@ -1,6 +1,6 @@
 import { useRef, useMemo, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { useEventStream } from '../hooks/useEventStream';
+import { useEventStream } from '../context/EventStreamContext';
 import { useElapsedTime } from '../hooks/useElapsedTime';
 import { useOperationState } from '../operation/hooks/useOperationState';
 import { useSSEProgress } from '../operation/hooks/useSSEProgress';
@@ -37,7 +37,7 @@ export function OperationProgressPage() {
   const [state, dispatch] = useOperationState();
 
   // SSE event stream
-  const { eventQueue, eventSeq, wasDisconnected, clearWasDisconnected, connected } = useEventStream(state.phase === 'running');
+  const { eventQueue, eventSeq, wasDisconnected, clearWasDisconnected, connected } = useEventStream();
 
   // Hook: execute operation on mount (fresh operations only)
   useOperationExecutor({ operationInfo, dispatch, runId: state.runId });
@@ -96,7 +96,7 @@ export function OperationProgressPage() {
         })
         .catch(() => {});
     }
-  }, [wasDisconnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [wasDisconnected, state.phase, state.batchGroupId, state.runId, clearWasDisconnected, dispatch]);
 
   // Persist active operation to sessionStorage so global banner can show it
   useEffect(() => {

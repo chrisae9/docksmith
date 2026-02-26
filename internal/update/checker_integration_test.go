@@ -736,6 +736,8 @@ func (m *mockRegistryClient) GetLatestTag(ctx context.Context, imageRef string) 
 	return "latest", nil
 }
 
+func (m *mockRegistryClient) GetGhostTags(imageRef string) []string { return nil }
+
 func (m *mockRegistryClient) ListTagsWithDigests(ctx context.Context, imageRef string) (map[string][]string, error) {
 	m.listTagsWithDigestsCalls++
 	mappings, ok := m.digestMappings[imageRef]

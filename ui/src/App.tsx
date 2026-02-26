@@ -11,7 +11,7 @@ import { OperationProgressPage } from './pages/OperationProgressPage'
 import { TabBar, type TabId } from './components/TabBar'
 import { ToastProvider, ToastContainer } from './components/Toast'
 import { getContainerStatus } from './api/client'
-import { useEventStream } from './hooks/useEventStream'
+import { useEventStream, EventStreamProvider } from './context/EventStreamContext'
 import { STORAGE_KEY_TAB, ACTIVE_OPERATION_KEY } from './utils/constants'
 import { getPageTitle } from './operation/utils'
 // CSS is now imported via index.css
@@ -54,7 +54,7 @@ function AppContent() {
     return (saved as TabId) || 'containers';
   });
   const [updateCount, setUpdateCount] = useState(0);
-  const { lastEvent, containerUpdated } = useEventStream(true);
+  const { lastEvent, containerUpdated } = useEventStream();
 
   // Active operation banner state
   const [activeOp, setActiveOp] = useState<ActiveOperation | null>(() => {
@@ -112,13 +112,13 @@ function AppContent() {
           const viewSettings = saved ? JSON.parse(saved) : null;
           if (viewSettings && !viewSettings.showStandalone) {
             const standaloneUpdates = (result.data.standalone_containers || []).filter(
-              c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UPDATE_AVAILABLE_BLOCKED' || c.status === 'UP_TO_DATE_PINNABLE'
+              c => c.status === 'UPDATE_AVAILABLE' || c.status === 'UP_TO_DATE_PINNABLE'
             ).length;
             count -= standaloneUpdates;
           }
         } catch { /* ignore parse errors */ }
 
-        setUpdateCount(count);
+        setUpdateCount(Math.max(0, count));
       }
     } catch {
       // Silently fail - badge will show 0
@@ -141,9 +141,8 @@ function AppContent() {
 
   // Refresh badge count when view settings change (e.g., show/hide standalone)
   useEffect(() => {
-    const handler = () => fetchUpdateCount();
-    window.addEventListener('viewSettingsChanged', handler);
-    return () => window.removeEventListener('viewSettingsChanged', handler);
+    window.addEventListener('viewSettingsChanged', fetchUpdateCount);
+    return () => window.removeEventListener('viewSettingsChanged', fetchUpdateCount);
   }, [fetchUpdateCount]);
 
   // Refresh badge count when container status changes
@@ -251,12 +250,14 @@ function AppContent() {
 
 function App() {
   return (
-    <ToastProvider>
-      <BrowserRouter>
-        <AppContent />
-        <ToastContainer />
-      </BrowserRouter>
-    </ToastProvider>
+    <EventStreamProvider>
+      <ToastProvider>
+        <BrowserRouter>
+          <AppContent />
+          <ToastContainer />
+        </BrowserRouter>
+      </ToastProvider>
+    </EventStreamProvider>
   );
 }
 

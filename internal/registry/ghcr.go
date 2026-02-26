@@ -48,6 +48,11 @@ func NewGHCRClient(githubPAT string) *GHCRClient {
 	}
 }
 
+// Close stops the rate limiter ticker and releases resources.
+func (c *GHCRClient) Close() {
+	c.rateLimiter.Stop()
+}
+
 // doWithRetry executes an HTTP request with exponential backoff retry on transient errors.
 func (c *GHCRClient) doWithRetry(req *http.Request) (*http.Response, error) {
 	var lastErr error

@@ -24,11 +24,6 @@
   padding-right: calc(var(--space-8) + var(--safe-area-inset-right));
 }
 
-@keyframes fadeInOverlay {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 .modal {
   background: var(--color-bg-secondary);
   border-radius: var(--radius-xl);
@@ -88,11 +83,6 @@
 
 .modal-header .close-btn:hover {
   color: var(--color-text-primary);
-}
-
-/* Modal tabs - extends shared .tabs-underline from page-layout.css */
-.modal-tabs button:hover:not(.active) {
-  background: var(--color-bg-tertiary);
 }
 
 .modal-body {
@@ -250,21 +240,6 @@
   background: var(--color-bg-hover-faint);
 }
 
-.container-detail-modal {
-  max-width: 700px;
-  max-height: 100%;
-}
-
-.container-detail-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-}
-
-.container-detail-title h2 {
-  margin: 0;
-}
-
 .detail-section {
   margin-bottom: var(--space-12);
   padding-bottom: var(--space-12);
@@ -392,103 +367,6 @@
   color: var(--color-badge-pin);
 }
 
-/* Dependencies List */
-.dependencies-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-}
-
-.dependency-tag {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  padding: var(--space-3) var(--space-6);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-base);
-  font-family: var(--font-mono);
-}
-
-/* Labels List */
-.labels-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.label-item {
-  background: var(--color-bg-tertiary);
-  padding: var(--space-5) var(--space-6);
-  border-radius: var(--radius-lg);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-6);
-}
-
-.label-key {
-  font-size: var(--text-base);
-  font-weight: var(--font-medium);
-  color: var(--color-text-secondary);
-  font-family: var(--font-mono);
-}
-
-.label-value {
-  font-size: var(--text-base);
-  color: var(--color-text-primary);
-  font-family: var(--font-mono);
-  word-break: break-all;
-}
-
-/* Script Section */
-.script-section {
-  background: var(--color-bg-tertiary);
-  padding: var(--space-8);
-  border-radius: var(--radius-xl);
-  border-bottom: none !important;
-}
-
-.current-assignment {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-6);
-  padding: var(--space-6);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
-  margin-bottom: var(--space-8);
-}
-
-.assignment-info-compact {
-  display: flex;
-  align-items: center;
-  gap: var(--space-5);
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-}
-
-.assignment-info-compact i {
-  color: var(--color-success);
-  font-size: var(--text-xl);
-}
-
-.assignment-info-compact .mono {
-  font-family: var(--font-mono);
-  color: var(--color-text-secondary);
-}
-
-.no-assignment {
-  color: var(--color-text-tertiary);
-  font-size: var(--text-lg);
-  font-style: italic;
-  margin: var(--space-6) 0;
-}
-
-.script-selector {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-
 /* Mobile Responsive for Modals */
 @media (max-width: 640px) {
   /* Modal overlay adjustments for mobile */
@@ -506,10 +384,6 @@
     max-width: none;
     margin: 0;
     border-radius: 14px;
-  }
-
-  .container-detail-modal {
-    max-width: none;
   }
 
   .modal-header {
@@ -578,45 +452,6 @@
     gap: 10px;
   }
 
-  /* Labels list (modal context only) */
-  .modal .labels-list {
-    gap: 8px;
-  }
-
-  .modal .label-item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    padding: 10px 12px;
-  }
-
-  .modal .label-key {
-    font-size: 12px;
-    word-break: break-all;
-  }
-
-  .modal .label-value {
-    font-size: 13px;
-    word-break: break-all;
-    overflow-wrap: break-word;
-    width: 100%;
-    padding-left: 0;
-    border-left: none;
-    margin-left: 0;
-    padding-top: 4px;
-    border-top: 1px solid var(--color-border-separator);
-  }
-
-  /* Dependencies */
-  .dependencies-list {
-    gap: 6px;
-  }
-
-  .dependency-tag {
-    font-size: 12px;
-    padding: 4px 8px;
-  }
-
   /* Badges */
   .modal-overlay .status-badge,
   .modal-overlay .change-badge {
@@ -634,16 +469,6 @@
     padding: 10px 18px;
   }
 
-  /* Container title in modal */
-  .container-detail-title {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .container-detail-title h2 {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
 }
 
 /* Extra small devices (phones < 400px) */

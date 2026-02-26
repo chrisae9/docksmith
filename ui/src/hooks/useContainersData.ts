@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getContainerStatus, getExplorerData, checkContainers } from '../api/client';
-import { useEventStream } from './useEventStream';
+import { useEventStream } from '../context/EventStreamContext';
 import { usePeriodicRefresh } from './usePeriodicRefresh';
 import type {
   DiscoveryResult,
@@ -89,6 +89,7 @@ function mergeContainerData(
       labels_out_of_sync: status?.labels_out_of_sync,
       dependencies: status?.dependencies,
       service: status?.service,
+      note: status?.note,
       has_update_data: !!status,
     };
   };
@@ -114,8 +115,13 @@ export function useContainersData(): ContainersDataResult {
   const [explorerData, setExplorerData] = useState<ExplorerData | null>(null);
   const [statusData, setStatusData] = useState<DiscoveryResult | null>(null);
   const hasInitialData = useRef(false);
+  const mountedRef = useRef(true);
 
-  const { checkProgress, containerUpdated, reconnecting, wasDisconnected, clearWasDisconnected } = useEventStream(true);
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const { checkProgress, containerUpdated, reconnecting, wasDisconnected, clearWasDisconnected } = useEventStream();
 
   // Fetch both data sources in parallel
   const fetchData = useCallback(async () => {
@@ -158,14 +164,17 @@ export function useContainersData(): ContainersDataResult {
         console.warn('Background check trigger failed:', triggerRes.status);
       }
       await new Promise(resolve => setTimeout(resolve, 500));
+      if (!mountedRef.current) return;
       const [explorerRes, statusRes] = await Promise.all([
         getExplorerData(),
         getContainerStatus(),
       ]);
+      if (!mountedRef.current) return;
       if (explorerRes.success && explorerRes.data) setExplorerData(explorerRes.data);
       if (statusRes.success && statusRes.data) setStatusData(statusRes.data);
       if (explorerRes.success || statusRes.success) setError(null);
     } catch (err) {
+      if (!mountedRef.current) return;
       console.error('Background refresh failed:', err);
     }
   }, []);
@@ -201,7 +210,6 @@ export function useContainersData(): ContainersDataResult {
 
   // Refresh on visibility/focus changes
   useEffect(() => {
-    const mountTimer = setTimeout(backgroundRefresh, 100);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') backgroundRefresh();
     };
@@ -209,7 +217,6 @@ export function useContainersData(): ContainersDataResult {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocus);
     return () => {
-      clearTimeout(mountTimer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
@@ -233,7 +240,7 @@ export function useContainersData(): ContainersDataResult {
     }
   }, [wasDisconnected, clearWasDisconnected, backgroundRefresh]);
 
-  const merged = mergeContainerData(explorerData, statusData);
+  const merged = useMemo(() => mergeContainerData(explorerData, statusData), [explorerData, statusData]);
 
   const stats = {
     total: merged.containers.length,

@@ -60,20 +60,6 @@
   font-size: var(--text-md);
 }
 
-.header-title {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.header-title-full {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
 .title-logo {
   height: 56px;
   width: auto;
@@ -85,44 +71,6 @@
   display: flex;
   gap: var(--space-4);
   align-items: flex-start;
-}
-
-.refresh-buttons-stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.status-info-card {
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-xl);
-  padding: var(--space-6) var(--space-8);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 200px;
-  box-shadow: var(--shadow-sm);
-}
-
-.status-info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: var(--text-base);
-  line-height: var(--leading-tight);
-}
-
-.status-label {
-  color: var(--color-text-tertiary);
-  font-weight: 400;
-}
-
-.status-value {
-  color: var(--color-text-primary);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
 }
 
 /* Action Buttons - Clean & Refined */
@@ -144,10 +92,6 @@
   gap: var(--space-2);
   transition: all var(--transition-fast);
   white-space: nowrap;
-}
-
-.cache-refresh-btn {
-  color: var(--color-warning);
 }
 
 .refresh-btn:hover,
@@ -676,40 +620,6 @@
   color: var(--color-text-tertiary);
 }
 
-/* Status Badge Pills - Semantic Colors */
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: var(--badge-radius);
-  font-size: 11px;
-  font-weight: var(--font-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-}
-
-.status-pill.running {
-  background: var(--color-success-dim);
-  color: var(--color-success-bright);
-}
-
-.status-pill.stopped {
-  background: var(--color-slate-dim);
-  color: var(--color-slate);
-}
-
-.status-pill.update-available {
-  background: var(--color-cyan-dim);
-  color: var(--color-cyan);
-}
-
-.status-pill.error {
-  background: var(--color-danger-dim);
-  color: var(--color-danger-bright);
-}
-
 /* Check/Warn/Info Indicators */
 .check {
   color: var(--color-success);
@@ -743,6 +653,7 @@
 .label-icon.script { color: var(--color-text-tertiary); }
 .label-icon.latest { color: var(--color-warning); }
 .label-icon.env { color: var(--color-accent); }
+.label-icon.ghost { color: var(--color-text-tertiary); }
 
 /* Selected State */
 .dashboard li.selected,
@@ -919,35 +830,6 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-/* Update Status Notification */
-.update-status {
-  position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-primary);
-  padding: var(--space-6) var(--space-12);
-  border-radius: var(--radius-2xl);
-  font-size: var(--text-lg);
-  font-weight: var(--font-medium);
-  z-index: var(--z-dropdown);
-  box-shadow: var(--shadow-lg);
-  animation: fadeIn var(--duration-slow) var(--ease-out);
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
 /* Tab Bar - Clean & Refined */
 .tab-bar {
   position: fixed;
@@ -1044,17 +926,6 @@
   justify-content: center;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-@keyframes badge-pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.5);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }
 
 .tab-label {
@@ -1200,10 +1071,4 @@
   .stat small {
     font-size: var(--text-sm);
   }
-}
-
-/* Pulse Animation */
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }

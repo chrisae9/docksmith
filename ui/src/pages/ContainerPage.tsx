@@ -244,6 +244,11 @@ export function ContainerPage() {
           setLogs(prev => prev + chunk);
         }
       }
+      // Flush any remaining bytes from the decoder
+      const remaining = decoder.decode();
+      if (remaining) {
+        setLogs(prev => prev + remaining);
+      }
     } catch {
       // AbortError is expected on cleanup, ignore all stream errors
     }
@@ -798,6 +803,14 @@ export function ContainerPage() {
                   <strong>Env-Controlled Image</strong>
                   <p>Image tag set by <code>${docksmithData.env_var_name}</code> in <code>.env</code>. Updates will modify this variable.</p>
                 </div>
+              </section>
+            )}
+
+            {/* Ghost Tag Note */}
+            {docksmithData?.note && (
+              <section className="ghost-note-card">
+                <i className="fa-solid fa-ghost"></i>
+                <span>{docksmithData.note}</span>
               </section>
             )}
 

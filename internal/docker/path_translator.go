@@ -198,17 +198,13 @@ func (pt *PathTranslator) GetMappings() map[string]string {
 // /home/chis/www -> /home/chis/www).
 // Returns the container-side path where the file was found.
 func (pt *PathTranslator) ResolveUnknownPath(path string) string {
-	containerPath, _ := pt.resolveUnknownPathBoth(path)
+	containerPath, _ := pt.ResolveUnknownPathBoth(path)
 	return containerPath
 }
 
 // ResolveUnknownPathBoth is like ResolveUnknownPath but returns both the container
 // path and the corresponding host path for the resolved file.
 func (pt *PathTranslator) ResolveUnknownPathBoth(path string) (containerPath, hostPath string) {
-	return pt.resolveUnknownPathBoth(path)
-}
-
-func (pt *PathTranslator) resolveUnknownPathBoth(path string) (containerPath, hostPath string) {
 	if !pt.inDocker {
 		return "", ""
 	}
