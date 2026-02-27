@@ -1203,6 +1203,42 @@ export function Containers() {
         </div>
         <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={`Search ${activeSubTab}...`} />
 
+        {/* Resource sub-tabs toolbar */}
+        <div className="explorer-toolbar">
+          <div className="segmented-control segmented-control-sm explorer-tabs">
+            {subTabs.map(t => (
+              <button key={t.id} className={activeSubTab === t.id ? 'active' : ''} onClick={() => setActiveSubTab(t.id)}>
+                <i className={t.icon}></i>
+                <span className="tab-label">{t.label}</span>
+                <span className="tab-count">{t.count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="explorer-toolbar-actions">
+            {activeSubTab !== 'containers' && (
+              <>
+                <div className="settings-menu-wrapper">
+                  <button className={`explorer-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} title="Settings">
+                    <i className="fa-solid fa-gear"></i>
+                  </button>
+                  <ExplorerSettingsMenu
+                    isOpen={showSettings}
+                    onClose={() => setShowSettings(false)}
+                    activeTab={activeSubTab as 'images' | 'networks' | 'volumes'}
+                    settings={explorerSettings}
+                    onSettingsChange={setExplorerSettings}
+                    onReset={() => setExplorerSettings(DEFAULT_SETTINGS)}
+                  />
+                </div>
+                <button className="prune-btn" onClick={() => setConfirmPrune(activeSubTab)} disabled={pruneLoading} title={`Prune unused ${activeSubTab}`}>
+                  {pruneLoading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-broom"></i>}
+                  <span>Prune</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
         {/* Container-specific toolbar (only on containers sub-tab) */}
         {activeSubTab === 'containers' && (
           <div className="filter-toolbar">
@@ -1275,42 +1311,6 @@ export function Containers() {
             </div>
           </div>
         )}
-
-        {/* Resource sub-tabs toolbar */}
-        <div className="explorer-toolbar">
-          <div className="segmented-control segmented-control-sm explorer-tabs">
-            {subTabs.map(t => (
-              <button key={t.id} className={activeSubTab === t.id ? 'active' : ''} onClick={() => setActiveSubTab(t.id)}>
-                <i className={t.icon}></i>
-                <span className="tab-label">{t.label}</span>
-                <span className="tab-count">{t.count}</span>
-              </button>
-            ))}
-          </div>
-          <div className="explorer-toolbar-actions">
-            {activeSubTab !== 'containers' && (
-              <>
-                <div className="settings-menu-wrapper">
-                  <button className={`explorer-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} title="Settings">
-                    <i className="fa-solid fa-gear"></i>
-                  </button>
-                  <ExplorerSettingsMenu
-                    isOpen={showSettings}
-                    onClose={() => setShowSettings(false)}
-                    activeTab={activeSubTab as 'images' | 'networks' | 'volumes'}
-                    settings={explorerSettings}
-                    onSettingsChange={setExplorerSettings}
-                    onReset={() => setExplorerSettings(DEFAULT_SETTINGS)}
-                  />
-                </div>
-                <button className="prune-btn" onClick={() => setConfirmPrune(activeSubTab)} disabled={pruneLoading} title={`Prune unused ${activeSubTab}`}>
-                  {pruneLoading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-broom"></i>}
-                  <span>Prune</span>
-                </button>
-              </>
-            )}
-          </div>
-        </div>
       </header>
 
       {/* Prune confirmation */}
