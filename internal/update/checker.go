@@ -639,6 +639,54 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	latestVersion := c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels, checkTag)
 	log.Printf("Container %s: findLatestVersion returned: '%s'", container.Name, latestVersion)
 
+	// Probe for missing suffixed tags when no newer version found with current suffix.
+	// This handles repos (e.g., Frigate) where release tags (v0.17.0) are fetched via
+	// Releases API but hardware variant tags (0.17.0-tensorrt) are buried in deep pagination.
+	if currentSuffix != "" && latestVersion == "" && currentVer != nil {
+		latestUnsuffixed := c.findLatestVersion(tags, "", currentVer, container.Labels, checkTag)
+		if latestUnsuffixed != "" {
+			unsuffixedVer := c.versionParser.ParseTag(latestUnsuffixed)
+			if unsuffixedVer != nil && c.versionComp.IsNewer(currentVer, unsuffixedVer) {
+				// Newer version exists without our suffix — probe for suffixed variant
+				verStr := unsuffixedVer.String()
+				seen := make(map[string]bool)
+				var candidates []string
+				for _, c := range []string{
+					verStr + "-" + currentSuffix,
+					"v" + verStr + "-" + currentSuffix,
+					strings.TrimLeft(latestUnsuffixed, "vV") + "-" + currentSuffix,
+					latestUnsuffixed + "-" + currentSuffix,
+				} {
+					if !seen[c] {
+						seen[c] = true
+						candidates = append(candidates, c)
+					}
+				}
+
+				tagSet := make(map[string]bool, len(tags))
+				for _, t := range tags {
+					tagSet[t] = true
+				}
+
+				for _, candidate := range candidates {
+					if tagSet[candidate] {
+						continue
+					}
+					digest, err := c.registryManager.GetTagDigest(ctx, imageRef, candidate)
+					if err == nil && digest != "" {
+						log.Printf("Container %s: Discovered missing suffixed tag: %s", container.Name, candidate)
+						tags = append(tags, candidate)
+						update.AvailableTags = tags
+						break
+					}
+				}
+
+				latestVersion = c.findLatestVersion(tags, currentSuffix, currentVer, container.Labels, checkTag)
+				log.Printf("Container %s: findLatestVersion after suffix probe returned: '%s'", container.Name, latestVersion)
+			}
+		}
+	}
+
 	// For non-meta tags, set LatestVersion to the latest semver tag from registry
 	// For meta tags, LatestVersion was already set to the meta tag above
 	if update.LatestVersion == "" {
