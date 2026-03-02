@@ -533,6 +533,79 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 		}
 	}
 
+	// Floating tag resolution: tags like "24-alpine" or "3-bookworm" parse as "24.0.0"
+	// but the actual running version might be "24.14.0". Resolve via digest lookup.
+	if tagParsed != nil && currentVersion == tagVersion && currentDigest != "" {
+		versionPart := checkTag
+		if currentSuffix != "" {
+			versionPart = strings.TrimSuffix(versionPart, "-"+currentSuffix)
+		}
+		versionPart = strings.TrimPrefix(strings.TrimPrefix(versionPart, "v"), "V")
+		if strings.Count(versionPart, ".") < 2 {
+			log.Printf("checkContainer %s: Floating tag detected ('%s', version part '%s'), resolving actual version from digest", container.Name, checkTag, versionPart)
+
+			// Try resolveVersionFromDigest first (uses ListTagsWithDigests)
+			resolved := c.resolveVersionFromDigest(ctx, imageRef, currentDigest, currentSuffix)
+			if resolved != "" {
+				resolvedVer := c.versionParser.ParseTag(resolved)
+				if resolvedVer != nil && resolvedVer.Major == tagParsed.Major {
+					log.Printf("checkContainer %s: Resolved floating tag '%s' to '%s' via digest", container.Name, checkTag, resolved)
+					currentVersion = resolved
+					update.CurrentVersion = currentVersion
+				}
+			}
+
+			// Fallback: scan fetched tags for best match with same major+suffix, verify digest
+			if currentVersion == tagVersion {
+				log.Printf("checkContainer %s: Digest resolution failed for floating tag, trying tag scan fallback", container.Name)
+				var bestCandidate string
+				var bestCandidateVer *version.Version
+				for _, t := range tags {
+					tagInfo := c.versionParser.ParseImageTag("dummy:" + t)
+					if tagInfo == nil || !tagInfo.IsVersioned || tagInfo.Version == nil {
+						continue
+					}
+					if tagInfo.Suffix != currentSuffix {
+						continue
+					}
+					if tagInfo.Version.Major != tagParsed.Major {
+						continue
+					}
+					// Must be more specific than the floating tag (at least major.minor.patch)
+					tVersionPart := t
+					if currentSuffix != "" {
+						tVersionPart = strings.TrimSuffix(tVersionPart, "-"+currentSuffix)
+					}
+					tVersionPart = strings.TrimPrefix(strings.TrimPrefix(tVersionPart, "v"), "V")
+					if strings.Count(tVersionPart, ".") < 2 {
+						continue
+					}
+					if bestCandidateVer == nil || c.versionComp.Compare(tagInfo.Version, bestCandidateVer) > 0 {
+						bestCandidate = t
+						bestCandidateVer = tagInfo.Version
+					}
+				}
+				if bestCandidate != "" {
+					// Verify this candidate's digest matches our current digest
+					candidateDigest, err := c.registryManager.GetTagDigest(ctx, imageRef, bestCandidate)
+					if err == nil {
+						candidateSHA := strings.TrimPrefix(candidateDigest, "sha256:")
+						currentSHA := strings.TrimPrefix(currentDigest, "sha256:")
+						if candidateSHA == currentSHA {
+							log.Printf("checkContainer %s: Resolved floating tag '%s' to '%s' via tag scan fallback", container.Name, checkTag, bestCandidate)
+							currentVersion = bestCandidate
+							update.CurrentVersion = currentVersion
+						} else {
+							log.Printf("checkContainer %s: Best candidate '%s' digest mismatch (wanted %s, got %s)", container.Name, bestCandidate, currentSHA[:min(12, len(currentSHA))], candidateSHA[:min(12, len(candidateSHA))])
+						}
+					} else {
+						log.Printf("checkContainer %s: Failed to get digest for candidate '%s': %v", container.Name, bestCandidate, err)
+					}
+				}
+			}
+		}
+	}
+
 	// Parse current version to check if it's stable (for prerelease filtering)
 	currentVer := c.versionParser.ParseTag(currentVersion)
 
