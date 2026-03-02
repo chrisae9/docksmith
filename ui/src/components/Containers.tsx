@@ -916,6 +916,9 @@ export function Containers() {
                       if (!viewSettings.showIgnored && containerStacks[groupName].some(c => c.update_status === 'IGNORED')) updates.showIgnored = true;
                       if (!viewSettings.showLocalImages && containerStacks[groupName].some(c => c.update_status === 'LOCAL_IMAGE')) updates.showLocalImages = true;
                       if (Object.keys(updates).length > 0) updateViewSettings(updates);
+                      if (explorerSettings.containers.showRunningOnly && containerStacks[groupName].some(c => c.state !== 'running')) {
+                        setExplorerSettings(s => ({ ...s, containers: { ...s.containers, showRunningOnly: false } }));
+                      }
                       setCollapsedStacks(prev => {
                         const next = new Set(prev);
                         next.delete(groupName);

@@ -651,15 +651,15 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 				verStr := unsuffixedVer.String()
 				seen := make(map[string]bool)
 				var candidates []string
-				for _, c := range []string{
+				for _, cand := range []string{
 					verStr + "-" + currentSuffix,
 					"v" + verStr + "-" + currentSuffix,
-					strings.TrimLeft(latestUnsuffixed, "vV") + "-" + currentSuffix,
+					strings.TrimPrefix(strings.TrimPrefix(latestUnsuffixed, "v"), "V") + "-" + currentSuffix,
 					latestUnsuffixed + "-" + currentSuffix,
 				} {
-					if !seen[c] {
-						seen[c] = true
-						candidates = append(candidates, c)
+					if !seen[cand] {
+						seen[cand] = true
+						candidates = append(candidates, cand)
 					}
 				}
 
