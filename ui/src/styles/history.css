@@ -56,6 +56,10 @@
   cursor: default;
 }
 
+.history-page .filter-toolbar {
+  flex-wrap: wrap;
+}
+
 .history-page .filter-toolbar button:disabled,
 .history-page .filter-toolbar select:disabled {
   opacity: 0.6;
@@ -264,6 +268,74 @@
   box-shadow: var(--shadow-focus);
 }
 
+/* Custom Date Range */
+.custom-date-range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.date-range-icon {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+  font-size: var(--text-md);
+}
+
+.custom-date-range input[type="date"] {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  color-scheme: dark;
+  outline: none;
+  min-width: 0;
+  transition: all var(--transition-fast);
+}
+
+.custom-date-range input[type="date"]:hover {
+  border-color: var(--color-accent);
+}
+
+.custom-date-range input[type="date"]:focus {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-focus);
+}
+
+.date-range-separator {
+  font-size: var(--text-sm);
+  color: var(--color-text-quaternary);
+  flex-shrink: 0;
+}
+
+/* Load More Button */
+.load-more-btn {
+  display: block;
+  width: 100%;
+  padding: var(--space-5) var(--space-8);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  color: var(--color-accent);
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.load-more-btn:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent);
+}
+
+.load-more-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Operation Info */
 .op-info {
   padding-left: var(--space-12);
@@ -329,8 +401,17 @@
 }
 
 .op-time {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.op-time-absolute {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 
 .op-duration {
@@ -717,6 +798,19 @@
 
   .op-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .custom-date-range {
+    width: 100%;
+  }
+
+  .custom-date-range input[type="date"] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .op-time-absolute {
+    display: none;
   }
 }
 
