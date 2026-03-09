@@ -32,6 +32,23 @@ export function Settings() {
     return () => clearInterval(interval);
   }, [lastCheckTime, lastBackgroundRun]);
 
+  const updateTimestamps = (data: DiscoveryResult) => {
+    if (data.last_cache_refresh) {
+      setLastCheckTime(data.last_cache_refresh);
+      setCacheAge(formatTimeAgo(data.last_cache_refresh));
+    } else {
+      setLastCheckTime(null);
+      setCacheAge('Never');
+    }
+    if (data.last_background_run) {
+      setLastBackgroundRun(data.last_background_run);
+      setBackgroundAge(formatTimeAgo(data.last_background_run));
+    } else {
+      setLastBackgroundRun(null);
+      setBackgroundAge('Never');
+    }
+  };
+
   const fetchStatus = async () => {
     setLoading(true);
     setError(null);
@@ -39,20 +56,7 @@ export function Settings() {
       const response = await getContainerStatus();
       if (response.success && response.data) {
         setResult(response.data);
-        if (response.data.last_cache_refresh) {
-          setLastCheckTime(response.data.last_cache_refresh);
-          setCacheAge(formatTimeAgo(response.data.last_cache_refresh));
-        } else {
-          setLastCheckTime(null);
-          setCacheAge('Never');
-        }
-        if (response.data.last_background_run) {
-          setLastBackgroundRun(response.data.last_background_run);
-          setBackgroundAge(formatTimeAgo(response.data.last_background_run));
-        } else {
-          setLastBackgroundRun(null);
-          setBackgroundAge('Never');
-        }
+        updateTimestamps(response.data);
       } else {
         setError(response.error || 'Failed to fetch status');
       }
@@ -93,25 +97,16 @@ export function Settings() {
     setLoading(true);
     setError(null);
     try {
-      const response = await checkContainers();
-      if (response.success && response.data) {
-        setResult(response.data);
-        if (response.data.last_cache_refresh) {
-          setLastCheckTime(response.data.last_cache_refresh);
-          setCacheAge(formatTimeAgo(response.data.last_cache_refresh));
-        } else {
-          setLastCheckTime(null);
-          setCacheAge('Never');
+      await checkContainers();
+      // Poll /api/status until background check completes
+      for (let i = 0; i < 120; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const response = await getContainerStatus();
+        if (response.success && response.data) {
+          setResult(response.data);
+          updateTimestamps(response.data);
+          if (!response.data.checking) break;
         }
-        if (response.data.last_background_run) {
-          setLastBackgroundRun(response.data.last_background_run);
-          setBackgroundAge(formatTimeAgo(response.data.last_background_run));
-        } else {
-          setLastBackgroundRun(null);
-          setBackgroundAge('Never');
-        }
-      } else {
-        setError(response.error || 'Failed to fetch data');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
