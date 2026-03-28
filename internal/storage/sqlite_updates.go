@@ -340,6 +340,185 @@ func (s *SQLiteStorage) GetUpdateOperations(ctx context.Context, limit int) ([]U
 	return scanUpdateOperationRows(rows)
 }
 
+// QueryUpdateOperations implements Storage.QueryUpdateOperations.
+// Provides flexible filtering and cursor-based pagination for operation queries.
+func (s *SQLiteStorage) QueryUpdateOperations(ctx context.Context, opts OperationQueryOptions) (OperationQueryResult, error) {
+	var conditions []string
+	var args []interface{}
+
+	// Default: only completed/failed operations
+	if opts.Status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, opts.Status)
+	} else {
+		conditions = append(conditions, "status IN ('complete', 'failed')")
+	}
+
+	// Container filter
+	if opts.Container != "" {
+		conditions = append(conditions, "container_name = ?")
+		args = append(args, opts.Container)
+	}
+
+	// Type filter
+	if opts.Type != "" {
+		if opts.Type == "updates" {
+			conditions = append(conditions, "operation_type IN ('single', 'batch', 'stack')")
+		} else {
+			conditions = append(conditions, "operation_type = ?")
+			args = append(args, opts.Type)
+		}
+	}
+
+	// Date range filters
+	if opts.DateFrom != nil {
+		conditions = append(conditions, "started_at >= ?")
+		args = append(args, *opts.DateFrom)
+	}
+	if opts.DateTo != nil {
+		conditions = append(conditions, "started_at <= ?")
+		args = append(args, *opts.DateTo)
+	}
+
+	// Cursor (pagination)
+	if opts.Cursor != "" {
+		cursorTime, err := time.Parse(time.RFC3339Nano, opts.Cursor)
+		if err == nil {
+			conditions = append(conditions, "started_at < ?")
+			args = append(args, cursorTime)
+		}
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + conditions[0]
+		for _, c := range conditions[1:] {
+			whereClause += " AND " + c
+		}
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, operation_id, container_id, container_name, stack_name, operation_type, status,
+		       old_version, new_version, started_at, completed_at, error_message,
+		       dependents_affected, rollback_occurred, batch_details, batch_group_id, created_at, updated_at
+		FROM update_operations
+		%s
+		ORDER BY started_at DESC
+		LIMIT ?
+	`, whereClause)
+	args = append(args, limit+1) // Fetch one extra to detect hasMore
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		log.Printf("Failed to query update operations: %v", err)
+		return OperationQueryResult{}, fmt.Errorf("failed to query update operations: %w", err)
+	}
+	defer rows.Close()
+
+	operations, err := scanUpdateOperationRows(rows)
+	if err != nil {
+		return OperationQueryResult{}, err
+	}
+
+	result := OperationQueryResult{}
+	if len(operations) > limit {
+		result.HasMore = true
+		operations = operations[:limit]
+		last := operations[limit-1]
+		if last.StartedAt != nil {
+			result.NextCursor = last.StartedAt.Format(time.RFC3339Nano)
+		}
+	}
+	result.Operations = operations
+
+	return result, nil
+}
+
+// DeleteAllHistory implements Storage.DeleteAllHistory.
+// Deletes all completed/failed operations, check history, and update log.
+func (s *SQLiteStorage) DeleteAllHistory(ctx context.Context) (int64, error) {
+	var total int64
+	err := s.retryWithBackoff(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		r1, err := tx.ExecContext(ctx, "DELETE FROM update_operations WHERE status IN ('complete', 'failed')")
+		if err != nil {
+			return fmt.Errorf("failed to delete operations: %w", err)
+		}
+		n1, _ := r1.RowsAffected()
+
+		r2, err := tx.ExecContext(ctx, "DELETE FROM check_history")
+		if err != nil {
+			return fmt.Errorf("failed to delete check history: %w", err)
+		}
+		n2, _ := r2.RowsAffected()
+
+		r3, err := tx.ExecContext(ctx, "DELETE FROM update_log")
+		if err != nil {
+			return fmt.Errorf("failed to delete update log: %w", err)
+		}
+		n3, _ := r3.RowsAffected()
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit: %w", err)
+		}
+
+		total = n1 + n2 + n3
+		log.Printf("Deleted all history: %d operations, %d checks, %d logs", n1, n2, n3)
+		return nil
+	})
+	return total, err
+}
+
+// DeleteHistoryBefore implements Storage.DeleteHistoryBefore.
+// Deletes history entries older than the given time.
+func (s *SQLiteStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	var total int64
+	err := s.retryWithBackoff(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		r1, err := tx.ExecContext(ctx, "DELETE FROM update_operations WHERE status IN ('complete', 'failed') AND started_at < ?", before)
+		if err != nil {
+			return fmt.Errorf("failed to delete operations: %w", err)
+		}
+		n1, _ := r1.RowsAffected()
+
+		r2, err := tx.ExecContext(ctx, "DELETE FROM check_history WHERE check_time < ?", before)
+		if err != nil {
+			return fmt.Errorf("failed to delete check history: %w", err)
+		}
+		n2, _ := r2.RowsAffected()
+
+		r3, err := tx.ExecContext(ctx, "DELETE FROM update_log WHERE timestamp < ?", before)
+		if err != nil {
+			return fmt.Errorf("failed to delete update log: %w", err)
+		}
+		n3, _ := r3.RowsAffected()
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit: %w", err)
+		}
+
+		total = n1 + n2 + n3
+		log.Printf("Deleted history before %s: %d operations, %d checks, %d logs", before.Format(time.RFC3339), n1, n2, n3)
+		return nil
+	})
+	return total, err
+}
+
 // GetUpdateOperationsByBatchGroup retrieves all operations in a batch group.
 // Returns entries ordered by started_at ASC (earliest first).
 func (s *SQLiteStorage) GetUpdateOperationsByBatchGroup(ctx context.Context, batchGroupID string) ([]UpdateOperation, error) {

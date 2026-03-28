@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { checkContainers, getContainerStatus, getDockerConfig } from '../api/client';
+import { useState, useEffect, useCallback } from 'react';
+import { checkContainers, getContainerStatus, getDockerConfig, clearHistory, getSetting, setSetting } from '../api/client';
 import type { DiscoveryResult, DockerRegistryInfo } from '../types/api';
 import { formatTimeAgo } from '../utils/time';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 export function Settings() {
   const [loading, setLoading] = useState(false);
@@ -12,11 +13,51 @@ export function Settings() {
   const [cacheAge, setCacheAge] = useState<string>('Loading...');
   const [backgroundAge, setBackgroundAge] = useState<string>('Loading...');
   const [dockerConfig, setDockerConfig] = useState<DockerRegistryInfo | null>(null);
+  const [clearConfirm, setClearConfirm] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [clearResult, setClearResult] = useState<string | null>(null);
+  const [retentionPolicy, setRetentionPolicy] = useState('0');
+
+  const cancelClear = useCallback(() => setClearConfirm(false), []);
+  const clearDialogRef = useFocusTrap(clearConfirm, cancelClear);
+
+  const executeClearHistory = async () => {
+    setClearingHistory(true);
+    try {
+      const response = await clearHistory(0);
+      if (response.success && response.data) {
+        setClearResult(`Cleared ${response.data.deleted} history entries`);
+        setTimeout(() => setClearResult(null), 5000);
+      } else {
+        setClearResult(`Error: ${response.error || 'Failed to clear history'}`);
+      }
+    } catch (err) {
+      setClearResult(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setClearingHistory(false);
+      setClearConfirm(false);
+    }
+  };
+
+  const handleRetentionChange = async (value: string) => {
+    setRetentionPolicy(value);
+    try {
+      await setSetting('history_retention_days', value);
+    } catch {
+      // Revert on failure
+      setRetentionPolicy(retentionPolicy);
+    }
+  };
 
   // Fetch initial status
   useEffect(() => {
     fetchStatus();
     fetchDockerConfigData();
+    getSetting('history_retention_days').then(res => {
+      if (res.success && res.data) {
+        setRetentionPolicy(res.data.value);
+      }
+    });
   }, []);
 
   // Update time ago every 10 seconds
@@ -215,6 +256,54 @@ export function Settings() {
           </div>
         </section>
 
+        {/* History Management */}
+        <section className="settings-section">
+          <h2 className="section-title">
+            <i className="fa-solid fa-clock-rotate-left"></i>
+            History Management
+          </h2>
+          <div className="settings-card">
+            <div className="setting-row">
+              <label htmlFor="retention-policy" className="setting-label">Retention Policy</label>
+              <select
+                id="retention-policy"
+                className="retention-select"
+                value={retentionPolicy}
+                onChange={(e) => handleRetentionChange(e.target.value)}
+              >
+                <option value="0">Never auto-clear</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+              </select>
+            </div>
+            <button
+              onClick={() => setClearConfirm(true)}
+              className="settings-btn danger-btn"
+              disabled={clearingHistory}
+            >
+              <i className="fa-solid fa-trash"></i>
+              <div>
+                <div className="btn-title">Clear All History</div>
+                <div className="btn-description">Remove all completed operations from history</div>
+              </div>
+            </button>
+            <div className="setting-info">
+              <i className="fa-solid fa-circle-info"></i>
+              {retentionPolicy === '0'
+                ? 'History is never auto-cleared. Use the button above to manually clear.'
+                : `Entries older than ${retentionPolicy} days are cleared automatically after each background check.`
+              }
+            </div>
+            {clearResult && (
+              <div className={`setting-info ${clearResult.startsWith('Error') ? 'setting-info-error' : 'setting-info-success'}`}>
+                <i className={`fa-solid ${clearResult.startsWith('Error') ? 'fa-circle-exclamation' : 'fa-check-circle'}`}></i>
+                {clearResult}
+              </div>
+            )}
+          </div>
+        </section>
+
         {/* Configuration */}
         <section className="settings-section">
           <h2 className="section-title">
@@ -275,6 +364,33 @@ export function Settings() {
           </div>
         </section>
       </div>
+
+      {/* Clear History Confirmation Dialog */}
+      {clearConfirm && (
+        <div className="confirm-dialog-overlay">
+          <div
+            className="confirm-dialog"
+            ref={clearDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clear-history-dialog-title"
+          >
+            <div className="confirm-dialog-header">
+              <h3 id="clear-history-dialog-title">Confirm Clear History</h3>
+            </div>
+            <div className="confirm-dialog-body">
+              <p>This will permanently delete <strong>all</strong> completed and failed operations from history.</p>
+              <p className="confirm-warning">This action cannot be undone.</p>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button className="confirm-cancel" onClick={cancelClear}>Cancel</button>
+              <button className="confirm-force" onClick={executeClearHistory} disabled={clearingHistory}>
+                {clearingHistory ? 'Clearing...' : 'Clear History'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -58,7 +58,24 @@ export function formatTimeWithDate(timeStr?: string): string {
   if (diffDays < 7) return `${diffDays}d ago`;
 
   // For older dates, show full date
-  return date.toLocaleDateString('en-US', {
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Formats a timestamp into an absolute date+time string
+ * @param timeStr ISO 8601 timestamp string
+ * @returns Formatted string like "Mar 9, 04:37 PM"
+ */
+export function formatAbsoluteTime(timeStr?: string): string {
+  if (!timeStr) return '';
+  const date = new Date(timeStr);
+  if (isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

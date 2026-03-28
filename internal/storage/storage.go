@@ -234,9 +234,37 @@ type Storage interface {
 	//   - containerName: Name of the container to remove assignment from
 	DeleteScriptAssignment(ctx context.Context, containerName string) error
 
+	// QueryUpdateOperations retrieves update operations with flexible filtering
+	// and cursor-based pagination.
+	QueryUpdateOperations(ctx context.Context, opts OperationQueryOptions) (OperationQueryResult, error)
+
+	// DeleteAllHistory deletes all completed/failed operations, check history, and update log.
+	DeleteAllHistory(ctx context.Context) (int64, error)
+
+	// DeleteHistoryBefore deletes history entries older than the given time.
+	DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error)
+
 	// Close closes the database connection and releases resources.
 	// Should be called when the storage is no longer needed.
 	Close() error
+}
+
+// OperationQueryOptions specifies filtering and pagination for operation queries.
+type OperationQueryOptions struct {
+	Limit     int
+	Cursor    string     // ISO timestamp — return operations before this time
+	Status    string     // "complete", "failed", or "" for both
+	Container string
+	Type      string     // operation_type filter; "updates" maps to single/batch/stack
+	DateFrom  *time.Time
+	DateTo    *time.Time
+}
+
+// OperationQueryResult contains paginated operation results.
+type OperationQueryResult struct {
+	Operations []UpdateOperation
+	NextCursor string
+	HasMore    bool
 }
 
 // CheckHistoryEntry represents a single check operation result.

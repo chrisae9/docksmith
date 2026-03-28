@@ -70,14 +70,42 @@ export async function getOperations(params?: {
   limit?: number;
   status?: string;
   container?: string;
+  cursor?: string;
+  type?: string;
+  date_from?: string;
+  date_to?: string;
 }): Promise<OperationsResponse> {
   const searchParams = new URLSearchParams();
   if (params?.limit) searchParams.set('limit', params.limit.toString());
   if (params?.status) searchParams.set('status', params.status);
   if (params?.container) searchParams.set('container', params.container);
+  if (params?.cursor) searchParams.set('cursor', params.cursor);
+  if (params?.type) searchParams.set('type', params.type);
+  if (params?.date_from) searchParams.set('date_from', params.date_from);
+  if (params?.date_to) searchParams.set('date_to', params.date_to);
 
   const query = searchParams.toString();
   return fetchAPI(`/operations${query ? `?${query}` : ''}`);
+}
+
+// Clear history
+export async function clearHistory(olderThanDays?: number): Promise<APIResponse<{ deleted: number }>> {
+  return fetchAPI('/history/clear', {
+    method: 'DELETE',
+    body: JSON.stringify({ older_than_days: olderThanDays || 0 }),
+  });
+}
+
+// Settings
+export async function getSetting(key: string): Promise<APIResponse<{ key: string; value: string }>> {
+  return fetchAPI(`/settings/${encodeURIComponent(key)}`);
+}
+
+export async function setSetting(key: string, value: string): Promise<APIResponse<void>> {
+  return fetchAPI(`/settings/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  });
 }
 
 // Trigger batch container update (grouped by stack)

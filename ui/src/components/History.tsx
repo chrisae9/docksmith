@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getOperations, rollbackContainers } from '../api/client';
 import type { UpdateOperation, BatchContainerDetail } from '../types/api';
 import { ChangeType, getChangeTypeName } from '../types/api';
-import { formatTimeWithDate } from '../utils/time';
+import { formatTimeWithDate, formatAbsoluteTime } from '../utils/time';
 import { SearchBar } from './shared';
 import { SkeletonHistory } from './Skeleton/Skeleton';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -70,14 +70,51 @@ function getRollbackStrategyNote(strategy: RollbackStrategy, detail: BatchContai
 // Note: 'updates' is a UI filter that matches both 'single' and 'batch' operation types
 type OperationType = 'all' | 'updates' | 'rollback' | 'restart' | 'label_change' | 'stop' | 'remove' | 'fix_mismatch';
 
+type DatePreset = 'all' | 'today' | '7days' | '30days' | 'custom';
+
+const PAGE_SIZE = 20;
+
+function getDateRange(preset: DatePreset, customFrom?: string, customTo?: string): { from?: string; to?: string } {
+  const now = new Date();
+  switch (preset) {
+    case 'today': {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return { from: start.toISOString() };
+    }
+    case '7days': {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 7);
+      return { from: start.toISOString() };
+    }
+    case '30days': {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 30);
+      return { from: start.toISOString() };
+    }
+    case 'custom': {
+      const from = customFrom ? new Date(customFrom + 'T00:00:00').toISOString() : undefined;
+      const to = customTo ? new Date(customTo + 'T23:59:59').toISOString() : undefined;
+      return { from, to };
+    }
+    default:
+      return {};
+  }
+}
+
 export function History() {
   const navigate = useNavigate();
   const [operations, setOperations] = useState<UpdateOperation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'failed'>('all');
   const [typeFilter, setTypeFilter] = useState<OperationType>('all');
+  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  const [customDateFrom, setCustomDateFrom] = useState('');
+  const [customDateTo, setCustomDateTo] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [cursor, setCursor] = useState<string | undefined>();
+  const [hasMore, setHasMore] = useState(false);
   const [expandedOp, setExpandedOp] = useState<string | null>(null);
   const [rollbackConfirm, setRollbackConfirm] = useState<RollbackConfirmation | null>(null);
   const [batchRollbackConfirm, setBatchRollbackConfirm] = useState<BatchRollbackConfirmation | null>(null);
@@ -90,22 +127,34 @@ export function History() {
   // Focus trap for rollback confirmation dialog
   const dialogRef = useFocusTrap(!!rollbackConfirm || !!batchRollbackConfirm, cancelRollback);
 
-  useEffect(() => {
-    fetchOperations();
-  }, []);
+  const fetchOperations = useCallback(async (reset: boolean) => {
+    if (reset) {
+      setLoading(true);
+      setCursor(undefined);
+    } else {
+      setLoadingMore(true);
+    }
 
-  const fetchOperations = async () => {
-    setLoading(true);
     try {
-      const response = await getOperations({ limit: 100 });
+      const dateRange = getDateRange(datePreset, customDateFrom, customDateTo);
+      const response = await getOperations({
+        limit: PAGE_SIZE,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        type: typeFilter !== 'all' ? typeFilter : undefined,
+        cursor: reset ? undefined : cursor,
+        date_from: dateRange.from,
+        date_to: dateRange.to,
+      });
+
       if (response.success && response.data) {
-        // Sort by completed_at or created_at DESC (most recent first)
-        const sorted = response.data.operations.sort((a, b) => {
-          const timeA = new Date(a.completed_at || a.created_at).getTime();
-          const timeB = new Date(b.completed_at || b.created_at).getTime();
-          return timeB - timeA;
-        });
-        setOperations(sorted);
+        const newOps = response.data.operations;
+        if (reset) {
+          setOperations(newOps);
+        } else {
+          setOperations(prev => [...prev, ...newOps]);
+        }
+        setCursor(response.data.next_cursor);
+        setHasMore(response.data.has_more || false);
       } else {
         setError(response.error || 'Failed to fetch operations');
       }
@@ -113,8 +162,14 @@ export function History() {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  };
+  }, [statusFilter, typeFilter, datePreset, customDateFrom, customDateTo, cursor]);
+
+  // Initial load + refetch on filter changes
+  useEffect(() => {
+    fetchOperations(true);
+  }, [statusFilter, typeFilter, datePreset, customDateFrom, customDateTo]);
 
   // Group operations by batch_group_id into display items
   const buildDisplayItems = (ops: UpdateOperation[]): DisplayItem[] => {
@@ -387,21 +442,7 @@ export function History() {
   };
 
   const filteredOperations = operations.filter(op => {
-    // Status filter
-    if (statusFilter === 'complete' && op.status !== 'complete') return false;
-    if (statusFilter === 'failed' && !(op.status === 'failed' || op.rollback_occurred)) return false;
-
-    // Type filter
-    if (typeFilter !== 'all') {
-      if (typeFilter === 'updates') {
-        // 'updates' filter shows both single and batch update operations
-        if (op.operation_type !== 'single' && op.operation_type !== 'batch' && op.operation_type !== 'stack') return false;
-      } else if (op.operation_type !== typeFilter) {
-        return false;
-      }
-    }
-
-    // Search filter
+    // Search filter (client-side only — status/type/date are server-side)
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       const matchesContainer = op.container_name?.toLowerCase().includes(query);
@@ -571,7 +612,10 @@ export function History() {
             <i className="fa-regular fa-copy"></i>
             <span className="op-id-short">{op.operation_id.slice(0, 8)}</span>
           </button>
-          <span className="op-time">{formatTime(op.completed_at || op.created_at)}</span>
+          <span className="op-time">
+            {formatTime(op.completed_at || op.created_at)}
+            <span className="op-time-absolute">{formatAbsoluteTime(op.completed_at || op.created_at)}</span>
+          </span>
           <span className="op-duration">{formatDuration(op.started_at, op.completed_at, op.created_at)}</span>
         </div>
       </div>
@@ -770,7 +814,10 @@ export function History() {
             )}
           </div>
           <div className="op-meta">
-            <span className="op-time">{formatTime(item.latestComplete || item.earliestStart || '')}</span>
+            <span className="op-time">
+              {formatTime(item.latestComplete || item.earliestStart || '')}
+              <span className="op-time-absolute">{formatAbsoluteTime(item.latestComplete || item.earliestStart || '')}</span>
+            </span>
             <span className="op-duration">{formatDuration(item.earliestStart, item.latestComplete)}</span>
           </div>
         </div>
@@ -972,7 +1019,7 @@ export function History() {
         </header>
         <div className="error">
           <p>{error}</p>
-          <button onClick={fetchOperations}>Retry</button>
+          <button onClick={() => fetchOperations(true)}>Retry</button>
         </div>
       </div>
     );
@@ -1025,6 +1072,36 @@ export function History() {
             <option value="label_change">Labels</option>
             <option value="fix_mismatch">Fix Mismatch</option>
           </select>
+          <select
+            className="type-filter-select"
+            value={datePreset}
+            onChange={(e) => setDatePreset(e.target.value as DatePreset)}
+            aria-label="Filter by date range"
+          >
+            <option value="all">All Time</option>
+            <option value="today">Today</option>
+            <option value="7days">Last 7 Days</option>
+            <option value="30days">Last 30 Days</option>
+            <option value="custom">Custom Range</option>
+          </select>
+          {datePreset === 'custom' && (
+            <div className="custom-date-range">
+              <i className="fa-solid fa-calendar date-range-icon"></i>
+              <input
+                type="date"
+                value={customDateFrom}
+                onChange={(e) => setCustomDateFrom(e.target.value)}
+                aria-label="From date"
+              />
+              <span className="date-range-separator">&mdash;</span>
+              <input
+                type="date"
+                value={customDateTo}
+                onChange={(e) => setCustomDateTo(e.target.value)}
+                aria-label="To date"
+              />
+            </div>
+          )}
         </div>
       </header>
 
@@ -1032,11 +1109,22 @@ export function History() {
         {displayItems.length === 0 ? (
           <div className="empty">No operations found</div>
         ) : (
-          displayItems.map(item =>
-            item.type === 'single'
-              ? renderSingleCard(item.operation!)
-              : renderGroupCard(item)
-          )
+          <>
+            {displayItems.map(item =>
+              item.type === 'single'
+                ? renderSingleCard(item.operation!)
+                : renderGroupCard(item)
+            )}
+            {hasMore && (
+              <button
+                className="load-more-btn"
+                onClick={() => fetchOperations(false)}
+                disabled={loadingMore}
+              >
+                {loadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            )}
+          </>
         )}
       </main>
 

@@ -101,7 +101,7 @@ func (s *Server) handleContainerRecheck(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleOperations returns update operations history
-// This is the EXACT same logic as: docksmith operations --json
+// Supports cursor-based pagination and filtering by type, status, date range
 func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	if !s.requireStorage(w) {
 		return
@@ -109,21 +109,66 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Parse query parameters (same as CLI flags)
-	limit := parseIntParam(r, "limit", 50)
-	status := r.URL.Query().Get("status")
-	container := r.URL.Query().Get("container")
+	opts := storage.OperationQueryOptions{
+		Limit:     parseIntParam(r, "limit", 20),
+		Cursor:    r.URL.Query().Get("cursor"),
+		Status:    r.URL.Query().Get("status"),
+		Container: r.URL.Query().Get("container"),
+		Type:      r.URL.Query().Get("type"),
+	}
 
-	var operations []storage.UpdateOperation
+	if dateFrom := r.URL.Query().Get("date_from"); dateFrom != "" {
+		if t, err := time.Parse(time.RFC3339, dateFrom); err == nil {
+			opts.DateFrom = &t
+		}
+	}
+	if dateTo := r.URL.Query().Get("date_to"); dateTo != "" {
+		if t, err := time.Parse(time.RFC3339, dateTo); err == nil {
+			opts.DateTo = &t
+		}
+	}
+
+	result, err := s.storageService.QueryUpdateOperations(ctx, opts)
+	if err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+
+	response := map[string]any{
+		"operations": result.Operations,
+		"count":      len(result.Operations),
+		"has_more":   result.HasMore,
+	}
+	if result.NextCursor != "" {
+		response["next_cursor"] = result.NextCursor
+	}
+
+	RespondSuccess(w, response)
+}
+
+// handleClearHistory deletes operation history
+func (s *Server) handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.requireStorage(w) {
+		return
+	}
+
+	ctx := r.Context()
+
+	var req struct {
+		OlderThanDays int `json:"older_than_days"`
+	}
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	var deleted int64
 	var err error
 
-	// Same filtering logic as CLI
-	if container != "" {
-		operations, err = s.storageService.GetUpdateOperationsByContainer(ctx, container, limit)
-	} else if status != "" {
-		operations, err = s.storageService.GetUpdateOperationsByStatus(ctx, status, limit)
+	if req.OlderThanDays > 0 {
+		before := time.Now().AddDate(0, 0, -req.OlderThanDays)
+		deleted, err = s.storageService.DeleteHistoryBefore(ctx, before)
 	} else {
-		operations, err = s.storageService.GetUpdateOperations(ctx, limit)
+		deleted, err = s.storageService.DeleteAllHistory(ctx)
 	}
 
 	if err != nil {
@@ -131,10 +176,9 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same JSON structure as CLI
 	RespondSuccess(w, map[string]any{
-		"operations": operations,
-		"count":      len(operations),
+		"deleted": deleted,
+		"message": "History cleared",
 	})
 }
 
@@ -502,6 +546,71 @@ func (s *Server) handleRollbackContainers(w http.ResponseWriter, r *http.Request
 	RespondSuccess(w, map[string]any{
 		"operation_id": rollbackOpID,
 		"message":      "Per-container rollback initiated",
+	})
+}
+
+// Allowed setting keys (whitelist)
+var allowedSettingKeys = map[string]bool{
+	"history_retention_days": true,
+}
+
+// handleGetSetting returns a single setting value by key
+func (s *Server) handleGetSetting(w http.ResponseWriter, r *http.Request) {
+	if !s.requireStorage(w) {
+		return
+	}
+
+	key := r.PathValue("key")
+	if !allowedSettingKeys[key] {
+		RespondBadRequest(w, fmt.Errorf("unknown setting key: %s", key))
+		return
+	}
+
+	ctx := r.Context()
+	value, found, err := s.storageService.GetConfig(ctx, key)
+	if err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+
+	if !found {
+		value = "0" // default: never
+	}
+
+	RespondSuccess(w, map[string]any{
+		"key":   key,
+		"value": value,
+	})
+}
+
+// handleSetSetting updates a single setting value by key
+func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
+	if !s.requireStorage(w) {
+		return
+	}
+
+	key := r.PathValue("key")
+	if !allowedSettingKeys[key] {
+		RespondBadRequest(w, fmt.Errorf("unknown setting key: %s", key))
+		return
+	}
+
+	var req struct {
+		Value string `json:"value"`
+	}
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	ctx := r.Context()
+	if err := s.storageService.SetConfig(ctx, key, req.Value); err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+
+	RespondSuccess(w, map[string]any{
+		"key":   key,
+		"value": req.Value,
 	})
 }
 

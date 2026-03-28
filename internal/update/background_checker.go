@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -263,6 +264,21 @@ func (bc *BackgroundChecker) runCheck() {
 				"timestamp":       time.Now().Unix(),
 			},
 		})
+	}
+
+	// Auto-clear old history based on retention policy
+	if bc.storage != nil {
+		clearCtx, clearCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer clearCancel()
+		val, found, _ := bc.storage.GetConfig(clearCtx, "history_retention_days")
+		if found && val != "" && val != "0" {
+			if days, err := strconv.Atoi(val); err == nil && days > 0 {
+				before := time.Now().AddDate(0, 0, -days)
+				if deleted, err := bc.storage.DeleteHistoryBefore(clearCtx, before); err == nil && deleted > 0 {
+					log.Printf("BACKGROUND_CHECKER: Auto-cleared %d history entries older than %d days", deleted, days)
+				}
+			}
+		}
 	}
 }
 

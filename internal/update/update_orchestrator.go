@@ -23,7 +23,6 @@ import (
 	"github.com/chis/docksmith/internal/storage"
 	dockerContainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -1091,28 +1090,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 	}
 
-	// Build a map of batch container names for network_mode dependency checking
-	batchNames := make(map[string]bool)
-	for _, c := range orderedContainers {
-		batchNames[c.Name] = true
-		// Also add service name for matching network_mode: service:xxx
-		if svc := c.Labels["com.docker.compose.service"]; svc != "" {
-			batchNames[svc] = true
-		}
-	}
-
-	// Identify containers with network_mode dependencies on other batch containers
-	// These MUST use compose-based recreation to handle the network namespace correctly
-	networkModeContainers := make(map[string]bool)
-	for _, cont := range orderedContainers {
-		hasNetworkDep, depName := o.hasNetworkModeDependency(cont, batchNames)
-		if hasNetworkDep {
-			networkModeContainers[cont.Name] = true
-			log.Printf("BATCH UPDATE: Container %s has network_mode dependency on %s - will use compose recreation", cont.Name, depName)
-		}
-	}
-
-	// Stop, remove, recreate, health-check, and mark each container individually (60-95%)
+	// Recreate, health-check, and mark each container individually (60-95%)
 	// All phases merged into one per-container loop so the frontend gets continuous SSE events.
 	successCount := 0
 	failCount := 0
@@ -1127,9 +1105,6 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			continue
 		}
 
-		targetVersion := targetVersions[cont.Name]
-		newImageRef := replaceImageTag(cont.Image, targetVersion)
-
 		baseProgress := 60 + (i * 35 / len(orderedContainers))
 
 		var failReason string // tracks why a container failed for the batch detail message
@@ -1137,100 +1112,13 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		// Update DB status so poller can report progress even if SSE drops
 		o.updateBatchDetailStatus(ctx, operationID, cont.Name, "in_progress", fmt.Sprintf("Updating %s", cont.Name))
 
-		// Check if this container needs compose-based recreation (network_mode dependency)
-		if networkModeContainers[cont.Name] {
-			o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress, fmt.Sprintf("Recreating %s", cont.Name))
-			log.Printf("BATCH UPDATE: Using compose recreation for %s (network_mode dependency)", cont.Name)
-			if err := o.recreateContainerWithCompose(ctx, cont); err != nil {
-				log.Printf("BATCH UPDATE: Compose recreation failed for %s: %v", cont.Name, err)
-				failReason = fmt.Sprintf("Compose recreation failed: %v", err)
-			} else {
-				log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
-			}
+		// Use compose-based recreation (consistent with single-container update path)
+		o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress, fmt.Sprintf("Recreating %s", cont.Name))
+		if err := o.recreateContainerWithCompose(ctx, cont); err != nil {
+			log.Printf("BATCH UPDATE: Compose recreation failed for %s: %v", cont.Name, err)
+			failReason = fmt.Sprintf("Compose recreation failed: %v", err)
 		} else {
-			// SDK-based: stop → remove → create → start
-			// Use distinct stage names so each sub-step appears in the frontend activity log
-			o.publishProgress(operationID, cont.Name, stackName, "stopping", baseProgress, fmt.Sprintf("Stopping %s", cont.Name))
-			log.Printf("BATCH UPDATE: Stopping %s", cont.Name)
-			timeout := 3
-			if err := o.dockerSDK.ContainerStop(ctx, cont.Name, dockerContainer.StopOptions{Timeout: &timeout}); err != nil {
-				log.Printf("BATCH UPDATE: Warning - failed to stop %s: %v", cont.Name, err)
-			}
-
-			inspect, err := o.dockerSDK.ContainerInspect(ctx, cont.Name)
-			if err != nil {
-				log.Printf("BATCH UPDATE: Failed to inspect %s: %v", cont.Name, err)
-				failReason = fmt.Sprintf("Failed to inspect container: %v", err)
-			} else {
-				// Save old image for recovery if creation fails
-				oldImage := inspect.Config.Image
-
-				// Remove and recreate container
-				o.publishProgress(operationID, cont.Name, stackName, "removing", baseProgress+1, fmt.Sprintf("Removing %s", cont.Name))
-				if err := o.dockerSDK.ContainerRemove(ctx, cont.Name, dockerContainer.RemoveOptions{}); err != nil {
-					log.Printf("BATCH UPDATE: Failed to remove %s: %v", cont.Name, err)
-					failReason = fmt.Sprintf("Failed to remove container: %v", err)
-				} else {
-					// Create with new image
-					o.publishProgress(operationID, cont.Name, stackName, "recreating", baseProgress+2, fmt.Sprintf("Creating %s with new image", cont.Name))
-					newConfig := inspect.Config
-					newConfig.Image = newImageRef
-
-					// Clear hostname if using container network mode (hostname is inherited from the network source)
-					// Without this, Docker returns "conflicting options: hostname and the network mode"
-					if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
-						newConfig.Hostname = ""
-						newConfig.Domainname = ""
-					}
-
-					networkingConfig := &network.NetworkingConfig{
-						EndpointsConfig: inspect.NetworkSettings.Networks,
-					}
-
-					_, createErr := o.dockerSDK.ContainerCreate(ctx, newConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
-					if createErr != nil {
-						log.Printf("BATCH UPDATE: SDK creation failed for %s: %v, attempting fallback", cont.Name, createErr)
-
-						// Fallback 1: Try compose-based recreation
-						composeErr := o.recreateContainerWithCompose(ctx, cont)
-						if composeErr == nil {
-							log.Printf("BATCH UPDATE: Compose fallback succeeded for %s", cont.Name)
-						} else {
-							log.Printf("BATCH UPDATE: Compose fallback failed for %s: %v", cont.Name, composeErr)
-
-							// Fallback 2: Try to restore with old image to prevent orphaning
-							log.Printf("BATCH UPDATE: Attempting to restore %s with old image %s", cont.Name, oldImage)
-							restoreConfig := inspect.Config
-							restoreConfig.Image = oldImage
-							if strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:") {
-								restoreConfig.Hostname = ""
-								restoreConfig.Domainname = ""
-							}
-
-							_, restoreErr := o.dockerSDK.ContainerCreate(ctx, restoreConfig, inspect.HostConfig, networkingConfig, nil, cont.Name)
-							if restoreErr != nil {
-								log.Printf("BATCH UPDATE: CRITICAL - Failed to restore %s with old image: %v (container orphaned!)", cont.Name, restoreErr)
-							} else {
-								if startErr := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); startErr != nil {
-									log.Printf("BATCH UPDATE: Failed to start restored container %s: %v", cont.Name, startErr)
-								} else {
-									log.Printf("BATCH UPDATE: Restored %s with old image (update failed but container recovered)", cont.Name)
-								}
-							}
-							failReason = fmt.Sprintf("Recreation failed: %v", createErr)
-						}
-					} else {
-						// Start container
-						o.publishProgress(operationID, cont.Name, stackName, "starting", baseProgress+3, fmt.Sprintf("Starting %s", cont.Name))
-						if err := o.dockerSDK.ContainerStart(ctx, cont.Name, dockerContainer.StartOptions{}); err != nil {
-							log.Printf("BATCH UPDATE: Failed to start %s: %v", cont.Name, err)
-							failReason = fmt.Sprintf("Failed to start container: %v", err)
-						} else {
-							log.Printf("BATCH UPDATE: Successfully recreated %s with %s", cont.Name, newImageRef)
-						}
-					}
-				}
-			}
+			log.Printf("BATCH UPDATE: Successfully recreated %s with compose", cont.Name)
 		}
 
 		if failReason != "" {

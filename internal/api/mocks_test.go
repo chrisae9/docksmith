@@ -382,6 +382,18 @@ func (m *MockStorage) DeleteScriptAssignment(ctx context.Context, containerName 
 	return nil
 }
 
+func (m *MockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
+	return storage.OperationQueryResult{}, nil
+}
+
+func (m *MockStorage) DeleteAllHistory(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *MockStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (m *MockStorage) Close() error {
 	return nil
 }

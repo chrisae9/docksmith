@@ -460,7 +460,7 @@ export interface UnifiedContainerItem {
 
 // API Response types
 export type CheckResponse = APIResponse<DiscoveryResult>;
-export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number }>;
+export type OperationsResponse = APIResponse<{ operations: UpdateOperation[]; count: number; next_cursor?: string; has_more?: boolean }>;
 export type HistoryResponse = APIResponse<{ history: HistoryEntry[]; count: number }>;
 export type HealthCheckResponse = APIResponse<HealthResponse>;
 export type DockerConfigResponse = APIResponse<DockerRegistryInfo>;

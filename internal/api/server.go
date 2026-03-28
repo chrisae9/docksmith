@@ -192,8 +192,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux, staticDir string) {
 	mux.HandleFunc("GET /api/operations/{id}", s.handleOperationByID)
 	mux.HandleFunc("GET /api/operations/group/{groupId}", s.handleOperationsByGroup)
 
+	// Settings
+	mux.HandleFunc("GET /api/settings/{key}", s.handleGetSetting)
+	mux.HandleFunc("PUT /api/settings/{key}", s.handleSetSetting)
+
 	// Check and update history
 	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("DELETE /api/history/clear", s.handleClearHistory)
 
 	// Rollback policies
 	mux.HandleFunc("GET /api/policies", s.handlePolicies)
