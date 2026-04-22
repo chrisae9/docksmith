@@ -156,23 +156,47 @@ export function useContainersData(): ContainersDataResult {
     }
   }, []);
 
-  // Background refresh — trigger background check, then fetch cached data
+  // Background refresh — trigger background check, wait for it to complete, then fetch cached data.
+  // Polls /api/status until checking=false and lastBackgroundRun advances past the trigger time,
+  // so the UI reflects the post-trigger cache rather than the pre-trigger one.
   const backgroundRefresh = useCallback(async () => {
     try {
+      const triggerAt = Date.now();
       const triggerRes = await fetch('/api/trigger-check', { method: 'POST' });
       if (!triggerRes.ok) {
         console.warn('Background check trigger failed:', triggerRes.status);
       }
-      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const pollDeadline = triggerAt + 15000;
+      let finalStatus: DiscoveryResult | null = null;
+      while (mountedRef.current && Date.now() < pollDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (!mountedRef.current) return;
+        const statusRes = await getContainerStatus();
+        if (!statusRes.success || !statusRes.data) continue;
+        const data = statusRes.data;
+        const lastRunMs = data.last_background_run ? Date.parse(data.last_background_run) : 0;
+        if (!data.checking && lastRunMs >= triggerAt) {
+          finalStatus = data;
+          break;
+        }
+      }
       if (!mountedRef.current) return;
-      const [explorerRes, statusRes] = await Promise.all([
-        getExplorerData(),
-        getContainerStatus(),
-      ]);
+
+      const explorerRes = await getExplorerData();
+      let resolvedStatus: DiscoveryResult | null = finalStatus;
+      let statusOk = finalStatus !== null;
+      if (!resolvedStatus) {
+        const statusRes = await getContainerStatus();
+        if (statusRes.success && statusRes.data) {
+          resolvedStatus = statusRes.data;
+          statusOk = true;
+        }
+      }
       if (!mountedRef.current) return;
       if (explorerRes.success && explorerRes.data) setExplorerData(explorerRes.data);
-      if (statusRes.success && statusRes.data) setStatusData(statusRes.data);
-      if (explorerRes.success || statusRes.success) setError(null);
+      if (resolvedStatus) setStatusData(resolvedStatus);
+      if (explorerRes.success || statusOk) setError(null);
     } catch (err) {
       if (!mountedRef.current) return;
       console.error('Background refresh failed:', err);

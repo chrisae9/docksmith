@@ -35,6 +35,7 @@ type CheckResultCache struct {
 	lastCacheRefresh   time.Time // When cache was last cleared (cache refresh)
 	lastBackgroundRun  time.Time // When background check last ran
 	checking           bool
+	pendingRecheck     bool      // A trigger arrived while a check was running; run again when done
 	cacheCleared       bool      // Flag to track if cache was recently cleared
 }
 
@@ -198,20 +199,29 @@ func (bc *BackgroundChecker) updateLastCacheRefreshIfNeeded(now time.Time, cache
 
 // runCheck performs a check and updates the cache
 func (bc *BackgroundChecker) runCheck() {
-	// Set checking flag
+	// Set checking flag. If a check is already running, record that another
+	// run is needed and return — the in-flight run will re-enter once done.
 	bc.cache.mu.Lock()
 	if bc.cache.checking {
+		bc.cache.pendingRecheck = true
 		bc.cache.mu.Unlock()
-		log.Printf("BACKGROUND_CHECKER: Check already in progress, skipping")
+		log.Printf("BACKGROUND_CHECKER: Check already in progress, queued follow-up")
 		return
 	}
 	bc.cache.checking = true
+	bc.cache.pendingRecheck = false
 	bc.cache.mu.Unlock()
 
 	defer func() {
 		bc.cache.mu.Lock()
 		bc.cache.checking = false
+		shouldRerun := bc.cache.pendingRecheck
+		bc.cache.pendingRecheck = false
 		bc.cache.mu.Unlock()
+		if shouldRerun {
+			log.Printf("BACKGROUND_CHECKER: Running queued follow-up check")
+			go bc.runCheck()
+		}
 	}()
 
 	log.Printf("BACKGROUND_CHECKER: Running check")
