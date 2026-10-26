@@ -490,7 +490,8 @@ export function ContainerPage() {
 
   const getUpdateButtonClass = (changeType: number): string => {
     switch (changeType) {
-      case ChangeType.PatchChange: return 'patch';
+      case ChangeType.PatchChange:
+      case ChangeType.BuildChange: return 'patch';
       case ChangeType.MinorChange: return 'minor';
       case ChangeType.MajorChange: return 'major';
       default: return 'primary';
@@ -500,6 +501,7 @@ export function ContainerPage() {
   const getUpdateButtonLabel = (changeType: number): string => {
     switch (changeType) {
       case ChangeType.PatchChange: return 'Patch';
+      case ChangeType.BuildChange: return 'Build';
       case ChangeType.MinorChange: return 'Minor';
       case ChangeType.MajorChange: return 'Major';
       case ChangeType.Downgrade: return 'Downgrade';

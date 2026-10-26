@@ -1091,7 +1091,7 @@ export function Containers() {
     const updatable = selected.filter(c => c.has_update_data && isUpdatable(c.update_status || ''));
     const mismatches = selected.filter(c => c.has_update_data && isMismatch(c.update_status || ''));
 
-    const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange).length;
+    const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange || c.change_type === ChangeType.BuildChange).length;
     const minorCount = updatable.filter(c => c.change_type === ChangeType.MinorChange).length;
     const majorCount = updatable.filter(c => c.change_type === ChangeType.MajorChange).length;
     const blockedCount = updatable.filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED').length;
