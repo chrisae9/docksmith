@@ -100,6 +100,14 @@ func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	// Enforce foreign keys (needed for ON DELETE CASCADE on notify_pending).
+	// Set after migrations so table-recreating migrations are unaffected; the
+	// pool holds a single, never-expiring connection so this persists.
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
 	log.Printf("Database initialized successfully at %s", dbPath)
 	return storage, nil
 }
