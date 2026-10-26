@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	_ "time/tzdata"
 
 	"github.com/chis/docksmith/internal/output"
 )

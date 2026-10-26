@@ -10,6 +10,11 @@ import type {
   ExplorerResponse,
   ContainerInfo,
   LabelOperationResult,
+  NotifySettings,
+  NotifySettingsPayload,
+  NotifyCronValidation,
+  NotifyService,
+  NotifyServiceInput,
 } from '../types/api';
 
 const API_BASE = '/api';
@@ -502,4 +507,49 @@ export async function fixComposeMismatch(containerName: string): Promise<APIResp
   return fetchAPI(`/fix-compose-mismatch/${encodeURIComponent(containerName)}`, {
     method: 'POST',
   });
+}
+
+// Notifications
+export async function getNotifySettings(): Promise<APIResponse<NotifySettingsPayload>> {
+  return fetchAPI('/notifications/settings');
+}
+
+export async function updateNotifySettings(settings: NotifySettings): Promise<APIResponse<NotifySettingsPayload>> {
+  return fetchAPI('/notifications/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function validateNotifyCron(cron: string): Promise<APIResponse<NotifyCronValidation>> {
+  return fetchAPI('/notifications/validate-cron', {
+    method: 'POST',
+    body: JSON.stringify({ cron }),
+  });
+}
+
+export async function listNotifyServices(): Promise<APIResponse<NotifyService[]>> {
+  return fetchAPI('/notifications/services');
+}
+
+export async function createNotifyService(service: NotifyServiceInput): Promise<APIResponse<NotifyService>> {
+  return fetchAPI('/notifications/services', {
+    method: 'POST',
+    body: JSON.stringify(service),
+  });
+}
+
+export async function updateNotifyService(id: number, service: NotifyServiceInput): Promise<APIResponse<NotifyService>> {
+  return fetchAPI(`/notifications/services/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(service),
+  });
+}
+
+export async function deleteNotifyService(id: number): Promise<APIResponse<{ deleted: boolean }>> {
+  return fetchAPI(`/notifications/services/${id}`, { method: 'DELETE' });
+}
+
+export async function testNotifyService(id: number): Promise<APIResponse<{ sent: boolean }>> {
+  return fetchAPI(`/notifications/services/${id}/test`, { method: 'POST' });
 }

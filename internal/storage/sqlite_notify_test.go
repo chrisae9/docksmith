@@ -24,8 +24,7 @@ func TestNotifyServices_CRUD(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{
-		Name: "tg", Type: "telegram", Delivery: "immediate", Enabled: true,
-		Events: []string{"update_available"}, Config: map[string]string{"token": "x"},
+		Name: "tg", Type: "telegram", Enabled: true, Config: map[string]string{"token": "x"},
 	})
 	if err != nil || id == 0 {
 		t.Fatalf("insert: id=%d err=%v", id, err)
@@ -35,7 +34,7 @@ func TestNotifyServices_CRUD(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get: ok=%v err=%v", ok, err)
 	}
-	if got.Name != "tg" || !got.Enabled || got.Config["token"] != "x" || len(got.Events) != 1 || got.LastSuccessAt != nil {
+	if got.Name != "tg" || !got.Enabled || got.Config["token"] != "x" || got.LastSuccessAt != nil {
 		t.Fatalf("unexpected row: %+v", got)
 	}
 
@@ -91,7 +90,7 @@ func TestNotifyServices_CRUD(t *testing.T) {
 func TestNotifyPending_UpsertReplacesByDedupKey(t *testing.T) {
 	s, _ := newNotifyTestStorage(t)
 	ctx := context.Background()
-	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{Name: "a", Type: "x", Delivery: "digest"})
+	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{Name: "a", Type: "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +129,10 @@ func TestNotifyPending_UpsertReplacesByDedupKey(t *testing.T) {
 func TestNotifyContainerStates_ReplaceDropsMissing(t *testing.T) {
 	s, dbPath := newNotifyTestStorage(t)
 	ctx := context.Background()
+	seen := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 
 	err := s.ReplaceNotifyContainerStates(ctx, map[string]NotifyContainerState{
-		"a": {ContainerName: "a", LastNotifiedVersion: "1.0", Blocked: true, CheckFailCount: 3, ComposeMismatch: true},
+		"a": {ContainerName: "a", LastNotifiedVersion: "1.0", Blocked: true, BlockedVersion: "1.1", CheckFailCount: 3, ComposeMismatch: true, LastSeen: seen},
 		"b": {ContainerName: "b", LastNotifiedDigest: "sha256:x", CheckFailNotified: true},
 	})
 	if err != nil {
@@ -149,10 +149,10 @@ func TestNotifyContainerStates_ReplaceDropsMissing(t *testing.T) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("got=%v err=%v", got, err)
 	}
-	if a := got["a"]; a.LastNotifiedVersion != "1.0" || !a.Blocked || a.CheckFailCount != 3 || !a.ComposeMismatch || a.CheckFailNotified {
+	if a := got["a"]; a.LastNotifiedVersion != "1.0" || !a.Blocked || a.BlockedVersion != "1.1" || !a.LastSeen.Equal(seen) || a.CheckFailCount != 3 || !a.ComposeMismatch || a.CheckFailNotified {
 		t.Fatalf("a wrong: %+v", a)
 	}
-	if b := got["b"]; b.LastNotifiedDigest != "sha256:x" || !b.CheckFailNotified || b.Blocked {
+	if b := got["b"]; b.LastNotifiedDigest != "sha256:x" || !b.CheckFailNotified || b.Blocked || !b.LastSeen.IsZero() {
 		t.Fatalf("b wrong: %+v", b)
 	}
 
@@ -168,7 +168,7 @@ func TestNotifyContainerStates_ReplaceDropsMissing(t *testing.T) {
 func TestNotifyPending_SurvivesReopen(t *testing.T) {
 	s, dbPath := newNotifyTestStorage(t)
 	ctx := context.Background()
-	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{Name: "a", Type: "x", Delivery: "digest"})
+	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{Name: "a", Type: "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,5 +190,68 @@ func TestNotifyPending_SurvivesReopen(t *testing.T) {
 	}
 	if rows[0].DedupKey != "k1" || rows[1].Payload != `{"k":"k2"}` {
 		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
+func TestNotifyPending_DeleteIfUnchanged(t *testing.T) {
+	s, _ := newNotifyTestStorage(t)
+	ctx := context.Background()
+	id, err := s.SaveNotifyService(ctx, NotifyServiceRow{Name: "a", Type: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"k1", "k2"} {
+		if err := s.UpsertNotifyPending(ctx, NotifyPendingRow{ServiceID: id, DedupKey: k, Kind: "k", Payload: `{"v":1}`}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read, _ := s.ListNotifyPending(ctx, id)
+	// k2 is replaced after it was read: same row id, newer payload.
+	if err := s.UpsertNotifyPending(ctx, NotifyPendingRow{ServiceID: id, DedupKey: "k2", Kind: "k", Payload: `{"v":2}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteNotifyPendingIfUnchanged(ctx, read); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.ListNotifyPending(ctx, id)
+	if len(rows) != 1 || rows[0].DedupKey != "k2" || rows[0].Payload != `{"v":2}` {
+		t.Fatalf("want only the replaced k2 row left, got %+v", rows)
+	}
+	if err := s.DeleteNotifyPendingIfUnchanged(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNotifySchemaCreatesFinalColumns(t *testing.T) {
+	s, _ := newNotifyTestStorage(t)
+	columns := func(query string) map[string]bool {
+		rows, err := s.db.Query(query)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		defer rows.Close()
+		names := make(map[string]bool)
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			names[name] = true
+		}
+		return names
+	}
+
+	state := columns(`SELECT name FROM pragma_table_info('notify_container_state')`)
+	for _, want := range []string{"last_seen", "blocked_version"} {
+		if !state[want] {
+			t.Fatalf("notify_container_state missing %s column", want)
+		}
+	}
+
+	services := columns(`SELECT name FROM pragma_table_info('notify_services')`)
+	for _, gone := range []string{"delivery", "events"} {
+		if services[gone] {
+			t.Fatalf("notify_services still has obsolete %s column", gone)
+		}
 	}
 }

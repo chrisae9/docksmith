@@ -71,6 +71,8 @@ A few specific problems I kept running into:
 
 **Dependency Handling** - Automatically restart containers that depend on updated services (like apps using a VPN container). See [restart-after label](docs/labels.md#docksmithrestart-after).
 
+**Notifications** - Get alerted about available updates by SMTP email, ntfy, Discord, Telegram, Pushover, Gotify, Slack, a generic webhook, or any raw [shoutrrr](https://containrrr.dev/shoutrrr/) URL. Send immediately or as a scheduled summary, and tune per container with the `docksmith.notify`, `docksmith.notify-level`, and `docksmith.notify-digest` [labels](docs/labels.md).
+
 **History** - Track all updates, rollbacks, and operations. See what changed and when.
 
 ---
@@ -83,6 +85,7 @@ A few specific problems I kept running into:
 | `CACHE_TTL` | `1h` | Registry response cache duration |
 | `DB_PATH` | `/data/docksmith.db` | Database location |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `TZ` | `UTC` | Timezone used for the notification summary schedule (e.g. `America/Los_Angeles`) |
 | `GITHUB_TOKEN` | - | For private GHCR images |
 
 ### Registry Authentication

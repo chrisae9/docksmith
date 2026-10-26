@@ -589,3 +589,43 @@ func (m *bgCheckerMockStorage) DeleteHistoryBefore(ctx context.Context, before t
 func (m *bgCheckerMockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
 	return storage.OperationQueryResult{}, nil
 }
+
+func TestBackgroundChecker_ResultObserver(t *testing.T) {
+	bc := NewBackgroundChecker(nil, nil, nil, nil, time.Minute)
+	bc.notifyObserver(&DiscoveryResult{}) // no observer: no-op
+
+	type call struct {
+		r   *DiscoveryResult
+		seq uint64
+	}
+	got := make(chan call, 2)
+	release := make(chan struct{})
+	bc.SetResultObserver(func(ctx context.Context, r *DiscoveryResult, seq uint64) {
+		<-release
+		got <- call{r, seq}
+	})
+	want := &DiscoveryResult{TotalChecked: 3}
+	bc.notifyObserver(want) // must not block on the observer
+	bc.notifyObserver(want)
+	close(release)
+	seqs := map[uint64]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case c := <-got:
+			assert.Same(t, want, c.r)
+			seqs[c.seq] = true
+		case <-time.After(2 * time.Second):
+			t.Fatal("observer not called")
+		}
+	}
+	assert.Equal(t, map[uint64]bool{1: true, 2: true}, seqs, "each result gets an increasing sequence number")
+
+	done := make(chan struct{})
+	bc.SetResultObserver(func(ctx context.Context, r *DiscoveryResult, _ uint64) {
+		close(done)
+		panic("boom")
+	})
+	bc.notifyObserver(want) // a panicking observer must not crash the process
+	<-done
+	time.Sleep(20 * time.Millisecond)
+}

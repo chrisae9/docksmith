@@ -298,7 +298,7 @@ services:
 
 ### docksmith.notify-digest
 
-Override the global digest-change notification setting for this container. When `true`, a change in the image digest with no new version tag triggers a notification; when `false`, it does not.
+Override the global "Digest changed" event setting for this container (set to Off by default). With `true` the container is notified even when the global setting is Off (delivered in the summary). When `true`, a change in the image digest with no new version tag triggers a notification; when `false`, it does not.
 
 ```yaml
 services:

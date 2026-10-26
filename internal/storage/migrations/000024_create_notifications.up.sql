@@ -3,8 +3,6 @@ CREATE TABLE notify_services (
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
-    delivery TEXT NOT NULL DEFAULT 'immediate',
-    events TEXT NOT NULL DEFAULT '[]',
     config TEXT NOT NULL DEFAULT '{}',
     last_success_at TIMESTAMP,
     last_error TEXT NOT NULL DEFAULT '',
@@ -22,6 +20,8 @@ CREATE TABLE notify_container_state (
     check_fail_count INTEGER NOT NULL DEFAULT 0,
     check_fail_notified INTEGER NOT NULL DEFAULT 0,
     compose_mismatch INTEGER NOT NULL DEFAULT 0,
+    last_seen TIMESTAMP,
+    blocked_version TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

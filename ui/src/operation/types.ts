@@ -18,6 +18,7 @@ export interface RestartOperation {
     notify?: boolean;
     notify_digest?: boolean;
     notify_level?: string;
+    remove_labels?: string[];
     tag_regex?: string;
     script?: string;
     restart_after?: string;

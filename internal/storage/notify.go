@@ -15,9 +15,8 @@ const (
 // NotifyServiceRow is a configured notification service.
 type NotifyServiceRow struct {
 	ID                                         int64
-	Name, Type, Delivery                       string
+	Name, Type                                 string
 	Enabled                                    bool
-	Events                                     []string
 	Config                                     map[string]string
 	LastSuccessAt, LastErrorAt, LastSummaryAt *time.Time
 	LastError                                  string
@@ -26,8 +25,10 @@ type NotifyServiceRow struct {
 // NotifyContainerState is the per-container notification dedup state.
 type NotifyContainerState struct {
 	ContainerName, LastNotifiedVersion, LastNotifiedDigest string
+	BlockedVersion                                         string // target that update_blocked was sent for
 	Blocked, CheckFailNotified, ComposeMismatch            bool
 	CheckFailCount                                         int
+	LastSeen                                               time.Time // last check that included the container; zero if unknown
 }
 
 // NotifyPendingRow is a queued (digest) notification awaiting delivery.
@@ -50,6 +51,7 @@ type NotifyStore interface {
 	UpsertNotifyPending(ctx context.Context, row NotifyPendingRow) error                            // on (service_id, dedup_key) conflict: replace payload, kind and created_at
 	ListNotifyPending(ctx context.Context, serviceID int64) ([]NotifyPendingRow, error)
 	DeleteNotifyPending(ctx context.Context, ids []int64) error
+	DeleteNotifyPendingIfUnchanged(ctx context.Context, rows []NotifyPendingRow) error // deletes each row only if its id and payload still match (one transaction)
 	DeleteNotifyPendingForContainer(ctx context.Context, containerName string) error
 }
 
