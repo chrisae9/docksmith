@@ -15,6 +15,9 @@ export interface RestartOperation {
     version_pin_major?: boolean;
     version_pin_minor?: boolean;
     version_pin_patch?: boolean;
+    notify?: boolean;
+    notify_digest?: boolean;
+    notify_level?: string;
     tag_regex?: string;
     script?: string;
     restart_after?: string;
@@ -113,6 +116,9 @@ export interface BatchLabelOperation {
     version_pin_major?: boolean;
     version_pin_minor?: boolean;
     version_pin_patch?: boolean;
+    notify?: boolean;
+    notify_digest?: boolean;
+    notify_level?: string;
     tag_regex?: string;
     script?: string;
   };

@@ -25,9 +25,13 @@ Configure Docksmith behavior using Docker labels in your compose files.
 | `docksmith.auto_rollback` | `true` | Auto-rollback on health check failure |
 | `docksmith.version-pin-major` | `true` | Stay within current major version |
 | `docksmith.version-pin-minor` | `true` | Stay within current minor version |
+| `docksmith.version-pin-patch` | `true` | Allow only build/suffix changes within current patch version |
 | `docksmith.tag-regex` | `^v?[0-9.]+$` | Only consider matching tags |
 | `docksmith.version-min` | `2.0.0` | Minimum version to consider |
 | `docksmith.version-max` | `3.0.0` | Maximum version to consider |
+| `docksmith.notify` | `false` | Mute all notifications for this container |
+| `docksmith.notify-level` | `major`, `minor`, `patch`, `build` | Minimum change level to notify about |
+| `docksmith.notify-digest` | `true`, `false` | Notify on digest-only changes |
 
 ## Basic Labels
 
@@ -211,6 +215,22 @@ On `redis:7.2.1`:
 - ✅ Updates to `7.2.2`, `7.2.99`
 - ❌ Won't update to `7.3.0`
 
+### docksmith.version-pin-patch
+
+Stay within the current patch version. Only build metadata or suffix changes are allowed (`major.minor.patch` stays the same).
+
+```yaml
+services:
+  sonarr:
+    image: linuxserver/sonarr:4.0.1-ls100
+    labels:
+      - docksmith.version-pin-patch=true
+```
+
+On `4.0.1-ls100`:
+- ✅ Updates to `4.0.1-ls101`
+- ❌ Won't update to `4.0.2-ls100`
+
 ### docksmith.tag-regex
 
 Only consider tags matching a regex pattern.
@@ -248,6 +268,44 @@ services:
     image: node:20
     labels:
       - docksmith.version-max=20.99.99
+```
+
+## Notification Labels
+
+### docksmith.notify
+
+Set to `false` to mute every notification about this container.
+
+```yaml
+services:
+  scratch:
+    image: alpine:3.19
+    labels:
+      - docksmith.notify=false
+```
+
+### docksmith.notify-level
+
+Override the global minimum notification level for this container. Valid values: `major`, `minor`, `patch`, `build`. Updates below this level are not notified.
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    labels:
+      - docksmith.notify-level=minor
+```
+
+### docksmith.notify-digest
+
+Override the global digest-change notification setting for this container. When `true`, a change in the image digest with no new version tag triggers a notification; when `false`, it does not.
+
+```yaml
+services:
+  app:
+    image: myorg/app:latest
+    labels:
+      - docksmith.notify-digest=true
 ```
 
 ## Common Patterns

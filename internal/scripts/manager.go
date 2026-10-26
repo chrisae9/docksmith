@@ -81,6 +81,21 @@ const (
 	// Example: Set to "true" on a container where you want to track beta releases
 	// Default: false (skip prerelease versions)
 	AllowPrereleaseLabel = "docksmith.allow-prerelease"
+
+	// NotifyLabel is the Docker label key to mute notifications for a container.
+	// When set to "false", no notification is sent about this container.
+	// Default: true (notifications enabled)
+	NotifyLabel = "docksmith.notify"
+
+	// NotifyLevelLabel is the Docker label key to override the minimum notification level.
+	// Valid values: major, minor, patch, build.
+	// Default: the global minimum notification level
+	NotifyLevelLabel = "docksmith.notify-level"
+
+	// NotifyDigestLabel is the Docker label key to override the global digest-change notification setting.
+	// Valid values: true, false.
+	// Default: the global setting
+	NotifyDigestLabel = "docksmith.notify-digest"
 )
 
 // Manager handles script discovery, validation, and assignment operations.

@@ -1,8 +1,14 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/scripts"
 )
 
@@ -27,6 +33,9 @@ func TestSetRollbackLabelCompleteness(t *testing.T) {
 		{scripts.VersionMaxLabel, "9.0", func(r *SetLabelsRequest) bool { return r.VersionMax != nil }},
 		{scripts.PreUpdateCheckLabel, "/path/to/script", func(r *SetLabelsRequest) bool { return r.Script != nil }},
 		{scripts.RestartAfterLabel, "some-container", func(r *SetLabelsRequest) bool { return r.RestartAfter != nil }},
+		{scripts.NotifyLabel, "false", func(r *SetLabelsRequest) bool { return r.Notify != nil }},
+		{scripts.NotifyLevelLabel, "minor", func(r *SetLabelsRequest) bool { return r.NotifyLevel != nil }},
+		{scripts.NotifyDigestLabel, "true", func(r *SetLabelsRequest) bool { return r.NotifyDigest != nil }},
 	}
 
 	s := &Server{}
@@ -53,4 +62,66 @@ func TestSetRollbackLabelCompleteness(t *testing.T) {
 			t.Errorf("Label %q is in docksmithLabels but not tested in setRollbackLabel completeness test", label)
 		}
 	}
+}
+
+func TestSetLabels_NotifyLevelValidation(t *testing.T) {
+	s := &Server{}
+
+	t.Run("invalid level returns 400", func(t *testing.T) {
+		body := strings.NewReader(`{"container":"web","notify_level":"huge"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/labels/set", body)
+		rec := httptest.NewRecorder()
+		s.handleLabelsSet(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("valid level is applied", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "docker-compose.yml")
+		yml := `services:
+  web:
+    image: nginx:1.25
+    container_name: web
+`
+		if err := os.WriteFile(path, []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cf, err := compose.LoadComposeFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service, err := cf.FindServiceByContainerName("web")
+		if err != nil {
+			t.Fatal(err)
+		}
+		level := "minor"
+		off := false
+		modified, err := applyLabelChanges(service, &SetLabelsRequest{NotifyLevel: &level, Notify: &off, NotifyDigest: &off})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := modified[scripts.NotifyLevelLabel]; got != "minor" {
+			t.Errorf("expected notify-level=minor in modified labels, got %q", got)
+		}
+		if got := modified[scripts.NotifyLabel]; got != "false" {
+			t.Errorf("expected notify=false in modified labels, got %q", got)
+		}
+		if got := modified[scripts.NotifyDigestLabel]; got != "false" {
+			t.Errorf("expected notify-digest=false in modified labels, got %q", got)
+		}
+		labels, err := service.GetAllLabels()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, want := range map[string]string{
+			scripts.NotifyLabel:       "false",
+			scripts.NotifyDigestLabel: "false",
+			scripts.NotifyLevelLabel:  "minor",
+		} {
+			if labels[key] != want {
+				t.Errorf("service label %s = %q, want %q", key, labels[key], want)
+			}
+		}
+	})
 }

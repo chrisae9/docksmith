@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
@@ -32,6 +33,9 @@ type SetLabelsRequest struct {
 	VersionMax       *string `json:"version_max,omitempty"`
 	Script           *string `json:"script,omitempty"`
 	RestartAfter *string `json:"restart_after,omitempty"`
+	Notify           *bool   `json:"notify,omitempty"`
+	NotifyDigest     *bool   `json:"notify_digest,omitempty"`
+	NotifyLevel      *string `json:"notify_level,omitempty"`
 	NoRestart        bool    `json:"no_restart,omitempty"`
 	Force            bool    `json:"force,omitempty"`
 }
@@ -72,6 +76,9 @@ var docksmithLabels = []string{
 	scripts.VersionMaxLabel,
 	scripts.PreUpdateCheckLabel,
 	scripts.RestartAfterLabel,
+	scripts.NotifyLabel,
+	scripts.NotifyLevelLabel,
+	scripts.NotifyDigestLabel,
 }
 
 // getDocksmithLabels extracts all docksmith labels from a container's labels
@@ -126,9 +133,17 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 
 	if req.Ignore == nil && req.AllowLatest == nil && req.AllowPrerelease == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil && req.VersionPinPatch == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
-		req.Script == nil && req.RestartAfter == nil {
+		req.Script == nil && req.RestartAfter == nil &&
+		req.Notify == nil && req.NotifyDigest == nil && req.NotifyLevel == nil {
 		RespondBadRequest(w, fmt.Errorf("no labels specified"))
 		return
+	}
+
+	if req.NotifyLevel != nil {
+		if err := validateNotifyLevel(*req.NotifyLevel); err != nil {
+			RespondBadRequest(w, err)
+			return
+		}
 	}
 
 	// Validate tag regex synchronously before launching async operation
@@ -380,62 +395,104 @@ func (s *Server) setLabelsWithConfig(ctx context.Context, req *SetLabelsRequest,
 		force:         req.Force,
 		batchGroupID:  batchGroupID,
 	}, func(service *compose.Service) (map[string]string, []string, error) {
-		modified := make(map[string]string)
-
-		// Apply boolean label updates
-		boolLabels := []struct {
-			value    *bool
-			labelKey string
-		}{
-			{req.Ignore, scripts.IgnoreLabel},
-			{req.AllowLatest, scripts.AllowLatestLabel},
-			{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
-			{req.VersionPinMajor, scripts.VersionPinMajorLabel},
-			{req.VersionPinMinor, scripts.VersionPinMinorLabel},
-			{req.VersionPinPatch, scripts.VersionPinPatchLabel},
-		}
-
-		for _, bl := range boolLabels {
-			if bl.value != nil {
-				val, err := applyBoolLabel(service, bl.labelKey, bl.value)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
-				}
-				modified[bl.labelKey] = val
-			}
-		}
-
-		// Validate tag regex before applying
-		if req.TagRegex != nil && *req.TagRegex != "" {
-			if err := validateRegexPattern(*req.TagRegex); err != nil {
-				return nil, nil, fmt.Errorf("invalid tag regex: %w", err)
-			}
-		}
-
-		// Apply string label updates
-		stringLabels := []struct {
-			value    *string
-			labelKey string
-		}{
-			{req.TagRegex, scripts.TagRegexLabel},
-			{req.VersionMin, scripts.VersionMinLabel},
-			{req.VersionMax, scripts.VersionMaxLabel},
-			{req.Script, scripts.PreUpdateCheckLabel},
-			{req.RestartAfter, scripts.RestartAfterLabel},
-		}
-
-		for _, sl := range stringLabels {
-			if sl.value != nil {
-				val, err := applyStringLabel(service, sl.labelKey, sl.value)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
-				}
-				modified[sl.labelKey] = val
-			}
-		}
-
-		return modified, nil, nil
+		modified, err := applyLabelChanges(service, req)
+		return modified, nil, err
 	})
+}
+
+// validateNotifyLevel checks that a notify-level value is one of major, minor, patch, build.
+// An empty value is allowed (it removes the label).
+func validateNotifyLevel(level string) error {
+	switch level {
+	case "", "major", "minor", "patch", "build":
+		return nil
+	}
+	return fmt.Errorf("invalid notify_level %q: must be one of major, minor, patch, build", level)
+}
+
+// applyLabelChanges applies the requested label changes to a compose service
+// and returns the labels that were modified.
+func applyLabelChanges(service *compose.Service, req *SetLabelsRequest) (map[string]string, error) {
+	// Validate before mutating any label
+	if req.NotifyLevel != nil {
+		if err := validateNotifyLevel(*req.NotifyLevel); err != nil {
+			return nil, err
+		}
+	}
+
+	modified := make(map[string]string)
+
+	// Apply boolean label updates
+	boolLabels := []struct {
+		value    *bool
+		labelKey string
+	}{
+		{req.Ignore, scripts.IgnoreLabel},
+		{req.AllowLatest, scripts.AllowLatestLabel},
+		{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
+		{req.VersionPinMajor, scripts.VersionPinMajorLabel},
+		{req.VersionPinMinor, scripts.VersionPinMinorLabel},
+		{req.VersionPinPatch, scripts.VersionPinPatchLabel},
+	}
+
+	for _, bl := range boolLabels {
+		if bl.value != nil {
+			val, err := applyBoolLabel(service, bl.labelKey, bl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
+			}
+			modified[bl.labelKey] = val
+		}
+	}
+
+	// Notify labels keep an explicit "false" (it is meaningful: mute / disable digest)
+	for _, nl := range []struct {
+		value    *bool
+		labelKey string
+	}{
+		{req.Notify, scripts.NotifyLabel},
+		{req.NotifyDigest, scripts.NotifyDigestLabel},
+	} {
+		if nl.value != nil {
+			val := strconv.FormatBool(*nl.value)
+			if err := service.SetLabel(nl.labelKey, val); err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", nl.labelKey, err)
+			}
+			modified[nl.labelKey] = val
+		}
+	}
+
+	// Validate tag regex before applying
+	if req.TagRegex != nil && *req.TagRegex != "" {
+		if err := validateRegexPattern(*req.TagRegex); err != nil {
+			return nil, fmt.Errorf("invalid tag regex: %w", err)
+		}
+	}
+
+	// Apply string label updates
+	stringLabels := []struct {
+		value    *string
+		labelKey string
+	}{
+		{req.TagRegex, scripts.TagRegexLabel},
+		{req.VersionMin, scripts.VersionMinLabel},
+		{req.VersionMax, scripts.VersionMaxLabel},
+		{req.Script, scripts.PreUpdateCheckLabel},
+		{req.RestartAfter, scripts.RestartAfterLabel},
+		{req.NotifyLevel, scripts.NotifyLevelLabel},
+	}
+
+	for _, sl := range stringLabels {
+		if sl.value != nil {
+			val, err := applyStringLabel(service, sl.labelKey, sl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
+			}
+			modified[sl.labelKey] = val
+		}
+	}
+
+	return modified, nil
 }
 
 // removeLabels implements the label removal logic (atomic: compose update + restart)
@@ -841,6 +898,14 @@ func (s *Server) setRollbackLabel(req *SetLabelsRequest, labelKey, value string)
 		req.Script = &value
 	case scripts.RestartAfterLabel:
 		req.RestartAfter = &value
+	case scripts.NotifyLabel:
+		v := value == "true"
+		req.Notify = &v
+	case scripts.NotifyDigestLabel:
+		v := value == "true"
+		req.NotifyDigest = &v
+	case scripts.NotifyLevelLabel:
+		req.NotifyLevel = &value
 	}
 }
 
