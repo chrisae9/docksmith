@@ -579,3 +579,13 @@ func TestLastCacheRefreshUpdatesWithStaggeredEntries(t *testing.T) {
 		assert.WithinDuration(t, now, lastRefresh, time.Second)
 	})
 }
+
+func (m *bgCheckerMockStorage) DeleteAllHistory(ctx context.Context) (int64, error) { return 0, nil }
+
+func (m *bgCheckerMockStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (m *bgCheckerMockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
+	return storage.OperationQueryResult{}, nil
+}
