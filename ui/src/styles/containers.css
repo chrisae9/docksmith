@@ -148,6 +148,7 @@
 .containers-page .status-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
 .containers-page .status-badge.minor { background: var(--color-badge-minor-dim); color: var(--color-badge-minor); }
 .containers-page .status-badge.patch { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); }
+.containers-page .status-badge.build { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); opacity: 0.7; }
 .containers-page .status-badge.rebuild { background: var(--color-slate-dim); color: var(--color-slate); }
 .containers-page .status-badge.blocked { background: var(--color-badge-blocked-dim); color: var(--color-badge-blocked); }
 .containers-page .status-badge.pin { background: var(--color-badge-pin-dim); color: var(--color-badge-pin); }

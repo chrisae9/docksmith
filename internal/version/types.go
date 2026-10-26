@@ -55,6 +55,8 @@ const (
 	Downgrade
 	// UnknownChange indicates version comparison is not possible
 	UnknownChange
+	// BuildChange indicates only the build number changed (e.g., -ls200 to -ls201)
+	BuildChange
 )
 
 // String returns the string representation of the change type.
@@ -70,6 +72,8 @@ func (ct ChangeType) String() string {
 		return "major"
 	case Downgrade:
 		return "downgrade"
+	case BuildChange:
+		return "build"
 	default:
 		return "unknown"
 	}

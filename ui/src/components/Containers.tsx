@@ -747,6 +747,7 @@ export function Containers() {
         if (c.change_type === ChangeType.MajorChange) return <span className="status-badge major" title="Major update">MAJOR</span>;
         if (c.change_type === ChangeType.MinorChange) return <span className="status-badge minor" title="Minor update">MINOR</span>;
         if (c.change_type === ChangeType.PatchChange) return <span className="status-badge patch" title="Patch update">PATCH</span>;
+        if (c.change_type === ChangeType.BuildChange) return <span className="status-badge build" title="Build update">BUILD</span>;
         return <span className="status-badge rebuild" title="Update available">REBUILD</span>;
       case 'UPDATE_AVAILABLE_BLOCKED': return <span className="status-badge blocked" title="Update blocked">BLOCKED</span>;
       case 'UP_TO_DATE':

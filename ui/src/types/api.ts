@@ -200,6 +200,7 @@ export const ChangeType = {
   MajorChange: 3,
   Downgrade: 4,
   UnknownChange: 5,
+  BuildChange: 6,
 } as const;
 
 // Helper function to get change type name
@@ -213,6 +214,8 @@ export function getChangeTypeName(changeType: number): string {
       return 'minor';
     case ChangeType.MajorChange:
       return 'major';
+    case ChangeType.BuildChange:
+      return 'build';
     case ChangeType.Downgrade:
       return 'downgrade';
     default:

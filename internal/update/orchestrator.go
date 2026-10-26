@@ -496,7 +496,7 @@ func (o *Orchestrator) groupIntoStacks(result *DiscoveryResult) {
 						stack.UpdatePriority = "major"
 					case version.MinorChange:
 						stack.UpdatePriority = "minor"
-					case version.PatchChange:
+					case version.PatchChange, version.BuildChange:
 						stack.UpdatePriority = "patch"
 					}
 				} else {
