@@ -155,10 +155,21 @@ func (r *Recreator) waitForNetworkModeProvider(ctx context.Context, c *docker.Co
 	defer cancel()
 
 	providerName := provider.target
+	firstListing := true
 	for {
 		containers, err := r.dockerClient.ListContainers(waitCtx)
 		if err != nil {
 			log.Printf("COMPOSE: Failed to list containers while waiting for network_mode provider: %v", err)
+		} else {
+			if firstListing && provider.prefix == "container" && !provider.found(containers, project) {
+				// The referenced container is stale (e.g. the provider was
+				// recreated and our HostConfig still points at its old ID) or
+				// simply gone. Don't stall for the full timeout: let compose
+				// try and the retry path handle the daemon's real error.
+				log.Printf("COMPOSE: network_mode provider %s not found, not waiting", provider.target)
+				return nil
+			}
+			firstListing = false
 		}
 		for _, candidate := range containers {
 			if !provider.matches(candidate, project) {
@@ -184,7 +195,6 @@ func (r *Recreator) waitForNetworkModeProvider(ctx context.Context, c *docker.Co
 type networkModeProvider struct {
 	prefix string // "container" or "service"
 	target string // container ID, container name, or compose service name
-	byID   bool   // target is a Docker container ID, not a name
 }
 
 // resolveNetworkModeProvider resolves the provider from the Docker API's
@@ -196,7 +206,7 @@ func resolveNetworkModeProvider(c *docker.Container) (networkModeProvider, bool)
 		// The Docker API is authoritative: only "container:<id>" shares a
 		// namespace. "host", "none" and "default" have no provider to wait for.
 		if id := containerNetworkModeID(c.NetworkMode); id != "" {
-			return networkModeProvider{prefix: "container", target: id, byID: true}, true
+			return networkModeProvider{prefix: "container", target: id}, true
 		}
 		return networkModeProvider{}, false
 	}
@@ -223,19 +233,28 @@ func containerNetworkModeID(networkMode string) string {
 }
 
 // matches reports whether the given container supplies the network namespace.
+// A container: target may be an ID (full or abbreviated) or a container name,
+// since the daemon stores the value verbatim and only resolves it at start.
 func (p networkModeProvider) matches(candidate docker.Container, project string) bool {
 	switch p.prefix {
 	case "container":
-		if p.byID {
-			return containerIDMatches(candidate.ID, p.target)
-		}
-		return candidate.Name == p.target
+		return containerIDMatches(candidate.ID, p.target) || candidate.Name == p.target
 	case "service":
 		return candidate.Labels["com.docker.compose.service"] == p.target &&
 			candidate.Labels["com.docker.compose.project"] == project
 	default:
 		return false
 	}
+}
+
+// found reports whether any listed container supplies the network namespace.
+func (p networkModeProvider) found(containers []docker.Container, project string) bool {
+	for _, candidate := range containers {
+		if p.matches(candidate, project) {
+			return true
+		}
+	}
+	return false
 }
 
 // containerIDMatches reports whether two container ID references identify the

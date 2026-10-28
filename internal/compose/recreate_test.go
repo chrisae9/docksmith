@@ -353,6 +353,58 @@ func TestRecreateWithCompose_WaitsForProviderFromDockerAPI(t *testing.T) {
 	assert.GreaterOrEqual(t, mock.calls, 3)
 }
 
+// TestRecreateWithCompose_StaleProviderIDDoesNotStall verifies that a
+// container:<id> target matching no listed container (e.g. the provider's old
+// ID after it was recreated) does not poll for the full timeout.
+func TestRecreateWithCompose_StaleProviderIDDoesNotStall(t *testing.T) {
+	origCmd, origPoll, origTimeout := dockerCommand, networkModePollInterval, networkModeWaitTimeout
+	t.Cleanup(func() {
+		dockerCommand = origCmd
+		networkModePollInterval = origPoll
+		networkModeWaitTimeout = origTimeout
+	})
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+	networkModeWaitTimeout = 50 * time.Millisecond
+
+	mock := &sequencedDockerClient{
+		states: []string{"running"},
+		name:   "tailscale",
+		id:     "fedcba9876543210",
+	}
+	r := NewRecreator(mock)
+	c := &docker.Container{
+		Name:        "traefik-ts",
+		NetworkMode: "container:deadbeef",
+		Labels:      map[string]string{"com.docker.compose.service": "traefik-ts"},
+	}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.Equal(t, 1, mock.calls, "a stale provider ID must not be polled")
+}
+
+// TestRecreateWithCompose_WaitsForProviderByName verifies that
+// container:<name> targets resolve against container names.
+func TestRecreateWithCompose_WaitsForProviderByName(t *testing.T) {
+	origCmd, origPoll := dockerCommand, networkModePollInterval
+	t.Cleanup(func() { dockerCommand = origCmd; networkModePollInterval = origPoll })
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+
+	mock := &sequencedDockerClient{
+		states: []string{"restarting", "restarting", "running"},
+		name:   "tailscale",
+		id:     "abc123def4567890",
+	}
+	r := NewRecreator(mock)
+	c := &docker.Container{
+		Name:        "traefik-ts",
+		NetworkMode: "container:tailscale",
+		Labels:      map[string]string{"com.docker.compose.service": "traefik-ts"},
+	}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.GreaterOrEqual(t, mock.calls, 3)
+}
+
 // TestRecreateWithCompose_FailsNamingProviderFromDockerAPI verifies the
 // timeout error names the provider container resolved from the Docker API.
 func TestRecreateWithCompose_FailsNamingProviderFromDockerAPI(t *testing.T) {
