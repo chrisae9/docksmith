@@ -912,6 +912,22 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	log.Printf("SELF-RESTART: Restart initiated, operation=%s will be completed on next startup", operationID)
 }
 
+// orderIngressLast moves ingress containers after all others, preserving the
+// relative order within each group. Dependency ordering still decides within
+// the non-ingress group; this only makes the UI outage as short as possible.
+func orderIngressLast(containers []*docker.Container) []*docker.Container {
+	last := make([]*docker.Container, 0, len(containers))
+	rest := make([]*docker.Container, 0, len(containers))
+	for _, c := range containers {
+		if docker.IsIngressContainer(c.Name, c.Image) {
+			last = append(last, c)
+			continue
+		}
+		rest = append(rest, c)
+	}
+	return append(rest, last...)
+}
+
 // executeBatchUpdate executes batch update workflow.
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string, forceContainers map[string]bool) {
 	defer o.releaseStackLock(stackName)
@@ -1089,6 +1105,8 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			}
 		}
 	}
+
+	orderedContainers = orderIngressLast(orderedContainers)
 
 	// Recreate, health-check, and mark each container individually (60-95%)
 	// All phases merged into one per-container loop so the frontend gets continuous SSE events.

@@ -488,6 +488,7 @@ export function Containers() {
 
     const skippedUpToDate = selected.length - containersToUpdate.length - mismatchContainers.length;
     const totalSkipped = skippedNoData + skippedUpToDate;
+    const ingressNames = allSelected.filter(c => c.is_ingress).map(c => c.name);
 
     if (containersToUpdate.length === 0 && mismatchContainers.length === 0) {
       setSelectedContainers(new Set());
@@ -510,7 +511,7 @@ export function Containers() {
     setSelectedContainers(new Set());
 
     if (mismatchContainers.length > 0 && containersToUpdate.length > 0) {
-      navigate('/operation', { state: { mixed: { updates: containersToUpdate, mismatches: mismatchContainers } } });
+      navigate('/operation', { state: { mixed: { updates: containersToUpdate, mismatches: mismatchContainers, ...(ingressNames.length > 0 ? { ingress_names: ingressNames } : {}) } } });
     } else if (mismatchContainers.length > 0) {
       if (mismatchContainers.length === 1) {
         navigate('/operation', { state: { fixMismatch: { containerName: mismatchContainers[0] } } });
@@ -518,7 +519,7 @@ export function Containers() {
         navigate('/operation', { state: { batchFixMismatch: { containerNames: mismatchContainers } } });
       }
     } else if (containersToUpdate.length > 0) {
-      navigate('/operation', { state: { update: { containers: containersToUpdate } } });
+      navigate('/operation', { state: { update: { containers: containersToUpdate, ingress_names: ingressNames } } });
     }
   };
 

@@ -28,6 +28,17 @@ export function OperationProgressPage() {
   // Parse operation info from navigation state
   const operationInfo = useMemo(() => parseLocationState(location.state), [location.state]);
 
+  // Ingress names for the offline note, captured once: the executor clears
+  // location.state on mount, and a refreshed page has no state at all — in
+  // both cases the note falls back to its generic sentence.
+  const [ingressNames] = useState<string[]>(() => {
+    const nav = location.state as {
+      update?: { ingress_names?: string[] };
+      mixed?: { ingress_names?: string[] };
+    } | null;
+    return nav?.update?.ingress_names ?? nav?.mixed?.ingress_names ?? [];
+  });
+
   // URL params for recovery mode (page refresh mid-operation)
   const urlOperationId = searchParams.get('id');
   const urlBatchGroupId = searchParams.get('group');
@@ -37,7 +48,7 @@ export function OperationProgressPage() {
   const [state, dispatch] = useOperationState();
 
   // SSE event stream
-  const { eventQueue, eventSeq, wasDisconnected, clearWasDisconnected, connected } = useEventStream();
+  const { eventQueue, eventSeq, wasDisconnected, clearWasDisconnected, connected, reconnecting } = useEventStream();
 
   // Hook: execute operation on mount (fresh operations only)
   useOperationExecutor({ operationInfo, dispatch, runId: state.runId });
@@ -194,6 +205,18 @@ export function OperationProgressPage() {
   return (
     <div className="progress-page operation-progress-page">
       <OperationHeader title={title} isComplete={isComplete} onBack={handleBack} />
+
+      {reconnecting && (
+        <div className="operation-offline-note" role="status">
+          <i className="fa-solid fa-wifi fa-fade"></i>
+          <span>
+            Connection to Docksmith lost. The operation continues on the server.{' '}
+            {ingressNames.length > 0
+              ? `Waiting for ${ingressNames.join(', ')} to come back — the UI stays offline until ingress restarts.`
+              : 'Progress resumes here automatically.'}
+          </span>
+        </div>
+      )}
 
       <main className="page-content">
         <SummaryBar
