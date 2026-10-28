@@ -188,7 +188,7 @@ func NewServer(cfg Config) *Server {
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 120 * time.Second, // Long timeout for discovery operations
+		WriteTimeout: serverWriteTimeout, // Long timeout for discovery operations
 		IdleTimeout:  60 * time.Second,
 	}
 

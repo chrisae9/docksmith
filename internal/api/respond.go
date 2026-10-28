@@ -3,14 +3,23 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/update"
 )
 
+// extendWriteDeadline refreshes the response write budget. A long synchronous
+// handler can outlive http.Server.WriteTimeout, which would make the response
+// unwritable even though the work succeeded.
+func extendWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWriteGrace))
+}
+
 // RespondError writes an error response with the specified HTTP status code.
 // This is the unified error response function - prefer using this over specific status functions.
 func RespondError(w http.ResponseWriter, statusCode int, err error) {
+	extendWriteDeadline(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	output.WriteJSONError(w, err)
@@ -33,6 +42,7 @@ func RespondInternalError(w http.ResponseWriter, err error) {
 
 // RespondErrorWithData writes an error response that includes data (e.g., for partial failures)
 func RespondErrorWithData(w http.ResponseWriter, statusCode int, err error, data any) {
+	extendWriteDeadline(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	output.WriteJSONErrorWithData(w, err, data)
@@ -40,12 +50,14 @@ func RespondErrorWithData(w http.ResponseWriter, statusCode int, err error, data
 
 // RespondSuccess writes a 200 OK response with data
 func RespondSuccess(w http.ResponseWriter, data any) {
+	extendWriteDeadline(w)
 	w.Header().Set("Content-Type", "application/json")
 	output.WriteJSONData(w, data)
 }
 
 // RespondNoContent writes a 204 No Content response
 func RespondNoContent(w http.ResponseWriter) {
+	extendWriteDeadline(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

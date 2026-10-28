@@ -103,6 +103,9 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 // isHighFrequencyEndpoint returns true for endpoints that are called frequently
 // and should use debug logging to avoid log spam.
 func isHighFrequencyEndpoint(path string) bool {
