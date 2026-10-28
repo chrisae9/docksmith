@@ -41,6 +41,7 @@ type Server struct {
 	notifier              *notify.Notifier    // nil when notifyStore is nil
 	notifyCtx             context.Context
 	notifyCancel          context.CancelFunc
+	explorerCache         *explorerCache
 }
 
 // Config holds configuration for the API server
@@ -166,6 +167,7 @@ func NewServer(cfg Config) *Server {
 		notifier:              notifier,
 		notifyCtx:             notifyCtx,
 		notifyCancel:          notifyCancel,
+		explorerCache:         newExplorerCache(explorerCacheTTL),
 	}
 
 	// Setup HTTP server with middleware chain

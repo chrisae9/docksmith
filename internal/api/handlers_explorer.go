@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -21,13 +22,24 @@ type ExplorerData struct {
 // handleExplorer returns combined data for the explorer view
 // GET /api/explorer
 func (s *Server) handleExplorer(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// Task 8 will derive this from the include_volume_sizes query flag.
+	key := "default"
+	data, err := s.explorerCache.get(r.Context(), key, func(ctx context.Context) (*ExplorerData, error) {
+		return s.computeExplorer(ctx, false)
+	})
+	if err != nil {
+		RespondInternalError(w, err)
+		return
+	}
+	RespondSuccess(w, data)
+}
 
+// computeExplorer gathers all data needed by the explorer view.
+func (s *Server) computeExplorer(ctx context.Context, includeVolumeSizes bool) (*ExplorerData, error) {
 	// First, fetch raw containers (needed by images and volumes to check usage)
 	rawContainers, err := s.dockerService.GetClient().ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
-		RespondInternalError(w, fmt.Errorf("failed to list containers: %w", err))
-		return
+		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
 	// Fetch remaining data in parallel using errgroup
@@ -80,8 +92,7 @@ func (s *Server) handleExplorer(w http.ResponseWriter, r *http.Request) {
 
 	// Wait for all goroutines to complete
 	if err := g.Wait(); err != nil {
-		RespondInternalError(w, err)
-		return
+		return nil, err
 	}
 
 	// Group containers by stack
@@ -101,13 +112,13 @@ func (s *Server) handleExplorer(w http.ResponseWriter, r *http.Request) {
 		standaloneContainers = []docker.ContainerExplorerItem{}
 	}
 
-	RespondSuccess(w, ExplorerData{
+	return &ExplorerData{
 		ContainerStacks:      containerStacks,
 		StandaloneContainers: standaloneContainers,
 		Images:               images,
 		Networks:             networks,
 		Volumes:              volumes,
-	})
+	}, nil
 }
 
 // handleImages returns all Docker images
