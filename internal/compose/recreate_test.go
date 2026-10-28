@@ -2,7 +2,9 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -245,3 +247,132 @@ func TestWaitForHealthy_ContextCancellation(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestIsNetworkNamespaceRace(t *testing.T) {
+	incident := `Error response from daemon: cannot join network namespace of container: Container 42fb503e6b6f is restarting, wait until the container is running`
+	assert.True(t, isNetworkNamespaceRace([]byte(incident)))
+	assert.False(t, isNetworkNamespaceRace([]byte("Error response from daemon: pull access denied")))
+}
+
+func TestRecreateWithCompose_RetriesNetworkNamespaceRace(t *testing.T) {
+	var upCalls int
+	orig := dockerCommand
+	t.Cleanup(func() { dockerCommand = orig })
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "compose" {
+			upCalls++
+			if upCalls == 1 {
+				return []byte("cannot join network namespace of container: Container x is restarting, wait until the container is running"), errors.New("exit status 1")
+			}
+			return []byte("ok"), nil
+		}
+		return []byte(""), nil
+	}
+
+	r := NewRecreator(&mockDockerClient{})
+	c := &docker.Container{Name: "qbittorrent", Labels: map[string]string{
+		"com.docker.compose.service": "qbittorrent",
+	}}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.Equal(t, 2, upCalls)
+}
+
+func TestRecreateWithCompose_SkipsWaitWithoutNetworkMode(t *testing.T) {
+	calls := 0
+	origCmd := dockerCommand
+	t.Cleanup(func() { dockerCommand = origCmd })
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+
+	mock := &countingDockerClient{listCalls: &calls}
+	r := NewRecreator(mock)
+	c := &docker.Container{Name: "app", Labels: map[string]string{"com.docker.compose.service": "app"}}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.Zero(t, calls, "must not list containers when the target has no network_mode label")
+}
+
+func TestRecreateWithCompose_WaitsForProvider(t *testing.T) {
+	origCmd, origPoll := dockerCommand, networkModePollInterval
+	t.Cleanup(func() { dockerCommand = origCmd; networkModePollInterval = origPoll })
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+
+	mock := &sequencedDockerClient{states: []string{"restarting", "restarting", "running"}}
+	r := NewRecreator(mock)
+	c := &docker.Container{Name: "qbittorrent", Labels: map[string]string{
+		"com.docker.compose.service":      "qbittorrent",
+		"com.docker.compose.project":      "engager",
+		"com.docker.compose.network_mode": "service:gluetun",
+	}}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.GreaterOrEqual(t, mock.calls, 3)
+}
+
+func TestRecreateWithCompose_FailsWhenProviderNeverRunning(t *testing.T) {
+	origCmd, origPoll, origTimeout := dockerCommand, networkModePollInterval, networkModeWaitTimeout
+	t.Cleanup(func() {
+		dockerCommand = origCmd
+		networkModePollInterval = origPoll
+		networkModeWaitTimeout = origTimeout
+	})
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+	networkModeWaitTimeout = 5 * time.Millisecond
+
+	mock := &sequencedDockerClient{states: []string{"restarting", "restarting", "restarting"}}
+	r := NewRecreator(mock)
+	c := &docker.Container{Name: "qbittorrent", Labels: map[string]string{
+		"com.docker.compose.service":      "qbittorrent",
+		"com.docker.compose.project":      "engager",
+		"com.docker.compose.network_mode": "service:gluetun",
+	}}
+	err := r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gluetun")
+}
+
+type countingDockerClient struct{ listCalls *int }
+
+func (m *countingDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
+	*m.listCalls++
+	return nil, nil
+}
+func (m *countingDockerClient) IsLocalImage(ctx context.Context, imageName string) (bool, error) {
+	return false, nil
+}
+func (m *countingDockerClient) GetImageVersion(ctx context.Context, imageName string) (string, error) {
+	return "", nil
+}
+func (m *countingDockerClient) GetImageDigest(ctx context.Context, imageName string) (string, error) {
+	return "", nil
+}
+func (m *countingDockerClient) Close() error { return nil }
+
+// sequencedDockerClient returns a gluetun provider whose state walks through
+// states on each ListContainers call (last value sticks).
+type sequencedDockerClient struct {
+	states []string
+	calls  int
+}
+
+func (m *sequencedDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
+	state := m.states[len(m.states)-1]
+	if m.calls < len(m.states) {
+		state = m.states[m.calls]
+	}
+	m.calls++
+	return []docker.Container{{
+		Name:   "gluetun",
+		State:  state,
+		Labels: map[string]string{"com.docker.compose.service": "gluetun", "com.docker.compose.project": "engager"},
+	}}, nil
+}
+func (m *sequencedDockerClient) IsLocalImage(ctx context.Context, imageName string) (bool, error) {
+	return false, nil
+}
+func (m *sequencedDockerClient) GetImageVersion(ctx context.Context, imageName string) (string, error) {
+	return "", nil
+}
+func (m *sequencedDockerClient) GetImageDigest(ctx context.Context, imageName string) (string, error) {
+	return "", nil
+}
+func (m *sequencedDockerClient) Close() error { return nil }
