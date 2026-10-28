@@ -278,6 +278,8 @@ export interface ContainerExplorerItem {
   stack?: string;
   created: number;
   networks: string[]; // Network names this container is connected to
+  is_ingress?: boolean;
+  is_self?: boolean;
 }
 
 // Docker image info for explorer
@@ -437,6 +439,8 @@ export interface UnifiedContainerItem {
   stack?: string;
   created: number;
   networks: string[];
+  is_ingress?: boolean;
+  is_self?: boolean;
 
   // From ContainerInfo (update checker cache) — all optional
   container_name?: string;

@@ -14,6 +14,8 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+
+	"github.com/chis/docksmith/internal/selfupdate"
 )
 
 // Service implements the Client interface using the Docker SDK.
@@ -477,6 +479,8 @@ type ContainerExplorerItem struct {
 	Stack        string   `json:"stack,omitempty"`
 	Created      int64    `json:"created"`
 	Networks     []string `json:"networks"` // Network names this container is connected to
+	IsIngress    bool     `json:"is_ingress"`
+	IsSelf       bool     `json:"is_self"`
 }
 
 // ListContainersForExplorer returns containers formatted for the explorer view.
@@ -487,6 +491,23 @@ func (s *Service) ListContainersForExplorer(ctx context.Context) ([]ContainerExp
 	}
 
 	result := make([]ContainerExplorerItem, 0, len(rawContainers))
+
+	// Classify ingress once for the whole listing so network-mode dependents
+	// can be resolved against every container.
+	candidates := make([]IngressCandidate, 0, len(rawContainers))
+	for _, c := range rawContainers {
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		candidates = append(candidates, IngressCandidate{
+			Name:   name,
+			Image:  c.Image,
+			Labels: c.Labels,
+		})
+	}
+	ingress := ComputeIngress(candidates)
+
 	for _, c := range rawContainers {
 		// Extract container name (trim leading /)
 		name := ""
@@ -527,6 +548,8 @@ func (s *Service) ListContainersForExplorer(ctx context.Context) ([]ContainerExp
 			Stack:        stack,
 			Created:      c.Created,
 			Networks:     networks,
+			IsIngress:    ingress[name],
+			IsSelf:       selfupdate.IsSelfContainer(c.ID, c.Image, name),
 		})
 	}
 

@@ -1106,6 +1106,7 @@ export function Containers() {
       hasRunning: selected.some(c => c.state === 'running'),
       hasStopped: selected.some(c => c.state !== 'running'),
       hasSelfUpdate: selected.some(c => c.name.toLowerCase().includes('docksmith') || c.image.toLowerCase().includes('docksmith')),
+      hasIngress: selected.some(c => c.is_ingress),
       hasBlocked: blockedCount > 0,
       patchCount,
       buildCount,
@@ -1377,6 +1378,9 @@ export function Containers() {
 
           {selectedAnalysis.hasSelfUpdate && (
             <div className="self-update-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Docksmith will restart to apply the update</span></div>
+          )}
+          {selectedAnalysis.hasIngress && (
+            <div className="ingress-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Selected containers serve the Docksmith UI. You will lose access until they restart.</span></div>
           )}
           <div className="selection-actions">
             <div className="selection-summary">

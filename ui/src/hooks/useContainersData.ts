@@ -67,6 +67,8 @@ function mergeContainerData(
       stack: explorer.stack,
       created: explorer.created,
       networks: explorer.networks,
+      is_ingress: explorer.is_ingress,
+      is_self: explorer.is_self,
       // Status fields (optional)
       container_name: status?.container_name,
       current_tag: status?.current_tag,
