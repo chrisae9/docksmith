@@ -206,7 +206,7 @@ export function OperationProgressPage() {
     <div className="progress-page operation-progress-page">
       <OperationHeader title={title} isComplete={isComplete} onBack={handleBack} />
 
-      {reconnecting && (
+      {reconnecting && state.phase === 'running' && (
         <div className="operation-offline-note" role="status">
           <i className="fa-solid fa-wifi fa-fade"></i>
           <span>
