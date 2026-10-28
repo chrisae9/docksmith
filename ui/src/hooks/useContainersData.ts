@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getContainerStatus, getExplorerData, checkContainers } from '../api/client';
+import { getContainerStatus, getExplorerData, checkContainers, triggerCheck } from '../api/client';
 import { useEventStream } from '../context/EventStreamContext';
 import { usePeriodicRefresh } from './usePeriodicRefresh';
 import type {
@@ -116,9 +116,15 @@ export function useContainersData(): ContainersDataResult {
   const [statusData, setStatusData] = useState<DiscoveryResult | null>(null);
   const hasInitialData = useRef(false);
   const mountedRef = useRef(true);
+  const inFlightRefresh = useRef<Promise<void> | null>(null);
+  const lastRefreshStart = useRef(0);
 
   useEffect(() => {
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      inFlightRefresh.current = null;
+      lastRefreshStart.current = 0;
+    };
   }, []);
 
   const { checkProgress, containerUpdated, reconnecting, wasDisconnected, clearWasDisconnected } = useEventStream();
@@ -159,20 +165,21 @@ export function useContainersData(): ContainersDataResult {
   // Background refresh — trigger background check, wait for it to complete, then fetch cached data.
   // Polls /api/status until checking=false and lastBackgroundRun advances past the trigger time,
   // so the UI reflects the post-trigger cache rather than the pre-trigger one.
-  const backgroundRefresh = useCallback(async () => {
+  const runRefresh = useCallback(async () => {
     try {
       const triggerAt = Date.now();
-      const triggerRes = await fetch('/api/trigger-check', { method: 'POST' });
-      if (!triggerRes.ok) {
-        console.warn('Background check trigger failed:', triggerRes.status);
+      const triggerRes = await triggerCheck();
+      if (!triggerRes.success) {
+        console.warn('Background check trigger failed:', triggerRes.error);
       }
 
       const pollDeadline = triggerAt + 15000;
       let finalStatus: DiscoveryResult | null = null;
-      while (mountedRef.current && Date.now() < pollDeadline) {
+      // No check was started if the trigger failed, so skip the poll loop.
+      while (triggerRes.success && mountedRef.current && Date.now() < pollDeadline) {
         await new Promise(resolve => setTimeout(resolve, 300));
         if (!mountedRef.current) return;
-        const statusRes = await getContainerStatus();
+        const statusRes = await getContainerStatus(5000);
         if (!statusRes.success || !statusRes.data) continue;
         const data = statusRes.data;
         const lastRunMs = data.last_background_run ? Date.parse(data.last_background_run) : 0;
@@ -202,6 +209,33 @@ export function useContainersData(): ContainersDataResult {
       console.error('Background refresh failed:', err);
     }
   }, []);
+
+  const startRefresh = useCallback(() => {
+    if (!mountedRef.current) return Promise.resolve();
+    lastRefreshStart.current = Date.now();
+    const run = runRefresh().finally(() => { inFlightRefresh.current = null; });
+    inFlightRefresh.current = run;
+    return run;
+  }, [runRefresh]);
+
+  // Automatic callers (visibility, focus, periodic) join an in-flight run and are
+  // debounced for 1s since the last start. Forced callers (Refresh button, container
+  // updated, reconnect) always run: they wait for the in-flight run, then start
+  // exactly one trailing run if none was started in the meantime.
+  const backgroundRefresh = useCallback((force = false): Promise<void> => {
+    const current = inFlightRefresh.current;
+    if (current) {
+      if (!force) return current;
+      return current.then(() => {
+        if (inFlightRefresh.current) return inFlightRefresh.current;
+        return startRefresh();
+      });
+    }
+    if (!force && Date.now() - lastRefreshStart.current < 1000) return Promise.resolve();
+    return startRefresh();
+  }, [startRefresh]);
+
+  const refresh = useCallback(() => backgroundRefresh(true), [backgroundRefresh]);
 
   // Cache refresh — clears cache and triggers fresh registry queries
   const cacheRefresh = useCallback(async () => {
@@ -250,7 +284,7 @@ export function useContainersData(): ContainersDataResult {
   useEffect(() => {
     if (!containerUpdated) return;
     if (containerUpdated.status === 'updated') {
-      backgroundRefresh();
+      backgroundRefresh(true);
     } else {
       fetchData();
     }
@@ -259,7 +293,7 @@ export function useContainersData(): ContainersDataResult {
   // Auto-refresh on reconnection
   useEffect(() => {
     if (wasDisconnected) {
-      backgroundRefresh();
+      backgroundRefresh(true);
       clearWasDisconnected();
     }
   }, [wasDisconnected, clearWasDisconnected, backgroundRefresh]);
@@ -287,7 +321,7 @@ export function useContainersData(): ContainersDataResult {
     checking: statusData?.checking ?? false,
     checkProgress,
     reconnecting,
-    refresh: backgroundRefresh,
+    refresh,
     cacheRefresh,
   };
 }
