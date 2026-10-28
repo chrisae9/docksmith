@@ -717,6 +717,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			log.Printf("SSE client disconnected")
 			return
+		case <-s.shutdownCh:
+			log.Printf("SSE client closed for server shutdown")
+			return
 		case <-heartbeat.C:
 			// SSE comment — invisible to EventSource but keeps the connection alive
 			fmt.Fprintf(w, ": keepalive\n\n")

@@ -14,6 +14,7 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/scripts"
+	"github.com/chis/docksmith/internal/selfupdate"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/google/uuid"
 )
@@ -299,6 +300,10 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 	return result, nil
 }
 
+// selfRecreate starts a helper container that recreates docksmith from outside
+// itself. Overridden in tests.
+var selfRecreate = selfupdate.RecreateSelf
+
 // executeLabelOperationAsync runs the label modification and restart in the background.
 // This is analogous to executeSingleUpdate in the update orchestrator.
 func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID string, container *docker.Container, cfg labelOperationConfig, composeFilePath, serviceName string, modify labelModifier) {
@@ -355,6 +360,11 @@ func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID str
 
 	// Stage 3: Restart container (30-90%)
 	if !cfg.noRestart {
+		if selfupdate.IsSelfContainer(container.ID, container.Image, container.Name) {
+			s.executeSelfLabelRestart(ctx, operationID, container, composeFilePath, serviceName, modified, removed)
+			return
+		}
+
 		s.publishLabelProgress(operationID, cfg.containerName, stackName, "stopping", 40, "Stopping container")
 
 		if err := s.restartContainerByService(ctx, composeFilePath, serviceName); err != nil {
@@ -396,6 +406,48 @@ func (s *Server) lockComposeFile(composeFilePath string) func() {
 		return func() {}
 	}
 	return s.composeMu.Lock(composeFilePath)
+}
+
+// executeSelfLabelRestart applies a label change to docksmith itself.
+// Docksmith cannot recreate itself with docker compose from inside the container
+// it is about to stop: the compose process is killed together with the container's
+// PID 1, leaving the container stopped and the operation unfinished. Instead the
+// operation is parked as pending_restart and a helper container performs the
+// recreate; resumePendingSelfUpdates() completes the operation on the next startup.
+func (s *Server) executeSelfLabelRestart(ctx context.Context, operationID string, container *docker.Container, composeFilePath, serviceName string, modified map[string]string, removed []string) {
+	stackName := container.Labels[ComposeProjectLabel]
+
+	log.Printf("LABEL_OP: %s is docksmith itself, delegating restart to helper container", container.Name)
+
+	s.publishLabelProgress(operationID, container.Name, stackName, "pending_restart", 90, "Docksmith is restarting to apply the label change...")
+
+	// Persist the prepared state before this process exits so history and
+	// rollback see the new labels after the restart.
+	if s.storageService != nil {
+		op, found, err := s.storageService.GetUpdateOperation(ctx, operationID)
+		if err != nil {
+			log.Printf("LABEL_OP: Warning - failed to load operation %s: %v", operationID, err)
+		} else if found {
+			op.Status = "pending_restart"
+			op.NewVersion = labelHistoryJSON(modified, removed)
+			op.ErrorMessage = "Label change prepared. Restarting docksmith to apply it..."
+			if err := s.storageService.SaveUpdateOperation(ctx, op); err != nil {
+				log.Printf("LABEL_OP: Warning - failed to save pending_restart status: %v", err)
+			}
+		}
+	}
+
+	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
+
+	go func() {
+		if err := selfRecreate(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+			log.Printf("LABEL_OP: Failed to start self-recreate helper for %s: %v", container.Name, err)
+			s.failLabelOperationWithEvent(context.Background(), operationID, container.Name, stackName,
+				fmt.Sprintf("failed to start self-recreate helper: %v", err))
+			return
+		}
+		log.Printf("LABEL_OP: Self-recreate helper started for operation=%s", operationID)
+	}()
 }
 
 // setLabels implements the label setting logic (atomic: compose update + restart)

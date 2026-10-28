@@ -233,7 +233,7 @@ func resumePendingSelfUpdates(ctx context.Context, store storage.Storage) {
 
 	for _, op := range ops {
 		// Verify this was a self-operation (docksmith operating on itself)
-		if !selfupdate.IsSelfByImage(op.ContainerName) && !selfupdate.IsSelfByName(op.ContainerName) {
+		if !selfupdate.IsSelf(op.ContainerID) && !selfupdate.IsSelfByName(op.ContainerName) {
 			// Not a self-operation, but has pending_restart status - this shouldn't happen
 			// Mark as failed to clean up the stuck state
 			log.Printf("Warning: Operation %s has pending_restart status but is not a self-operation (container: %s). Marking as failed.", op.OperationID, op.ContainerName)
@@ -249,11 +249,7 @@ func resumePendingSelfUpdates(ctx context.Context, store storage.Storage) {
 		op.CompletedAt = &now
 
 		// Set appropriate completion message based on operation type
-		if op.OperationType == "restart" {
-			op.ErrorMessage = "Self-restart completed successfully"
-		} else {
-			op.ErrorMessage = "Self-update completed successfully after restart"
-		}
+		op.ErrorMessage = selfOperationCompletionMessage(op.OperationType)
 
 		if err := store.SaveUpdateOperation(ctx, op); err != nil {
 			log.Printf("Warning: Failed to complete self-operation %s: %v", op.OperationID, err)
@@ -261,5 +257,18 @@ func resumePendingSelfUpdates(ctx context.Context, store storage.Storage) {
 		}
 
 		log.Printf("Completed self-%s operation %s", op.OperationType, op.OperationID)
+	}
+}
+
+// selfOperationCompletionMessage describes how a self-operation finished after
+// docksmith restarted itself.
+func selfOperationCompletionMessage(operationType string) string {
+	switch operationType {
+	case "restart":
+		return "Self-restart completed successfully"
+	case "label_change":
+		return "Label change completed successfully after restart"
+	default:
+		return "Self-update completed successfully after restart"
 	}
 }

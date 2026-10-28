@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -804,34 +803,25 @@ func (o *UpdateOrchestrator) executeSelfUpdate(ctx context.Context, operationID 
 		})
 	}
 
-	// Step 4: Trigger restart using docker compose
-	// This is done in a goroutine with a small delay to allow the SSE event to be sent
-	log.Printf("SELF-UPDATE: Triggering docker compose up -d to restart docksmith")
+	// Step 4: Hand the recreate to a helper container outside docksmith.
+	// Running docker compose here would kill this process when compose stops the
+	// container, before compose could create the replacement.
+	hostComposePath := o.getComposeFilePathForHost(container)
+	if hostComposePath == "" {
+		hostComposePath = resolvedPath
+	}
+	serviceName := selfComposeServiceName(container)
+
+	log.Printf("SELF-UPDATE: Starting helper container to recreate docksmith")
 	go func() {
-		// Give the SSE event time to be sent
-		time.Sleep(1 * time.Second)
-
-		// Get the host path for compose file (needed for docker compose command)
-		hostComposePath := o.getComposeFilePathForHost(container)
-		if hostComposePath == "" {
-			hostComposePath = resolvedPath
+		if err := selfupdate.RecreateSelf(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+			log.Printf("SELF-UPDATE: Failed to start self-recreate helper: %v", err)
+			return
 		}
-
-		// Run docker compose up -d to recreate with new image
-		// This will kill our process, which is expected
-		cmd := exec.Command("docker", "compose", "-f", hostComposePath, "up", "-d", "--force-recreate", container.Name)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		log.Printf("SELF-UPDATE: Executing: docker compose -f %s up -d --force-recreate %s", hostComposePath, container.Name)
-		if err := cmd.Run(); err != nil {
-			// We likely won't reach here because the container will restart
-			log.Printf("SELF-UPDATE: docker compose command returned: %v (this may be expected if container restarted)", err)
-		}
+		log.Printf("SELF-UPDATE: Self-recreate helper started, operation=%s will be completed on next startup", operationID)
 	}()
 
 	// Note: We don't mark as complete here - that happens on next startup via resumePendingSelfUpdates()
-	log.Printf("SELF-UPDATE: Restart initiated, operation=%s will be completed on next startup", operationID)
 }
 
 // executeSelfRestart handles the special case of docksmith restarting itself.
@@ -882,34 +872,34 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 		})
 	}
 
-	// Trigger restart using docker compose
-	// This is done in a goroutine with a small delay to allow the SSE event to be sent
-	log.Printf("SELF-RESTART: Triggering docker compose restart")
+	// Trigger the restart from a helper container outside docksmith.
+	// Running docker compose here would kill this process when compose stops the
+	// container, before compose could start it again.
+	hostComposePath := o.getComposeFilePathForHost(container)
+	if hostComposePath == "" {
+		hostComposePath = resolvedPath
+	}
+	serviceName := selfComposeServiceName(container)
+
+	log.Printf("SELF-RESTART: Starting helper container to restart docksmith")
 	go func() {
-		// Give the SSE event time to be sent
-		time.Sleep(1 * time.Second)
-
-		// Get the host path for compose file (needed for docker compose command)
-		hostComposePath := o.getComposeFilePathForHost(container)
-		if hostComposePath == "" {
-			hostComposePath = resolvedPath
+		if err := selfupdate.RestartSelf(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+			log.Printf("SELF-RESTART: Failed to start self-restart helper: %v", err)
+			return
 		}
-
-		// Run docker compose restart to restart the container
-		// This will kill our process, which is expected
-		cmd := exec.Command("docker", "compose", "-f", hostComposePath, "restart", container.Name)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		log.Printf("SELF-RESTART: Executing: docker compose -f %s restart %s", hostComposePath, container.Name)
-		if err := cmd.Run(); err != nil {
-			// We likely won't reach here because the container will restart
-			log.Printf("SELF-RESTART: docker compose command returned: %v (this may be expected if container restarted)", err)
-		}
+		log.Printf("SELF-RESTART: Self-restart helper started, operation=%s will be completed on next startup", operationID)
 	}()
 
 	// Note: We don't mark as complete here - that happens on next startup via resumePendingSelfUpdates()
-	log.Printf("SELF-RESTART: Restart initiated, operation=%s will be completed on next startup", operationID)
+}
+
+// selfComposeServiceName returns the compose service name for a container,
+// falling back to the container name when the label is missing.
+func selfComposeServiceName(container *docker.Container) string {
+	if name := container.Labels["com.docker.compose.service"]; name != "" {
+		return name
+	}
+	return container.Name
 }
 
 // orderUpdateBatch returns the batch in a single topological order that
