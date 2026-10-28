@@ -26,6 +26,15 @@ func TestComputeIngress_TraefikEnabledAppIsNotIngress(t *testing.T) {
 	assert.False(t, got["kometa"], "a container merely routed by Traefik is not ingress")
 }
 
+func TestComputeIngress_FollowsNetworkModeFromDockerAPI(t *testing.T) {
+	got := ComputeIngress([]IngressCandidate{
+		{ID: "aaaaaaaaaaaaaaaa", Name: "tailscale", Image: "tailscale/tailscale:latest", Labels: map[string]string{"com.docker.compose.service": "tailscale"}},
+		{ID: "bbbbbbbbbbbbbbbb", Name: "traefik-ts", Image: "nginx:latest", NetworkMode: "container:aaaa"},
+	})
+	assert.True(t, got["tailscale"])
+	assert.True(t, got["traefik-ts"], "a container whose Docker network mode points at an ingress container is ingress")
+}
+
 func TestComputeIngress_FollowsNetworkMode(t *testing.T) {
 	got := ComputeIngress([]IngressCandidate{
 		{Name: "tailscale", Image: "tailscale/tailscale:latest", Labels: map[string]string{"com.docker.compose.service": "tailscale"}},

@@ -143,57 +143,108 @@ func (r *Recreator) runComposeWithRetry(ctx context.Context, args []string) ([]b
 // container's network namespace (network_mode: service:<name> or
 // container:<name>) is running, or the wait timeout expires.
 func (r *Recreator) waitForNetworkModeProvider(ctx context.Context, c *docker.Container) error {
-	networkMode := c.Labels["com.docker.compose.network_mode"]
-	if networkMode == "" {
-		return nil
-	}
-
-	prefix, target, ok := strings.Cut(networkMode, ":")
-	if !ok || target == "" || (prefix != "service" && prefix != "container") {
+	provider, ok := resolveNetworkModeProvider(c)
+	if !ok {
 		return nil
 	}
 
 	project := c.Labels["com.docker.compose.project"]
-	log.Printf("COMPOSE: Waiting for network_mode provider %s:%s to be running", prefix, target)
+	log.Printf("COMPOSE: Waiting for network_mode provider %s:%s to be running", provider.prefix, provider.target)
 
 	waitCtx, cancel := context.WithTimeout(ctx, networkModeWaitTimeout)
 	defer cancel()
 
+	providerName := provider.target
 	for {
 		containers, err := r.dockerClient.ListContainers(waitCtx)
 		if err != nil {
 			log.Printf("COMPOSE: Failed to list containers while waiting for network_mode provider: %v", err)
 		}
-		for _, provider := range containers {
-			if !isNetworkModeProvider(provider, prefix, target, project) {
+		for _, candidate := range containers {
+			if !provider.matches(candidate, project) {
 				continue
 			}
-			if strings.EqualFold(provider.State, "running") {
-				log.Printf("COMPOSE: network_mode provider %s is running", target)
+			providerName = candidate.Name
+			if strings.EqualFold(candidate.State, "running") {
+				log.Printf("COMPOSE: network_mode provider %s is running", provider.target)
 				return nil
 			}
 		}
 
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("network mode provider %s is not running (waited %s)", target, networkModeWaitTimeout)
+			return fmt.Errorf("network mode provider %s is not running (waited %s)", providerName, networkModeWaitTimeout)
 		case <-time.After(networkModePollInterval):
 		}
 	}
 }
 
-// isNetworkModeProvider reports whether the given container supplies the
-// network namespace named by a network_mode prefix and target.
-func isNetworkModeProvider(provider docker.Container, prefix, target, project string) bool {
-	switch prefix {
+// networkModeProvider identifies which container supplies a container's
+// network namespace.
+type networkModeProvider struct {
+	prefix string // "container" or "service"
+	target string // container ID, container name, or compose service name
+	byID   bool   // target is a Docker container ID, not a name
+}
+
+// resolveNetworkModeProvider resolves the provider from the Docker API's
+// authoritative HostConfig.NetworkMode field, falling back to the compose
+// network_mode label for service: references (which Docker rewrites to
+// container:<id> on the created container).
+func resolveNetworkModeProvider(c *docker.Container) (networkModeProvider, bool) {
+	if c.NetworkMode != "" {
+		// The Docker API is authoritative: only "container:<id>" shares a
+		// namespace. "host", "none" and "default" have no provider to wait for.
+		if id := containerNetworkModeID(c.NetworkMode); id != "" {
+			return networkModeProvider{prefix: "container", target: id, byID: true}, true
+		}
+		return networkModeProvider{}, false
+	}
+
+	// No API value (older payloads, tests): fall back to the compose label.
+	label := c.Labels["com.docker.compose.network_mode"]
+	if label == "" {
+		return networkModeProvider{}, false
+	}
+	prefix, target, ok := strings.Cut(label, ":")
+	if !ok || target == "" || (prefix != "service" && prefix != "container") {
+		return networkModeProvider{}, false
+	}
+	return networkModeProvider{prefix: prefix, target: target}, true
+}
+
+// containerNetworkModeID extracts the container ID from a Docker
+// HostConfig.NetworkMode value of the form "container:<id>".
+func containerNetworkModeID(networkMode string) string {
+	if !strings.HasPrefix(networkMode, "container:") {
+		return ""
+	}
+	return strings.TrimPrefix(networkMode, "container:")
+}
+
+// matches reports whether the given container supplies the network namespace.
+func (p networkModeProvider) matches(candidate docker.Container, project string) bool {
+	switch p.prefix {
 	case "container":
-		return provider.Name == target
+		if p.byID {
+			return containerIDMatches(candidate.ID, p.target)
+		}
+		return candidate.Name == p.target
 	case "service":
-		return provider.Labels["com.docker.compose.service"] == target &&
-			provider.Labels["com.docker.compose.project"] == project
+		return candidate.Labels["com.docker.compose.service"] == p.target &&
+			candidate.Labels["com.docker.compose.project"] == project
 	default:
 		return false
 	}
+}
+
+// containerIDMatches reports whether two container ID references identify the
+// same container, allowing short IDs to match their full ID in either direction.
+func containerIDMatches(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
 // RestartWithCompose restarts a container using docker compose restart

@@ -4,9 +4,11 @@ import "strings"
 
 // IngressCandidate is the subset of container identity needed to classify ingress.
 type IngressCandidate struct {
-	Name   string
-	Image  string
-	Labels map[string]string
+	Name        string
+	Image       string
+	Labels      map[string]string
+	ID          string
+	NetworkMode string // Docker HostConfig.NetworkMode, e.g. "container:<id>"
 }
 
 // IsIngressContainer reports whether recreating this container takes down the
@@ -51,14 +53,18 @@ func ComputeIngress(candidates []IngressCandidate) map[string]bool {
 				continue
 			}
 			target := networkModeTarget(c.Labels)
-			if target == "" {
+			targetID := containerNetworkModeID(c.NetworkMode)
+			if target == "" && targetID == "" {
 				continue
 			}
 			for _, other := range candidates {
 				if !ingress[other.Name] {
 					continue
 				}
-				if target == other.Name || target == other.Labels["com.docker.compose.service"] {
+				labelMatch := target != "" &&
+					(target == other.Name || target == other.Labels["com.docker.compose.service"])
+				idMatch := targetID != "" && containerIDMatches(targetID, other.ID)
+				if labelMatch || idMatch {
 					ingress[c.Name] = true
 					changed = true
 					break
@@ -96,4 +102,22 @@ func networkModeTarget(labels map[string]string) string {
 		return strings.TrimPrefix(mode, "container:")
 	}
 	return ""
+}
+
+// containerNetworkModeID extracts the container ID from a Docker
+// HostConfig.NetworkMode value of the form "container:<id>".
+func containerNetworkModeID(networkMode string) string {
+	if !strings.HasPrefix(networkMode, "container:") {
+		return ""
+	}
+	return strings.TrimPrefix(networkMode, "container:")
+}
+
+// containerIDMatches reports whether two container ID references identify the
+// same container, allowing short IDs to match their full ID in either direction.
+func containerIDMatches(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }

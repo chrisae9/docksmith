@@ -182,6 +182,7 @@ func (s *Service) convertContainer(c container.Summary) Container {
 		Labels:       c.Labels,
 		Created:      c.Created,
 		Stack:        stack,
+		NetworkMode:  c.HostConfig.NetworkMode,
 	}
 }
 
@@ -501,9 +502,11 @@ func (s *Service) ListContainersForExplorer(ctx context.Context) ([]ContainerExp
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 		candidates = append(candidates, IngressCandidate{
-			Name:   name,
-			Image:  c.Image,
-			Labels: c.Labels,
+			Name:        name,
+			Image:       c.Image,
+			Labels:      c.Labels,
+			ID:          c.ID,
+			NetworkMode: c.HostConfig.NetworkMode,
 		})
 	}
 	ingress := ComputeIngress(candidates)

@@ -46,6 +46,7 @@ type Container struct {
 	Created        int64
 	PreUpdateCheck string // Path to pre-update check script from docksmith.pre-update-check label
 	Stack          string // Stack name from compose labels or manual definition
+	NetworkMode    string // Docker network mode, e.g. "default", "host", "container:<id>"
 }
 
 // StackDefinition represents a manual stack definition for grouping containers

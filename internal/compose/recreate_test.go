@@ -330,6 +330,58 @@ func TestRecreateWithCompose_FailsWhenProviderNeverRunning(t *testing.T) {
 	assert.Contains(t, err.Error(), "gluetun")
 }
 
+// TestRecreateWithCompose_WaitsForProviderFromDockerAPI verifies the wait is
+// driven by HostConfig.NetworkMode when no network_mode label is present.
+func TestRecreateWithCompose_WaitsForProviderFromDockerAPI(t *testing.T) {
+	origCmd, origPoll := dockerCommand, networkModePollInterval
+	t.Cleanup(func() { dockerCommand = origCmd; networkModePollInterval = origPoll })
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+
+	mock := &sequencedDockerClient{
+		states: []string{"restarting", "restarting", "running"},
+		name:   "tailscale",
+		id:     "abc123def4567890",
+	}
+	r := NewRecreator(mock)
+	c := &docker.Container{
+		Name:        "traefik-ts",
+		NetworkMode: "container:abc123",
+		Labels:      map[string]string{"com.docker.compose.service": "traefik-ts"},
+	}
+	require.NoError(t, r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml"))
+	assert.GreaterOrEqual(t, mock.calls, 3)
+}
+
+// TestRecreateWithCompose_FailsNamingProviderFromDockerAPI verifies the
+// timeout error names the provider container resolved from the Docker API.
+func TestRecreateWithCompose_FailsNamingProviderFromDockerAPI(t *testing.T) {
+	origCmd, origPoll, origTimeout := dockerCommand, networkModePollInterval, networkModeWaitTimeout
+	t.Cleanup(func() {
+		dockerCommand = origCmd
+		networkModePollInterval = origPoll
+		networkModeWaitTimeout = origTimeout
+	})
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+	networkModePollInterval = time.Millisecond
+	networkModeWaitTimeout = 5 * time.Millisecond
+
+	mock := &sequencedDockerClient{
+		states: []string{"restarting", "restarting", "restarting"},
+		name:   "tailscale",
+		id:     "abc123def4567890",
+	}
+	r := NewRecreator(mock)
+	c := &docker.Container{
+		Name:        "traefik-ts",
+		NetworkMode: "container:abc123",
+		Labels:      map[string]string{"com.docker.compose.service": "traefik-ts"},
+	}
+	err := r.RecreateWithCompose(context.Background(), c, "/host/docker-compose.yaml", "/container/docker-compose.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tailscale")
+}
+
 type countingDockerClient struct{ listCalls *int }
 
 func (m *countingDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
@@ -352,6 +404,8 @@ func (m *countingDockerClient) Close() error { return nil }
 type sequencedDockerClient struct {
 	states []string
 	calls  int
+	name   string
+	id     string
 }
 
 func (m *sequencedDockerClient) ListContainers(ctx context.Context) ([]docker.Container, error) {
@@ -360,10 +414,15 @@ func (m *sequencedDockerClient) ListContainers(ctx context.Context) ([]docker.Co
 		state = m.states[m.calls]
 	}
 	m.calls++
+	name := m.name
+	if name == "" {
+		name = "gluetun"
+	}
 	return []docker.Container{{
-		Name:   "gluetun",
+		ID:     m.id,
+		Name:   name,
 		State:  state,
-		Labels: map[string]string{"com.docker.compose.service": "gluetun", "com.docker.compose.project": "engager"},
+		Labels: map[string]string{"com.docker.compose.service": name, "com.docker.compose.project": "engager"},
 	}}, nil
 }
 func (m *sequencedDockerClient) IsLocalImage(ctx context.Context, imageName string) (bool, error) {
