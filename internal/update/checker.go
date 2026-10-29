@@ -770,7 +770,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	// Re-check pinnable status using findLatestVersion result
 	// This handles the case where resolveVersionFromDigest didn't find a semver tag,
 	// but findLatestVersion found one (they could point to the same image)
-	if update.Status == UpToDate && checkTag == "latest" && !allowLatest && latestVersion != "" && latestVersion != "latest" {
+	if update.Status == UpToDate && checkTag == "latest" && !allowLatest && latestVersion != "" && latestVersion != "latest" && c.isValidPinTarget(update.CurrentVersion, latestVersion) {
 		if update.LatestResolvedVersion == "" {
 			// No resolved version from digest lookup, use findLatestVersion result
 			update.LatestResolvedVersion = latestVersion
@@ -782,7 +782,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 
 	// For meta tag containers with updates, fall back to findLatestVersion for resolved version
 	// when digest-to-tag resolution failed (ListTagsWithDigests can return incomplete results)
-	if isMetaTag(checkTag) && update.LatestResolvedVersion == "" && latestVersion != "" && latestVersion != "latest" {
+	if isMetaTag(checkTag) && update.LatestResolvedVersion == "" && latestVersion != "" && latestVersion != "latest" && c.isValidPinTarget(update.CurrentVersion, latestVersion) {
 		update.LatestResolvedVersion = latestVersion
 		log.Printf("Container %s: Using findLatestVersion as resolved version: %s", container.Name, latestVersion)
 	}
@@ -922,7 +922,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 	// But only if we have an actual semantic version to recommend
 	if update.UsingLatestTag && update.CurrentVersion != "" && update.Status == UpToDate && !allowLatest {
 		// Check if we have a resolved semantic version TAG to recommend
-		if update.LatestResolvedVersion != "" {
+		if update.LatestResolvedVersion != "" && c.isValidPinTarget(update.CurrentVersion, update.LatestResolvedVersion) {
 			// Change status to indicate it should be pinned to semver
 			update.Status = UpToDatePinnable
 			update.RecommendedTag = update.LatestResolvedVersion
@@ -1066,6 +1066,18 @@ func (c *Checker) getCurrentVersion(ctx context.Context, imageName string) strin
 		return ""
 	}
 	return version
+}
+
+// isValidPinTarget reports whether candidateTag is safe to recommend for
+// migration: it must parse and be equal to or newer than the running version.
+// An unknown current version is never safe.
+func (c *Checker) isValidPinTarget(currentVersion, candidateTag string) bool {
+	current := c.versionParser.ParseTag(currentVersion)
+	candidate := c.versionParser.ParseTag(candidateTag)
+	if current == nil || candidate == nil {
+		return false
+	}
+	return c.versionComp.Compare(candidate, current) >= 0
 }
 
 // findLatestVersion finds the newest semantic version from a list of tags.
