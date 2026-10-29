@@ -491,6 +491,7 @@ func (c *Checker) checkContainer(ctx context.Context, container docker.Container
 			checkTag = strings.TrimPrefix(imgInfo.Tag.Full, imgInfo.Registry+"/"+imgInfo.Repository+":")
 		}
 	}
+	update.UsingFloatingTag = isMetaTag(checkTag)
 	update.CurrentSuffix = currentSuffix
 
 	// Query registry for available tags
