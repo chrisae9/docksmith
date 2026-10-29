@@ -590,6 +590,71 @@ func (m *bgCheckerMockStorage) QueryUpdateOperations(ctx context.Context, opts s
 	return storage.OperationQueryResult{}, nil
 }
 
+func TestClaimCheck_InternalQueuesWhenRunning(t *testing.T) {
+	bc := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+	bc.cache.mu.Lock()
+	bc.cache.checking = true
+	bc.cache.pendingRecheck = false
+	bc.cache.mu.Unlock()
+
+	assert.False(t, bc.claimCheck(triggerInternal))
+	assert.True(t, bc.cache.pendingRecheck)
+}
+
+func TestClaimCheck_ClientDoesNotQueueWhenRunning(t *testing.T) {
+	for _, policy := range []triggerPolicy{triggerClient, triggerClientForce} {
+		bc := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+		bc.cache.mu.Lock()
+		bc.cache.checking = true
+		bc.cache.pendingRecheck = false
+		bc.cache.mu.Unlock()
+
+		assert.False(t, bc.claimCheck(policy))
+		assert.False(t, bc.cache.pendingRecheck)
+	}
+}
+
+func TestClaimCheck_ClientRespectsFloorButForceBypasses(t *testing.T) {
+	bc := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+	bc.cache.mu.Lock()
+	bc.cache.lastBackgroundRun = time.Now()
+	bc.cache.mu.Unlock()
+
+	assert.False(t, bc.claimCheck(triggerClient))
+	assert.True(t, bc.claimCheck(triggerClientForce))
+	assert.True(t, bc.cache.checking)
+}
+
+func TestClaimCheck_ClientAllowedAfterFloorAndOnFirstRun(t *testing.T) {
+	fresh := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+	assert.True(t, fresh.claimCheck(triggerClient))
+
+	old := NewBackgroundChecker(nil, nil, nil, nil, time.Hour)
+	old.cache.mu.Lock()
+	old.cache.lastBackgroundRun = time.Now().Add(-61 * time.Second)
+	old.cache.mu.Unlock()
+	assert.True(t, old.claimCheck(triggerClient))
+}
+
+func TestTriggerCheckClient_RunsOnceThenRespectsFloor(t *testing.T) {
+	dockerMock := &mockDockerClient{}
+	orch := NewOrchestrator(dockerMock, &mockRegistryClient{})
+	bc := NewBackgroundChecker(orch, dockerMock, nil, nil, time.Hour)
+
+	require.True(t, bc.TriggerCheckClient(false), "first client trigger should start a check")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _, lastRun, checking := bc.GetCachedResults()
+		if !checking && !lastRun.IsZero() {
+			assert.False(t, bc.TriggerCheckClient(false), "second trigger inside 60s must be a no-op")
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("check did not complete")
+}
+
 func TestBackgroundChecker_ResultObserver(t *testing.T) {
 	bc := NewBackgroundChecker(nil, nil, nil, nil, time.Minute)
 	bc.notifyObserver(&DiscoveryResult{}) // no observer: no-op
