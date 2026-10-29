@@ -172,10 +172,11 @@ func NewServer(cfg Config) *Server {
 	mux := http.NewServeMux()
 	s.registerRoutes(mux, cfg.StaticDir)
 
-	// Apply middleware: CORS -> Correlation ID -> Rate Limit (optional) -> Request Logging -> Handler
+	// Apply middleware: CORS -> Correlation ID -> gzip -> Rate Limit (optional) -> Request Logging -> Handler
 	middlewares := []func(http.Handler) http.Handler{
 		corsMiddleware,
 		CorrelationIDMiddleware,
+		gzipMiddleware,
 	}
 	if rateLimiter != nil {
 		middlewares = append(middlewares, PathRateLimitMiddleware(rateLimiter))
