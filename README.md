@@ -86,7 +86,7 @@ A few specific problems I kept running into:
 | `DB_PATH` | `/data/docksmith.db` | Database location |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `TZ` | `UTC` | Timezone used for the notification summary schedule (e.g. `America/Los_Angeles`) |
-| `GITHUB_TOKEN` | - | For private GHCR images |
+| `GITHUB_TOKEN` | - | For private GHCR images and reliable LinuxServer/lscr.io tag resolution |
 
 ### Registry Authentication
 

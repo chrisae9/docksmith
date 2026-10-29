@@ -230,6 +230,10 @@ func (m *Manager) getClient(registry string) Client {
 		return m.dockerHubClient
 	case "ghcr.io":
 		return m.ghcrClient
+	case "lscr.io":
+		// lscr.io is LinuxServer's registry host and proxies the entire V2 API to GHCR.
+		// Send it through the GHCR client so tag ordering and digest lookups match ghcr.io.
+		return m.ghcrClient
 	default:
 		// Use registry-specific generic V2 API client
 		return m.getOrCreateGenericClient(registry)

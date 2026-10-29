@@ -166,6 +166,29 @@ services:
 
 Their build number suffixes (e.g., `1.0.0-ls123`) are normalized for comparison.
 
+### lscr.io
+
+`lscr.io` is LinuxServer's registry host and proxies the full Docker V2 API to GHCR, so Docksmith treats it as an alias of `ghcr.io`. Images pulled from `lscr.io` are checked exactly as their `ghcr.io` equivalents:
+
+```yaml
+services:
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    labels:
+      - docksmith.allow-latest=true
+```
+
+Resolving a version tag from a floating tag requires authentication: use a GitHub classic personal access token (PAT) with the `read:packages` scope. Mount it at `/root/.docker/config.json`:
+
+```yaml
+services:
+  docksmith:
+    volumes:
+      - ~/.docker/config.json:/root/.docker/config.json:ro
+```
+
+Alternatively, set the `GITHUB_TOKEN` environment variable to the classic PAT.
+
 ## Multi-Architecture Images
 
 Docksmith handles multi-arch images automatically. It checks digests to detect updates even when tags don't change.

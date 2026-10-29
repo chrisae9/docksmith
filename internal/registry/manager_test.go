@@ -45,6 +45,12 @@ func TestParseImageRef(t *testing.T) {
 			expectedRegistry: "registry.example.com",
 			expectedRepo:     "myuser/myapp",
 		},
+		{
+			name:             "lscr.io image",
+			imageRef:         "lscr.io/linuxserver/radarr",
+			expectedRegistry: "lscr.io",
+			expectedRepo:     "linuxserver/radarr",
+		},
 	}
 
 	for _, tt := range tests {
@@ -59,6 +65,19 @@ func TestParseImageRef(t *testing.T) {
 				t.Errorf("Repository: got %q, want %q", repo, tt.expectedRepo)
 			}
 		})
+	}
+}
+
+func TestGetClientAliasesLscrToGHCR(t *testing.T) {
+	manager := NewManager("")
+	ghcr := manager.getClient("ghcr.io")
+	lscr := manager.getClient("lscr.io")
+
+	if ghcr != lscr {
+		t.Fatalf("lscr.io and ghcr.io must use the same client instance")
+	}
+	if _, ok := lscr.(*GHCRClient); !ok {
+		t.Fatalf("lscr.io client = %T, want *GHCRClient", lscr)
 	}
 }
 

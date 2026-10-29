@@ -19,7 +19,7 @@ services:
 
       # Optional: Registry credentials for private images
       # Uncomment if you have private images on Docker Hub or GHCR
-      # - ~/.docker/config.json:/home/docksmith/.docker/config.json:ro
+      # - ~/.docker/config.json:/root/.docker/config.json:ro
 
       # Your compose file directories (read-write for updates)
       # Add all directories where your docker-compose.yml files live
