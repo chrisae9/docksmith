@@ -488,7 +488,16 @@ export function Containers() {
 
     const skippedUpToDate = selected.length - containersToUpdate.length - mismatchContainers.length;
     const totalSkipped = skippedNoData + skippedUpToDate;
-    const ingressNames = allSelected.filter(c => c.is_ingress).map(c => c.name);
+    // Only name ingress containers that will actually restart. Selected
+    // containers with no update data or already up to date are skipped, so
+    // naming them in the outage message would be misleading.
+    const restartingNames = new Set([
+      ...containersToUpdate.map(c => c.name),
+      ...mismatchContainers,
+    ]);
+    const ingressNames = allSelected
+      .filter(c => c.is_ingress && restartingNames.has(c.name))
+      .map(c => c.name);
 
     if (containersToUpdate.length === 0 && mismatchContainers.length === 0) {
       setSelectedContainers(new Set());
