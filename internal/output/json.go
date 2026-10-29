@@ -50,6 +50,19 @@ func ErrorMessageResponse(message string) Response {
 	}
 }
 
+// MarshalJSONData returns compact JSON for a success response wrapping data.
+func MarshalJSONData(data any) ([]byte, error) { return json.Marshal(SuccessResponse(data)) }
+
+// MarshalJSONError returns compact JSON for an error response.
+func MarshalJSONError(err error) ([]byte, error) { return json.Marshal(ErrorResponse(err)) }
+
+// MarshalJSONErrorWithData returns compact JSON for an error response with data.
+func MarshalJSONErrorWithData(err error, data any) ([]byte, error) {
+	resp := ErrorResponse(err)
+	resp.Data = data
+	return json.Marshal(resp)
+}
+
 // WriteJSON writes a Response as indented JSON to the given writer
 func WriteJSON(w io.Writer, response Response) error {
 	encoder := json.NewEncoder(w)

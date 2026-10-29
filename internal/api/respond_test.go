@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,4 +34,20 @@ func TestRespondSuccess_ExtendsWriteDeadline(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"ok"`)
+}
+
+func TestRespondSuccess_SetsContentLengthAndCompactBody(t *testing.T) {
+	w := httptest.NewRecorder()
+	RespondSuccess(w, map[string]string{"ok": "yes"})
+
+	assert.Equal(t, strconv.Itoa(w.Body.Len()), w.Header().Get("Content-Length"))
+	assert.NotContains(t, w.Body.String(), "\n")
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Data    map[string]string `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	assert.Equal(t, "yes", resp.Data["ok"])
 }
