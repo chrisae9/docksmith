@@ -36,8 +36,8 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		s.backgroundChecker.TriggerCheck()
 		// Wait a moment for the check to start
 		time.Sleep(100 * time.Millisecond)
-		// Return cached results (will include the triggered check once it completes)
-		s.handleGetStatus(w, r)
+		// Return the full cached results (including tags and stacks)
+		s.writeStatus(w, false)
 		return
 	}
 
@@ -54,23 +54,30 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 // handleTriggerCheck triggers a background check without clearing cache
 // This is used by the "Background Refresh" button to update the discovery
-// using existing cached registry data (respects CACHE_TTL)
+// using existing cached registry data (respects CACHE_TTL).
+// Responses report whether this call actually started a check: non-forced
+// requests are deduplicated within the background checker's client floor,
+// while ?force=true bypasses it.
 func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
 	if s.backgroundChecker == nil {
 		RespondInternalError(w, fmt.Errorf("background checker not available"))
 		return
 	}
 
-	// Trigger check WITHOUT clearing cache
-	// This allows the background check to use cached registry data
-	s.backgroundChecker.TriggerCheck()
+	// Trigger check WITHOUT clearing cache so it can reuse cached registry data.
+	force := parseBoolParam(r, "force")
+	triggered := s.backgroundChecker.TriggerCheckClient(force)
 
-	// Wait for check to start
-	time.Sleep(100 * time.Millisecond)
+	_, _, lastRun, checking := s.backgroundChecker.GetCachedResults()
+	lastBackgroundRun := ""
+	if !lastRun.IsZero() {
+		lastBackgroundRun = lastRun.Format(time.RFC3339)
+	}
 
-	// Return success
 	RespondSuccess(w, map[string]any{
-		"message": "Background check triggered",
+		"triggered":           triggered,
+		"checking":            checking,
+		"last_background_run": lastBackgroundRun,
 	})
 }
 

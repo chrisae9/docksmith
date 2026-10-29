@@ -7,57 +7,84 @@ import (
 	"github.com/chis/docksmith/internal/update"
 )
 
-// handleGetStatus returns the cached container check results
+// handleGetStatus returns the cached container check results in slim form.
+// The full payload (including per-container available tags and the stacks
+// map) is reserved for /api/check.
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	if s.backgroundChecker == nil {
 		// Fallback to live check if background checker not available
 		s.handleCheck(w, r)
 		return
 	}
+	s.writeStatus(w, true)
+}
 
+// writeStatus writes the cached check results in either slim or full form.
+// Slim mode omits available_tags on every container and the stacks map;
+// counts, timestamps and the remaining fields are identical in both modes.
+func (s *Server) writeStatus(w http.ResponseWriter, slim bool) {
 	cachedResult, lastCheck, lastBackgroundRun, checking := s.backgroundChecker.GetCachedResults()
 
+	result := buildStatusResult(cachedResult, lastCheck, lastBackgroundRun, checking, s.checkInterval, s.cacheTTL, slim)
+
+	RespondSuccess(w, result)
+}
+
+// buildStatusResult makes a race-safe copy of cached and adds the
+// status-specific fields. It never mutates cached: containers are copied by
+// value, so clearing AvailableTags only affects the returned copy.
+func buildStatusResult(cached *update.DiscoveryResult, lastCheck, lastBackgroundRun time.Time, checking bool, checkInterval, cacheTTL time.Duration, slim bool) *update.DiscoveryResult {
 	// Make a deep copy to avoid race conditions and data corruption
 	var result *update.DiscoveryResult
-	if cachedResult == nil {
+	if cached == nil {
 		result = &update.DiscoveryResult{
 			Containers: []update.ContainerInfo{},
 		}
 	} else {
 		// Deep copy the result to prevent shared slice/map references
 		result = &update.DiscoveryResult{
-			Containers:           make([]update.ContainerInfo, len(cachedResult.Containers)),
-			Stacks:              make(map[string]*update.Stack),
-			StandaloneContainers: make([]update.ContainerInfo, len(cachedResult.StandaloneContainers)),
-			UpdateOrder:         make([]string, len(cachedResult.UpdateOrder)),
-			TotalChecked:        cachedResult.TotalChecked,
-			UpdatesFound:        cachedResult.UpdatesFound,
-			UpToDate:           cachedResult.UpToDate,
-			LocalImages:        cachedResult.LocalImages,
-			Failed:             cachedResult.Failed,
-			Ignored:            cachedResult.Ignored,
+			Containers:           make([]update.ContainerInfo, len(cached.Containers)),
+			StandaloneContainers: make([]update.ContainerInfo, len(cached.StandaloneContainers)),
+			UpdateOrder:          make([]string, len(cached.UpdateOrder)),
+			TotalChecked:         cached.TotalChecked,
+			UpdatesFound:         cached.UpdatesFound,
+			UpToDate:             cached.UpToDate,
+			LocalImages:          cached.LocalImages,
+			Failed:               cached.Failed,
+			Ignored:              cached.Ignored,
 		}
 
 		// Copy containers slice
-		copy(result.Containers, cachedResult.Containers)
+		copy(result.Containers, cached.Containers)
 
 		// Copy standalone containers slice
-		copy(result.StandaloneContainers, cachedResult.StandaloneContainers)
+		copy(result.StandaloneContainers, cached.StandaloneContainers)
 
 		// Copy update order slice
-		copy(result.UpdateOrder, cachedResult.UpdateOrder)
+		copy(result.UpdateOrder, cached.UpdateOrder)
 
-		// Deep copy stacks map
-		for name, stack := range cachedResult.Stacks {
-			stackCopy := &update.Stack{
-				Name:           stack.Name,
-				Containers:     make([]update.ContainerInfo, len(stack.Containers)),
-				HasUpdates:     stack.HasUpdates,
-				AllUpdatable:   stack.AllUpdatable,
-				UpdatePriority: stack.UpdatePriority,
+		if slim {
+			// Drop the heavy per-container tag lists; the stacks map stays nil.
+			for i := range result.Containers {
+				result.Containers[i].AvailableTags = nil
 			}
-			copy(stackCopy.Containers, stack.Containers)
-			result.Stacks[name] = stackCopy
+			for i := range result.StandaloneContainers {
+				result.StandaloneContainers[i].AvailableTags = nil
+			}
+		} else {
+			// Deep copy stacks map
+			result.Stacks = make(map[string]*update.Stack, len(cached.Stacks))
+			for name, stack := range cached.Stacks {
+				stackCopy := &update.Stack{
+					Name:           stack.Name,
+					Containers:     make([]update.ContainerInfo, len(stack.Containers)),
+					HasUpdates:     stack.HasUpdates,
+					AllUpdatable:   stack.AllUpdatable,
+					UpdatePriority: stack.UpdatePriority,
+				}
+				copy(stackCopy.Containers, stack.Containers)
+				result.Stacks[name] = stackCopy
+			}
 		}
 	}
 
@@ -69,12 +96,12 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		result.LastBackgroundRun = lastBackgroundRun.Format(time.RFC3339)
 	}
 	result.Checking = checking
-	if !lastBackgroundRun.IsZero() && s.checkInterval > 0 {
-		nextCheck := lastBackgroundRun.Add(s.checkInterval)
+	if !lastBackgroundRun.IsZero() && checkInterval > 0 {
+		nextCheck := lastBackgroundRun.Add(checkInterval)
 		result.NextCheck = nextCheck.Format(time.RFC3339)
 	}
-	result.CheckInterval = s.checkInterval.String()
-	result.CacheTTL = s.cacheTTL.String()
+	result.CheckInterval = checkInterval.String()
+	result.CacheTTL = cacheTTL.String()
 
-	RespondSuccess(w, result)
+	return result
 }

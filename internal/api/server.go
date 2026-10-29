@@ -22,6 +22,17 @@ import (
 	"github.com/chis/docksmith/internal/update"
 )
 
+// checkRunner is the subset of *update.BackgroundChecker the API server needs.
+// It exists so handlers can be exercised with a lightweight fake in tests.
+type checkRunner interface {
+	GetCachedResults() (*update.DiscoveryResult, time.Time, time.Time, bool)
+	TriggerCheck()
+	TriggerCheckClient(force bool) bool
+	MarkCacheCleared()
+	Start()
+	Stop()
+}
+
 // Server represents the HTTP API server
 type Server struct {
 	dockerService         *docker.Service
@@ -33,7 +44,7 @@ type Server struct {
 	eventBus              *events.Bus
 	httpServer            *http.Server
 	pathTranslator        *docker.PathTranslator
-	backgroundChecker     *update.BackgroundChecker
+	backgroundChecker     checkRunner
 	checkInterval         time.Duration
 	cacheTTL              time.Duration
 	rateLimiter           *PathRateLimiter
