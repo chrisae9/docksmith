@@ -178,7 +178,7 @@ services:
       - docksmith.allow-latest=true
 ```
 
-Resolving a version tag from a floating tag requires authentication: use a GitHub classic personal access token (PAT) with the `read:packages` scope. Mount it at `/root/.docker/config.json`:
+Resolving a version tag from a floating tag requires authentication: use a GitHub classic personal access token (PAT) with the `read:packages` scope. Mount it at `/root/.docker/config.json`; an `auths` entry for either `ghcr.io` or `lscr.io` is accepted:
 
 ```yaml
 services:
