@@ -318,26 +318,36 @@ func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID str
 	// Stage 2: Load and modify compose file (10-30%)
 	s.publishLabelProgress(operationID, cfg.containerName, stackName, "updating_compose", 10, "Saving settings to compose file")
 
-	composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, cfg.containerName)
-	if err != nil {
-		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to load compose file: %v", err))
-		return
-	}
+	// Serialize the read-modify-write per compose file: batch operations run one
+	// goroutine per container, and services in the same file would otherwise
+	// race (last save wins). The container restart below stays outside the lock.
+	unlock := s.lockComposeFile(composeFilePath)
+	modified, removed, err := func() (map[string]string, []string, error) {
+		defer unlock()
 
-	service, err := composeFile.FindServiceByContainerName(serviceName)
-	if err != nil {
-		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to find service: %v", err))
-		return
-	}
+		composeFile, err := compose.LoadComposeFileOrIncluded(composeFilePath, cfg.containerName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load compose file: %w", err)
+		}
 
-	modified, removed, err := modify(service)
-	if err != nil {
-		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to apply labels: %v", err))
-		return
-	}
+		service, err := composeFile.FindServiceByContainerName(serviceName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to find service: %w", err)
+		}
 
-	if err := composeFile.Save(); err != nil {
-		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, fmt.Sprintf("failed to save compose file: %v", err))
+		modified, removed, err := modify(service)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to apply labels: %w", err)
+		}
+
+		if err := composeFile.Save(); err != nil {
+			return nil, nil, fmt.Errorf("failed to save compose file: %w", err)
+		}
+
+		return modified, removed, nil
+	}()
+	if err != nil {
+		s.failLabelOperationWithEvent(ctx, operationID, cfg.containerName, stackName, err.Error())
 		return
 	}
 
@@ -376,6 +386,16 @@ func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID str
 	}
 
 	log.Printf("LABEL_OP: Completed label operation %s for container %s", operationID, cfg.containerName)
+}
+
+// lockComposeFile takes the per-file lock that makes compose read-modify-write
+// cycles atomic and returns the matching unlock. Servers built directly in tests
+// may not have a mutex; those degrade to an unguarded section.
+func (s *Server) lockComposeFile(composeFilePath string) func() {
+	if s.composeMu == nil {
+		return func() {}
+	}
+	return s.composeMu.Lock(composeFilePath)
 }
 
 // setLabels implements the label setting logic (atomic: compose update + restart)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/config"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
@@ -42,6 +43,10 @@ type Server struct {
 	notifyCtx             context.Context
 	notifyCancel          context.CancelFunc
 	explorerCache         *explorerCache
+
+	// composeMu serializes compose file read-modify-write cycles that target
+	// the same file, so two services in one stack cannot clobber each other.
+	composeMu *compose.KeyedMutex
 }
 
 // Config holds configuration for the API server
@@ -168,6 +173,7 @@ func NewServer(cfg Config) *Server {
 		notifyCtx:             notifyCtx,
 		notifyCancel:          notifyCancel,
 		explorerCache:         newExplorerCache(explorerCacheTTL),
+		composeMu:             compose.NewKeyedMutex(),
 	}
 
 	// Setup HTTP server with middleware chain
