@@ -928,6 +928,79 @@ func orderIngressLast(containers []*docker.Container) []*docker.Container {
 	return append(rest, last...)
 }
 
+// orderByNetworkMode returns containers ordered so that a container whose
+// network namespace is provided by another member of the batch follows that
+// provider. Ties keep the input order; containers with no in-batch provider
+// are emitted first, in input order.
+func orderByNetworkMode(containers []*docker.Container) []*docker.Container {
+	ordered := make([]*docker.Container, 0, len(containers))
+	emitted := make([]bool, len(containers))
+
+	// providerIndex resolves the in-batch container that supplies the network
+	// namespace for containers[i], or -1 when there is none.
+	providerIndex := func(i int) int {
+		target := strings.TrimPrefix(containers[i].NetworkMode, "container:")
+		if target == "" || target == containers[i].NetworkMode {
+			// Not a container:<target> network mode.
+			return -1
+		}
+		for j, other := range containers {
+			if j == i {
+				continue
+			}
+			if networkModeTargetMatches(target, other) {
+				return j
+			}
+		}
+		return -1
+	}
+
+	for len(ordered) < len(containers) {
+		progress := false
+		for i, c := range containers {
+			if emitted[i] {
+				continue
+			}
+			provider := providerIndex(i)
+			if provider == -1 || emitted[provider] {
+				ordered = append(ordered, c)
+				emitted[i] = true
+				progress = true
+			}
+		}
+		if progress {
+			continue
+		}
+		// A full pass emitted nothing: the remaining containers form a cycle
+		// (or reference themselves). Emit them in input order and stop — never
+		// loop and never drop a container.
+		for i, c := range containers {
+			if !emitted[i] {
+				ordered = append(ordered, c)
+				emitted[i] = true
+			}
+		}
+	}
+
+	return ordered
+}
+
+// networkModeTargetMatches reports whether target — the value following
+// "container:" in a Docker HostConfig.NetworkMode — identifies c by full ID,
+// short-ID prefix (either direction), or container name.
+func networkModeTargetMatches(target string, c *docker.Container) bool {
+	if target == "" || c == nil {
+		return false
+	}
+	if c.Name != "" && c.Name == target {
+		return true
+	}
+	if c.ID == "" {
+		return false
+	}
+	return c.ID == target || strings.HasPrefix(c.ID, target) || strings.HasPrefix(target, c.ID)
+}
+
 // executeBatchUpdate executes batch update workflow.
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string, forceContainers map[string]bool) {
 	defer o.releaseStackLock(stackName)
@@ -1107,6 +1180,9 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 	}
 
 	orderedContainers = orderIngressLast(orderedContainers)
+	// Network namespace correctness wins over the ingress-last optimization:
+	// a dependent sharing its provider's namespace must be recreated after it.
+	orderedContainers = orderByNetworkMode(orderedContainers)
 
 	// Recreate, health-check, and mark each container individually (60-95%)
 	// All phases merged into one per-container loop so the frontend gets continuous SSE events.
