@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { checkContainers, getContainerStatus, getDockerConfig, clearHistory, getSetting, setSetting } from '../api/client';
+import { checkContainers, getContainerStatus, getDockerConfig, clearHistory, getSetting, setSetting, triggerCheck } from '../api/client';
 import type { DiscoveryResult, DockerRegistryInfo } from '../types/api';
 import { formatTimeAgo } from '../utils/time';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -124,7 +124,10 @@ export function Settings() {
     setLoading(true);
     setError(null);
     try {
-      await fetch('/api/trigger-check', { method: 'POST' });
+      const triggerRes = await triggerCheck();
+      if (!triggerRes.success) {
+        throw new Error(triggerRes.error || 'Failed to trigger background check');
+      }
       // Wait for background check to start and update timestamps
       await new Promise(resolve => setTimeout(resolve, 500));
       await fetchStatus();

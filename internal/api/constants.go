@@ -18,6 +18,13 @@ const (
 
 	// StackRestartTimeout is the timeout for stack restart operations
 	StackRestartTimeout = 120 * time.Second
+
+	// serverWriteTimeout is the http.Server write budget for a response.
+	serverWriteTimeout = 120 * time.Second
+
+	// responseWriteGrace must exceed serverWriteTimeout so extending a response's
+	// write deadline never shortens its remaining budget.
+	responseWriteGrace = serverWriteTimeout + 10*time.Second
 )
 
 // Docker Compose label constants

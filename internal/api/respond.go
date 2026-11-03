@@ -3,17 +3,42 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/chis/docksmith/internal/output"
 	"github.com/chis/docksmith/internal/update"
 )
 
+// extendWriteDeadline refreshes the response write budget. A long synchronous
+// handler can outlive http.Server.WriteTimeout, which would make the response
+// unwritable even though the work succeeded.
+func extendWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWriteGrace))
+}
+
+// writeJSONBody writes a pre-marshalled JSON body with an explicit
+// Content-Length so clients know exactly how many bytes to expect.
+func writeJSONBody(w http.ResponseWriter, status int, body []byte) {
+	extendWriteDeadline(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// fallbackJSONBody is written when the response cannot be marshalled.
+var fallbackJSONBody = []byte(`{"success":false,"error":"failed to encode JSON"}`)
+
 // RespondError writes an error response with the specified HTTP status code.
 // This is the unified error response function - prefer using this over specific status functions.
 func RespondError(w http.ResponseWriter, statusCode int, err error) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	output.WriteJSONError(w, err)
+	body, marshalErr := output.MarshalJSONError(err)
+	if marshalErr != nil {
+		writeJSONBody(w, statusCode, fallbackJSONBody)
+		return
+	}
+	writeJSONBody(w, statusCode, body)
 }
 
 // RespondBadRequest writes a 400 Bad Request error response
@@ -33,19 +58,27 @@ func RespondInternalError(w http.ResponseWriter, err error) {
 
 // RespondErrorWithData writes an error response that includes data (e.g., for partial failures)
 func RespondErrorWithData(w http.ResponseWriter, statusCode int, err error, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	output.WriteJSONErrorWithData(w, err, data)
+	body, marshalErr := output.MarshalJSONErrorWithData(err, data)
+	if marshalErr != nil {
+		writeJSONBody(w, statusCode, fallbackJSONBody)
+		return
+	}
+	writeJSONBody(w, statusCode, body)
 }
 
 // RespondSuccess writes a 200 OK response with data
 func RespondSuccess(w http.ResponseWriter, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	output.WriteJSONData(w, data)
+	body, err := output.MarshalJSONData(data)
+	if err != nil {
+		writeJSONBody(w, http.StatusInternalServerError, fallbackJSONBody)
+		return
+	}
+	writeJSONBody(w, http.StatusOK, body)
 }
 
 // RespondNoContent writes a 204 No Content response
 func RespondNoContent(w http.ResponseWriter) {
+	extendWriteDeadline(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

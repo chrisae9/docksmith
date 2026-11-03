@@ -87,11 +87,11 @@ func TestNotifySettings_RejectsTooFrequentCron(t *testing.T) {
 func TestNotifyValidateCron(t *testing.T) {
 	e := newNotifyTestEnv(t)
 	code, body := e.do("POST", "/api/notifications/validate-cron", `{"cron":"0 9 * * *"}`)
-	if code != 200 || !strings.Contains(body, `"valid": true`) {
+	if code != 200 || !strings.Contains(body, `"valid":true`) {
 		t.Errorf("valid cron: %d %s", code, body)
 	}
 	code, body = e.do("POST", "/api/notifications/validate-cron", `{"cron":"*/1 * * * *"}`)
-	if code != 200 || !strings.Contains(body, `"valid": false`) {
+	if code != 200 || !strings.Contains(body, `"valid":false`) {
 		t.Errorf("too frequent cron: %d %s", code, body)
 	}
 }
@@ -155,7 +155,7 @@ func TestNotifySettings_EventTimingValues(t *testing.T) {
 		t.Errorf("unknown event: %d %s", code, resp)
 	}
 	code, resp := e.do("PUT", "/api/notifications/settings", settings(`{"compose_mismatch":"off"}`))
-	if code != http.StatusOK || !strings.Contains(resp, `"compose_mismatch": "off"`) {
+	if code != http.StatusOK || !strings.Contains(resp, `"compose_mismatch":"off"`) {
 		t.Errorf("off timing: %d %s", code, resp)
 	}
 }

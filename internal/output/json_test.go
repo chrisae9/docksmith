@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSuccessResponse(t *testing.T) {
@@ -253,4 +256,16 @@ func TestResponseOmitEmptyError(t *testing.T) {
 	if strings.Contains(jsonStr, `"error"`) {
 		t.Error("error field should be omitted when empty")
 	}
+}
+
+func TestMarshalJSONData_IsCompactAndRoundTrips(t *testing.T) {
+	data, err := MarshalJSONData(map[string]string{"key": "value"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "\n")
+	assert.NotContains(t, string(data), "  ")
+
+	var resp Response
+	require.NoError(t, json.Unmarshal(data, &resp))
+	assert.True(t, resp.Success)
+	assert.Equal(t, map[string]any{"key": "value"}, resp.Data)
 }

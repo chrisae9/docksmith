@@ -19,35 +19,76 @@ import type {
 
 const API_BASE = '/api';
 
-// Generic fetch wrapper with error handling
-async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<APIResponse<T>> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    ...options,
-  });
+// Request time budgets. The default bounds ordinary reads/writes; longer tiers
+// cover endpoints that do synchronous Docker or registry work server-side.
+const DEFAULT_TIMEOUT_MS = 15_000;
+const LONG_TIMEOUT_MS = 120_000;
+const PRUNE_TIMEOUT_MS = 300_000;
+const BATCH_TIMEOUT_MS = 600_000;
 
-  // Check if response is OK before attempting to parse JSON
-  if (!response.ok) {
-    // Try to parse error response as JSON, fall back to status text
-    try {
-      const errorData = await response.json();
-      return errorData as APIResponse<T>;
-    } catch {
-      // Response is not JSON (e.g., 502 Bad Gateway, network error)
+interface APIFetchOptions extends RequestInit {
+  // Abort the request after this many ms (0 disables the timeout).
+  timeoutMs?: number;
+}
+
+// Generic fetch wrapper with error handling and a request deadline
+async function fetchAPI<T>(endpoint: string, options?: APIFetchOptions): Promise<APIResponse<T>> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...init } = options ?? {};
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = timeoutMs > 0
+    ? window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs)
+    : null;
+  const onCallerAbort = () => controller.abort();
+  if (callerSignal?.aborted) controller.abort();
+  callerSignal?.addEventListener('abort', onCallerAbort);
+
+  // The timer stays armed until the body is parsed (cleared in finally), so a
+  // response that sends headers and then stalls its body still times out.
+  try {
+    const headers = new Headers(init.headers);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+
+    // Check if response is OK before attempting to parse JSON
+    if (!response.ok) {
+      // Try to parse error response as JSON, fall back to status text
+      try {
+        const errorData = await response.json();
+        return errorData as APIResponse<T>;
+      } catch (parseErr) {
+        // Let a timeout during the body read surface as a timeout
+        if (timedOut) throw parseErr;
+        // Response is not JSON (e.g., 502 Bad Gateway, network error)
+        return {
+          success: false,
+          error: `HTTP ${response.status}: ${response.statusText}`,
+          timestamp: new Date().toISOString(),
+          version: '',
+        } as APIResponse<T>;
+      }
+    }
+
+    const data = await response.json();
+    return data as APIResponse<T>;
+  } catch (err) {
+    if (timedOut) {
       return {
         success: false,
-        error: `HTTP ${response.status}: ${response.statusText}`,
+        error: 'Request timed out',
         timestamp: new Date().toISOString(),
         version: '',
       } as APIResponse<T>;
     }
+    throw err;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
   }
-
-  const data = await response.json();
-  return data as APIResponse<T>;
 }
 
 // Docker configuration
@@ -57,17 +98,22 @@ export async function getDockerConfig(): Promise<DockerConfigResponse> {
 
 // Container discovery and update checking
 export async function checkContainers(): Promise<CheckResponse> {
-  return fetchAPI('/check');
+  return fetchAPI('/check', { timeoutMs: LONG_TIMEOUT_MS });
 }
 
 // Get cached container status (from background checker)
-export async function getContainerStatus(): Promise<CheckResponse> {
-  return fetchAPI('/status');
+export async function getContainerStatus(timeoutMs?: number): Promise<CheckResponse> {
+  return fetchAPI('/status', { timeoutMs });
+}
+
+// Trigger a background update check (returns immediately; poll /status for progress)
+export async function triggerCheck(): Promise<APIResponse<unknown>> {
+  return fetchAPI('/trigger-check', { method: 'POST' });
 }
 
 // Recheck a single container (synchronous, bypasses cache)
 export async function recheckContainer(containerName: string): Promise<APIResponse<ContainerInfo>> {
-  return fetchAPI(`/container/${encodeURIComponent(containerName)}/recheck`);
+  return fetchAPI(`/container/${encodeURIComponent(containerName)}/recheck`, { timeoutMs: LONG_TIMEOUT_MS });
 }
 
 // Operations history
@@ -253,7 +299,7 @@ export async function startStackRestart(
 // Note: imageRef is not encoded because the backend uses a wildcard path pattern {imageRef...}
 // that expects literal slashes in the path (e.g., /registry/tags/linuxserver/syncthing)
 export async function getRegistryTags(imageRef: string): Promise<RegistryTagsAPIResponse> {
-  return fetchAPI(`/registry/tags/${imageRef}`);
+  return fetchAPI(`/registry/tags/${imageRef}`, { timeoutMs: LONG_TIMEOUT_MS });
 }
 
 // Explorer data (containers, images, networks, volumes)
@@ -290,6 +336,7 @@ export async function stopContainer(
   const params = timeout ? `?timeout=${timeout}` : '';
   return fetchAPI(`/containers/${encodeURIComponent(name)}/stop${params}`, {
     method: 'POST',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -299,6 +346,7 @@ export async function startContainer(
 ): Promise<APIResponse<{ container: string; status: string; message: string; operation_id?: string }>> {
   return fetchAPI(`/containers/${encodeURIComponent(name)}/start`, {
     method: 'POST',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -313,6 +361,7 @@ export async function removeContainer(
   const query = params.toString();
   return fetchAPI(`/containers/${encodeURIComponent(name)}${query ? `?${query}` : ''}`, {
     method: 'DELETE',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -322,6 +371,7 @@ export async function removeNetwork(
 ): Promise<APIResponse<{ message: string }>> {
   return fetchAPI(`/networks/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -335,6 +385,7 @@ export async function removeVolume(
   const query = params.toString();
   return fetchAPI(`/volumes/${encodeURIComponent(name)}${query ? `?${query}` : ''}`, {
     method: 'DELETE',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -348,6 +399,7 @@ export async function removeImage(
   const query = params.toString();
   return fetchAPI(`/images/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, {
     method: 'DELETE',
+    timeoutMs: LONG_TIMEOUT_MS,
   });
 }
 
@@ -360,7 +412,7 @@ export interface PruneResponse {
 
 // Prune stopped containers
 export async function pruneContainers(): Promise<APIResponse<PruneResponse>> {
-  return fetchAPI('/prune/containers', { method: 'POST' });
+  return fetchAPI('/prune/containers', { method: 'POST', timeoutMs: PRUNE_TIMEOUT_MS });
 }
 
 // Prune unused images
@@ -370,17 +422,17 @@ export async function pruneImages(
   const params = new URLSearchParams();
   if (options?.all) params.set('all', 'true');
   const query = params.toString();
-  return fetchAPI(`/prune/images${query ? `?${query}` : ''}`, { method: 'POST' });
+  return fetchAPI(`/prune/images${query ? `?${query}` : ''}`, { method: 'POST', timeoutMs: PRUNE_TIMEOUT_MS });
 }
 
 // Prune unused networks
 export async function pruneNetworks(): Promise<APIResponse<PruneResponse>> {
-  return fetchAPI('/prune/networks', { method: 'POST' });
+  return fetchAPI('/prune/networks', { method: 'POST', timeoutMs: PRUNE_TIMEOUT_MS });
 }
 
 // Prune unused volumes
 export async function pruneVolumes(): Promise<APIResponse<PruneResponse>> {
-  return fetchAPI('/prune/volumes', { method: 'POST' });
+  return fetchAPI('/prune/volumes', { method: 'POST', timeoutMs: PRUNE_TIMEOUT_MS });
 }
 
 // Batch label operations - apply labels to multiple containers
@@ -437,6 +489,7 @@ export async function batchStartContainers(
   return fetchAPI('/containers/batch/start', {
     method: 'POST',
     body: JSON.stringify({ containers }),
+    timeoutMs: BATCH_TIMEOUT_MS,
   });
 }
 
@@ -456,6 +509,7 @@ export async function batchStopContainers(
   return fetchAPI('/containers/batch/stop', {
     method: 'POST',
     body: JSON.stringify({ containers, timeout }),
+    timeoutMs: BATCH_TIMEOUT_MS,
   });
 }
 
@@ -475,6 +529,7 @@ export async function batchRestartContainers(
   return fetchAPI('/containers/batch/restart', {
     method: 'POST',
     body: JSON.stringify({ containers, timeout }),
+    timeoutMs: BATCH_TIMEOUT_MS,
   });
 }
 
@@ -494,6 +549,7 @@ export async function batchRemoveContainers(
   return fetchAPI('/containers/batch/remove', {
     method: 'POST',
     body: JSON.stringify({ containers, force }),
+    timeoutMs: BATCH_TIMEOUT_MS,
   });
 }
 
@@ -551,5 +607,5 @@ export async function deleteNotifyService(id: number): Promise<APIResponse<{ del
 }
 
 export async function testNotifyService(id: number): Promise<APIResponse<{ sent: boolean }>> {
-  return fetchAPI(`/notifications/services/${id}/test`, { method: 'POST' });
+  return fetchAPI(`/notifications/services/${id}/test`, { method: 'POST', timeoutMs: LONG_TIMEOUT_MS });
 }
