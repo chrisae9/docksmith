@@ -116,31 +116,32 @@ func readGHCRCredsFromDockerConfig() string {
 		return ""
 	}
 
+	return parseGHCRTokenFromDockerConfig(data)
+}
+
+// parseGHCRTokenFromDockerConfig returns the GHCR personal access token from a
+// Docker config. lscr.io is accepted because it proxies to GHCR.
+func parseGHCRTokenFromDockerConfig(data []byte) string {
 	var config dockerConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return ""
 	}
-
-	// Look for ghcr.io credentials
-	auth, found := config.Auths["ghcr.io"]
-	if !found {
-		return ""
+	for _, key := range []string{"ghcr.io", "lscr.io"} {
+		auth, found := config.Auths[key]
+		if !found {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(auth.Auth)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		return parts[1]
 	}
-
-	// Decode base64 auth (format: username:password)
-	decoded, err := base64.StdEncoding.DecodeString(auth.Auth)
-	if err != nil {
-		return ""
-	}
-
-	// Split username:password
-	parts := strings.SplitN(string(decoded), ":", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-
-	// For GHCR, the password is the PAT
-	return parts[1]
+	return ""
 }
 
 // ghcrTagList represents the tag list response.
