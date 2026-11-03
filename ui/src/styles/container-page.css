@@ -139,6 +139,7 @@
 .container-page .change-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
 .container-page .change-badge.minor { background: var(--color-badge-minor-dim); color: var(--color-badge-minor); }
 .container-page .change-badge.patch { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); }
+.container-page .change-badge.build { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); opacity: 0.7; }
 
 /* Header Actions */
 .container-page .header-actions {

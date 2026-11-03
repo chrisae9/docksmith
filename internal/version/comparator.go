@@ -119,6 +119,15 @@ func (c *Comparator) GetChangeType(from, to *Version) ChangeType {
 	}
 
 	// Version increased (cmp < 0)
+	// Only the build number differs (e.g., LinuxServer -ls200 to -ls201)
+	if from.Major == to.Major &&
+		from.Minor == to.Minor &&
+		from.Patch == to.Patch &&
+		from.Revision == to.Revision &&
+		from.Prerelease == to.Prerelease {
+		return BuildChange
+	}
+
 	if from.Major != to.Major {
 		return MajorChange
 	}

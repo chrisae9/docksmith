@@ -812,3 +812,23 @@ func TestLatestContainerDateTagResolution(t *testing.T) {
 			update.LatestResolvedVersion, "2026.2.9")
 	}
 }
+
+func (m *mockStorage) DeleteAllHistory(ctx context.Context) (int64, error) { return 0, nil }
+
+func (m *mockStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
+	return storage.OperationQueryResult{}, nil
+}
+
+func (m *failingStorage) DeleteAllHistory(ctx context.Context) (int64, error) { return 0, nil }
+
+func (m *failingStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (m *failingStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
+	return storage.OperationQueryResult{}, nil
+}

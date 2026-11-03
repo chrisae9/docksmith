@@ -200,3 +200,34 @@ func TestIsEqual(t *testing.T) {
 		t.Error("v1 and v3 should not be equal")
 	}
 }
+
+func TestGetChangeType_BuildOnly(t *testing.T) {
+	comparator := NewComparator()
+	parser := NewParser()
+
+	tests := []struct {
+		name     string
+		from     string
+		to       string
+		expected ChangeType
+	}{
+		{"linuxserver build only", "4.0.1-ls200", "4.0.1-ls201", BuildChange},
+		{"4th segment change is patch", "1.42.2.10156", "1.42.2.10200", PatchChange},
+		{"patch bump with build", "4.0.1-ls200", "4.0.2-ls201", PatchChange},
+		{"r suffix ignored", "1.2.3-r4", "1.2.3-r5", NoChange},
+		{"build downgrade", "4.0.1-ls201", "4.0.1-ls200", Downgrade},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			from := parser.ParseTag(tt.from)
+			to := parser.ParseTag(tt.to)
+			if from == nil || to == nil {
+				t.Fatalf("failed to parse tags %q / %q", tt.from, tt.to)
+			}
+			if got := comparator.GetChangeType(from, to); got != tt.expected {
+				t.Errorf("GetChangeType(%s, %s) = %v, want %v", tt.from, tt.to, got, tt.expected)
+			}
+		})
+	}
+}

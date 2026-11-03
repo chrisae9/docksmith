@@ -747,6 +747,7 @@ export function Containers() {
         if (c.change_type === ChangeType.MajorChange) return <span className="status-badge major" title="Major update">MAJOR</span>;
         if (c.change_type === ChangeType.MinorChange) return <span className="status-badge minor" title="Minor update">MINOR</span>;
         if (c.change_type === ChangeType.PatchChange) return <span className="status-badge patch" title="Patch update">PATCH</span>;
+        if (c.change_type === ChangeType.BuildChange) return <span className="status-badge build" title="Build update">BUILD</span>;
         return <span className="status-badge rebuild" title="Update available">REBUILD</span>;
       case 'UPDATE_AVAILABLE_BLOCKED': return <span className="status-badge blocked" title="Update blocked">BLOCKED</span>;
       case 'UP_TO_DATE':
@@ -1090,6 +1091,7 @@ export function Containers() {
     const updatable = selected.filter(c => c.has_update_data && isUpdatable(c.update_status || ''));
     const mismatches = selected.filter(c => c.has_update_data && isMismatch(c.update_status || ''));
 
+    const buildCount = updatable.filter(c => c.change_type === ChangeType.BuildChange).length;
     const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange).length;
     const minorCount = updatable.filter(c => c.change_type === ChangeType.MinorChange).length;
     const majorCount = updatable.filter(c => c.change_type === ChangeType.MajorChange).length;
@@ -1105,6 +1107,7 @@ export function Containers() {
       hasSelfUpdate: selected.some(c => c.name.toLowerCase().includes('docksmith') || c.image.toLowerCase().includes('docksmith')),
       hasBlocked: blockedCount > 0,
       patchCount,
+      buildCount,
       minorCount,
       majorCount,
       blockedCount,
@@ -1380,6 +1383,7 @@ export function Containers() {
               {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
                 <div className="update-type-badges">
                   {selectedAnalysis.patchCount > 0 && <span className="update-type-badge patch">{selectedAnalysis.patchCount} Patch</span>}
+                  {selectedAnalysis.buildCount > 0 && <span className="update-type-badge build">{selectedAnalysis.buildCount} Build</span>}
                   {selectedAnalysis.minorCount > 0 && <span className="update-type-badge minor">{selectedAnalysis.minorCount} Minor</span>}
                   {selectedAnalysis.majorCount > 0 && <span className="update-type-badge major">{selectedAnalysis.majorCount} Major</span>}
                   {selectedAnalysis.rebuildCount > 0 && <span className="update-type-badge rebuild">{selectedAnalysis.rebuildCount} Rebuild</span>}

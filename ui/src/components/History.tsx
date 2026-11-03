@@ -494,6 +494,7 @@ export function History() {
     const name = getChangeTypeName(ct);
     const label = ct === ChangeType.NoChange ? 'REBUILD'
       : ct === ChangeType.PatchChange ? 'PATCH'
+      : ct === ChangeType.BuildChange ? 'BUILD'
       : ct === ChangeType.MinorChange ? 'MINOR'
       : ct === ChangeType.MajorChange ? 'MAJOR'
       : ct === ChangeType.Downgrade ? 'DOWNGRADE'

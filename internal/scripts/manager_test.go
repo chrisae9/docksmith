@@ -539,3 +539,13 @@ func TestAssignmentTimestamps(t *testing.T) {
 	assert.True(t, assignment.UpdatedAt.After(beforeTest) || assignment.UpdatedAt.Equal(beforeTest))
 	assert.True(t, assignment.UpdatedAt.Before(afterTest) || assignment.UpdatedAt.Equal(afterTest))
 }
+
+func (m *mockStorage) DeleteAllHistory(ctx context.Context) (int64, error) { return 0, nil }
+
+func (m *mockStorage) DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
+	return storage.OperationQueryResult{}, nil
+}
