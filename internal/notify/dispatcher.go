@@ -235,7 +235,9 @@ func (d *Dispatcher) record(ctx context.Context, svc storage.NotifyServiceRow, s
 // Items are rechecked against the current mute state and event policy before
 // sending: a container muted or an event turned off after the item was queued
 // is dropped. Digest changes stay deliverable when a container opted in with
-// docksmith.notify-digest=true, even if the global digest timing is off.
+// docksmith.notify-digest=true, even if the global digest timing is off; when a
+// container is missing from the latest check so its opt-in is unknown, the item
+// is deferred to a later flush instead of being deleted.
 // new_version items whose container is already at (or past) the announced
 // version are dropped; items for containers missing from the last check are
 // kept (the notifier prunes them after its grace period). Nothing is sent when no items remain. Sent
@@ -273,6 +275,13 @@ func (d *Dispatcher) FlushSummaries(ctx context.Context, current CurrentState, n
 			)
 			if current != nil {
 				cur, labels, exists = current(e.Container)
+			}
+			if e.Kind == EventDigestChanged && !exists && s.Timing[EventDigestChanged] == TimingOff {
+				// Per-container policy is unknown (a briefly absent container, e.g.
+				// after a restart) and global digest delivery is off, so whether the
+				// container opted in cannot be evaluated. Defer: leave the row for a
+				// later flush rather than deleting an alert the container opted into.
+				continue
 			}
 			// Reapply the current mute state and event policy: these may have
 			// changed after the item was queued.

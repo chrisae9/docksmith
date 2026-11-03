@@ -353,6 +353,48 @@ func TestFlush_ReappliesMuteAndEventPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("digest opt-in survives restart with container briefly absent", func(t *testing.T) {
+		st := newDispatchStore(t)
+		sum := addService(t, st, "sum", true)
+		fs := &fakeSender{}
+		ctx := context.Background()
+
+		// Before the restart: global digest is off, the container opted in.
+		before := NewDispatcher(st, fs, staticSettings(DefaultSettings("h")))
+		before.Dispatch(ctx, []Event{{Kind: EventDigestChanged, Container: "web", At: time.Now()}})
+		if n := len(pending(t, st, sum)); n != 1 {
+			t.Fatalf("queued pending rows = %d, want 1", n)
+		}
+
+		// After a restart the new dispatcher has no label/version cache. The check
+		// omits web (within its absence grace period), so its policy is unknown.
+		after := NewDispatcher(st, fs, staticSettings(DefaultSettings("h")))
+		absent := func(c string) (string, map[string]string, bool) {
+			if c == "web" {
+				return "", nil, false
+			}
+			return "2.0.0", nil, true
+		}
+		after.FlushSummaries(ctx, absent, time.Now())
+		if n := fs.total(); n != 0 {
+			t.Fatalf("sends = %d, want 0 while the container policy is unknown", n)
+		}
+		if n := len(pending(t, st, sum)); n != 1 {
+			t.Fatalf("pending rows = %d, want the item retained", n)
+		}
+
+		// Once the container reappears with its opt-in label, the alert is sent.
+		optIn := map[string]string{"docksmith.notify-digest": "true"}
+		present := func(string) (string, map[string]string, bool) { return "1.3.0", optIn, true }
+		after.FlushSummaries(ctx, present, time.Now())
+		if n := fs.total(); n != 1 {
+			t.Fatalf("sends = %d, want 1", n)
+		}
+		if n := len(pending(t, st, sum)); n != 0 {
+			t.Fatalf("pending rows left: %d", n)
+		}
+	})
+
 	t.Run("digest without opt-in is dropped", func(t *testing.T) {
 		st := newDispatchStore(t)
 		sum := addService(t, st, "sum", true)
