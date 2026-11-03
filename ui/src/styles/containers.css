@@ -346,6 +346,7 @@
 }
 
 .update-type-badge.patch { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); }
+.update-type-badge.build { background: var(--color-badge-patch-dim); color: var(--color-badge-patch); opacity: 0.7; }
 .update-type-badge.minor { background: var(--color-badge-minor-dim); color: var(--color-badge-minor); }
 .update-type-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
 .update-type-badge.rebuild { background: var(--color-slate-dim); color: var(--color-slate); }
