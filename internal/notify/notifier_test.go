@@ -139,7 +139,7 @@ func TestNotifier_SummaryKeepsItemsForBrieflyMissingContainer(t *testing.T) {
 			n.OnCheckResult(ctx, checkResult("1.0.0", "1.0.0", nil), 1) // seed
 			n.OnCheckResult(ctx, checkResult("1.0.0", "1.0.1", nil), 2)
 			n.OnCheckResult(ctx, tc.gap, 3)
-			n.Dispatcher().FlushSummaries(ctx, n.currentVersion, time.Now())
+			n.Dispatcher().FlushSummaries(ctx, n.currentState, time.Now())
 
 			calls := fs.callsFor("sum")
 			if len(calls) != 1 || !strings.Contains(calls[0].msg.Text, "1.0.1") {
@@ -174,7 +174,7 @@ func TestNotifier_RecreatedContainerNotReannounced(t *testing.T) {
 	}
 }
 
-func TestNotifier_CurrentVersionsAndMutedOperations(t *testing.T) {
+func TestNotifier_CurrentStateAndMutedOperations(t *testing.T) {
 	st := newDispatchStore(t)
 	addService(t, st, "imm", true)
 	fs := &fakeSender{}
@@ -182,11 +182,11 @@ func TestNotifier_CurrentVersionsAndMutedOperations(t *testing.T) {
 	ctx := context.Background()
 
 	n.OnCheckResult(ctx, checkResult("1.0.0", "1.0.1", map[string]string{"docksmith.notify": "false"}), 7)
-	if v, ok := n.currentVersion("web"); !ok || v != "1.0.0" {
-		t.Fatalf("currentVersion(web) = %q, %v", v, ok)
+	if v, _, ok := n.currentState("web"); !ok || v != "1.0.0" {
+		t.Fatalf("currentState(web) = %q, %v", v, ok)
 	}
-	if _, ok := n.currentVersion("gone"); ok {
-		t.Fatal("currentVersion(gone) reported existing")
+	if _, _, ok := n.currentState("gone"); ok {
+		t.Fatal("currentState(gone) reported existing")
 	}
 
 	n.emit(Event{Kind: EventUpdateFailed, Container: "web", At: time.Now()})
@@ -287,7 +287,7 @@ func TestNotifier_IgnoresOutOfOrderResults(t *testing.T) {
 	n.OnCheckResult(ctx, checkResult("1.0.0", "1.0.2", nil), 3)
 	waitFor(t, "one send", func() bool { return fs.total() == 1 })
 	n.OnCheckResult(ctx, checkResult("0.9.0", "1.0.1", nil), 2) // older, delivered late
-	if v, _ := n.currentVersion("web"); v != "1.0.0" {
+	if v, _, _ := n.currentState("web"); v != "1.0.0" {
 		t.Fatalf("stale result updated current version to %q", v)
 	}
 	n.OnCheckResult(ctx, checkResult("1.0.0", "1.0.2", nil), 4)

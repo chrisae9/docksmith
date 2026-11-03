@@ -62,7 +62,7 @@ func New(store storage.NotifyStore, cfg ConfigStore, ops OperationLookup, bus *e
 	n.settings.Store(&s)
 
 	n.dispatcher = NewDispatcher(store, sender, n.Settings)
-	n.scheduler = NewScheduler(n.dispatcher, n.Settings, n.currentVersion)
+	n.scheduler = NewScheduler(n.dispatcher, n.Settings, n.currentState)
 	n.watcher = NewOperationWatcher(bus, ops, n.emit)
 	return n
 }
@@ -101,12 +101,16 @@ func (n *Notifier) emit(e Event) {
 	go n.dispatcher.Dispatch(ctx, []Event{e})
 }
 
-// currentVersion answers from the most recent check result.
-func (n *Notifier) currentVersion(container string) (string, bool) {
+// currentState answers from the most recent check result: the container's
+// version, labels and whether it is still present.
+func (n *Notifier) currentState(container string) (string, map[string]string, bool) {
 	n.lastMu.RLock()
 	defer n.lastMu.RUnlock()
 	v, ok := n.lastVersions[container]
-	return v, ok
+	if !ok {
+		return "", nil, false
+	}
+	return v, n.lastLabels[container], true
 }
 
 // OnCheckResult detects notifiable changes in a check result, persists the new

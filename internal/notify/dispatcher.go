@@ -26,8 +26,9 @@ var (
 	retryDelays = []time.Duration{5 * time.Second, 15 * time.Second}
 )
 
-// CurrentVersions reports a container's current version and whether it exists.
-type CurrentVersions func(container string) (version string, exists bool)
+// CurrentState reports a container's current version, its labels and whether
+// it exists in the most recent check result.
+type CurrentState func(container string) (version string, labels map[string]string, exists bool)
 
 type sendJob struct {
 	svc storage.NotifyServiceRow
@@ -130,6 +131,16 @@ func eventTiming(s Settings, kind EventKind) Timing {
 	return t
 }
 
+// deliverableInSummary reports whether a queued item still matches the current
+// event policy. Off kinds are dropped, except digest changes a container opted
+// into with docksmith.notify-digest=true.
+func deliverableInSummary(s Settings, kind EventKind, labels map[string]string) bool {
+	if kind == EventDigestChanged {
+		return digestEnabled(labels, s)
+	}
+	return s.Timing[kind] != TimingOff
+}
+
 func (d *Dispatcher) storePending(ctx context.Context, svc storage.NotifyServiceRow, e Event) {
 	payload, err := json.Marshal(e)
 	if err != nil {
@@ -221,11 +232,15 @@ func (d *Dispatcher) record(ctx context.Context, svc storage.NotifyServiceRow, s
 }
 
 // FlushSummaries sends each enabled service's pending items as one summary.
+// Items are rechecked against the current mute state and event policy before
+// sending: a container muted or an event turned off after the item was queued
+// is dropped. Digest changes stay deliverable when a container opted in with
+// docksmith.notify-digest=true, even if the global digest timing is off.
 // new_version items whose container is already at (or past) the announced
 // version are dropped; items for containers missing from the last check are
 // kept (the notifier prunes them after its grace period). Nothing is sent when no items remain. Sent
 // rows are deleted only after a successful send. It sends synchronously.
-func (d *Dispatcher) FlushSummaries(ctx context.Context, current CurrentVersions, now time.Time) {
+func (d *Dispatcher) FlushSummaries(ctx context.Context, current CurrentState, now time.Time) {
 	s := d.settings()
 	svcs, err := d.store.ListNotifyServices(ctx)
 	if err != nil {
@@ -251,12 +266,29 @@ func (d *Dispatcher) FlushSummaries(ctx context.Context, current CurrentVersions
 				drop = append(drop, r)
 				continue
 			}
-			if e.Kind == EventNewVersion && current != nil {
+			var (
+				cur    string
+				labels map[string]string
+				exists bool
+			)
+			if current != nil {
+				cur, labels, exists = current(e.Container)
+			}
+			// Reapply the current mute state and event policy: these may have
+			// changed after the item was queued.
+			if exists && Muted(labels) {
+				drop = append(drop, r)
+				continue
+			}
+			if !deliverableInSummary(s, e.Kind, labels) {
+				drop = append(drop, r)
+				continue
+			}
+			if e.Kind == EventNewVersion && current != nil && exists {
 				// Only drop updates already applied. A container missing from the
 				// latest check keeps its items: the notifier prunes them once the
 				// container has been gone past its grace period.
-				cur, exists := current(e.Container)
-				if exists && !comparisonUnknown(cur, e.ToVersion) {
+				if !comparisonUnknown(cur, e.ToVersion) {
 					if _, newer := Classify(cur, e.ToVersion); !newer {
 						drop = append(drop, r)
 						continue

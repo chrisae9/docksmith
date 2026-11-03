@@ -12,8 +12,8 @@ var schedulerTick = time.Minute
 // Scheduler flushes pending summaries when the SummaryCron schedule fires.
 type Scheduler struct {
 	settings func() Settings
-	current  CurrentVersions
-	flush    func(ctx context.Context, current CurrentVersions, now time.Time)
+	current  CurrentState
+	flush    func(ctx context.Context, current CurrentState, now time.Time)
 
 	// Owned by the scheduler goroutine.
 	cron string
@@ -21,7 +21,7 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a scheduler that flushes d's summaries.
-func NewScheduler(d *Dispatcher, settings func() Settings, current CurrentVersions) *Scheduler {
+func NewScheduler(d *Dispatcher, settings func() Settings, current CurrentState) *Scheduler {
 	return &Scheduler{settings: settings, current: current, flush: d.FlushSummaries}
 }
 

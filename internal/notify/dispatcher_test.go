@@ -238,14 +238,14 @@ func TestFlush_PrunesAppliedAndSuperseded(t *testing.T) {
 
 	d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.9", "4.0.10"), newVersion("radarr", "5.0.0", "5.1.0")})
 	d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.9", "4.0.11"), newVersion("absent", "1.0.0", "1.0.1")})
-	current := func(c string) (string, bool) {
+	current := func(c string) (string, map[string]string, bool) {
 		switch c {
 		case "sonarr":
-			return "4.0.9", true
+			return "4.0.9", nil, true
 		case "radarr":
-			return "5.1.0", true // already applied
+			return "5.1.0", nil, true // already applied
 		}
-		return "", false // e.g. briefly missing from the last check: kept, the notifier prunes after its grace period
+		return "", nil, false // e.g. briefly missing from the last check: kept, the notifier prunes after its grace period
 	}
 	now := time.Now()
 	d.FlushSummaries(ctx, current, now)
@@ -292,12 +292,93 @@ func TestFlush_PrunesAppliedAndSuperseded(t *testing.T) {
 	}
 }
 
+func TestFlush_ReappliesMuteAndEventPolicy(t *testing.T) {
+	mutable := func(s Settings) func() Settings { return func() Settings { return s } }
+
+	t.Run("container muted after queueing", func(t *testing.T) {
+		st := newDispatchStore(t)
+		sum := addService(t, st, "sum", true)
+		fs := &fakeSender{}
+		d := NewDispatcher(st, fs, staticSettings(DefaultSettings("h")))
+		ctx := context.Background()
+
+		d.Dispatch(ctx, []Event{newVersion("web", "1.0.0", "1.0.1")})
+		mutedLabels := map[string]string{"docksmith.notify": "false"}
+		current := func(string) (string, map[string]string, bool) { return "1.0.0", mutedLabels, true }
+		d.FlushSummaries(ctx, current, time.Now())
+
+		if n := fs.total(); n != 0 {
+			t.Fatalf("sent %d message(s) for a muted container", n)
+		}
+		if n := len(pending(t, st, sum)); n != 0 {
+			t.Fatalf("muted pending rows left: %d", n)
+		}
+	})
+
+	t.Run("event switched off after queueing", func(t *testing.T) {
+		st := newDispatchStore(t)
+		sum := addService(t, st, "sum", true)
+		fs := &fakeSender{}
+		s := DefaultSettings("h")
+		d := NewDispatcher(st, fs, mutable(s))
+		ctx := context.Background()
+
+		d.Dispatch(ctx, []Event{newVersion("web", "1.0.0", "1.0.1")})
+		s.Timing[EventNewVersion] = TimingOff
+		current := func(string) (string, map[string]string, bool) { return "1.0.0", nil, true }
+		d.FlushSummaries(ctx, current, time.Now())
+
+		if n := fs.total(); n != 0 {
+			t.Fatalf("sent %d message(s) for a disabled event", n)
+		}
+		if n := len(pending(t, st, sum)); n != 0 {
+			t.Fatalf("disabled pending rows left: %d", n)
+		}
+	})
+
+	t.Run("digest opt-in survives global off", func(t *testing.T) {
+		st := newDispatchStore(t)
+		addService(t, st, "sum", true)
+		fs := &fakeSender{}
+		d := NewDispatcher(st, fs, staticSettings(DefaultSettings("h"))) // digest timing is off
+		ctx := context.Background()
+
+		d.Dispatch(ctx, []Event{{Kind: EventDigestChanged, Container: "web", At: time.Now()}})
+		optIn := map[string]string{"docksmith.notify-digest": "true"}
+		current := func(string) (string, map[string]string, bool) { return "1.3.0", optIn, true }
+		d.FlushSummaries(ctx, current, time.Now())
+
+		if n := fs.total(); n != 1 {
+			t.Fatalf("sends = %d, want 1 for an opted-in digest change", n)
+		}
+	})
+
+	t.Run("digest without opt-in is dropped", func(t *testing.T) {
+		st := newDispatchStore(t)
+		sum := addService(t, st, "sum", true)
+		fs := &fakeSender{}
+		d := NewDispatcher(st, fs, staticSettings(DefaultSettings("h")))
+		ctx := context.Background()
+
+		d.Dispatch(ctx, []Event{{Kind: EventDigestChanged, Container: "web", At: time.Now()}})
+		current := func(string) (string, map[string]string, bool) { return "1.3.0", nil, true }
+		d.FlushSummaries(ctx, current, time.Now())
+
+		if n := fs.total(); n != 0 {
+			t.Fatalf("sends = %d, want 0", n)
+		}
+		if n := len(pending(t, st, sum)); n != 0 {
+			t.Fatalf("pending rows left: %d", n)
+		}
+	})
+}
+
 func TestFlush_EmptySendsNothing(t *testing.T) {
 	st := newDispatchStore(t)
 	sum := addService(t, st, "sum", true)
 	fs := &fakeSender{}
 	d := NewDispatcher(st, fs, staticSettings(DefaultSettings("h")))
-	d.FlushSummaries(context.Background(), func(string) (string, bool) { return "", false }, time.Now())
+	d.FlushSummaries(context.Background(), func(string) (string, map[string]string, bool) { return "", nil, false }, time.Now())
 	if n := fs.total(); n != 0 {
 		t.Fatalf("sends = %d", n)
 	}
@@ -432,7 +513,7 @@ func TestScheduler_FiresWhenDueAndFollowsCronChanges(t *testing.T) {
 	settings := func() Settings { mu.Lock(); defer mu.Unlock(); return set }
 	s := NewScheduler(nil, settings, nil)
 	var fired []time.Time
-	s.flush = func(_ context.Context, _ CurrentVersions, now time.Time) { fired = append(fired, now) }
+	s.flush = func(_ context.Context, _ CurrentState, now time.Time) { fired = append(fired, now) }
 
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 26, h, m, 0, 0, time.Local) }
 	ctx := context.Background()
@@ -482,7 +563,7 @@ func TestFlush_KeepsVersionUpsertedDuringSend(t *testing.T) {
 	ctx := context.Background()
 	d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.9", "4.0.10")})
 	fs.onSend = func() { d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.9", "4.0.11")}) }
-	current := func(string) (string, bool) { return "4.0.9", true }
+	current := func(string) (string, map[string]string, bool) { return "4.0.9", nil, true }
 	d.FlushSummaries(ctx, current, time.Now())
 
 	rows := pending(t, st, sum)
@@ -504,9 +585,9 @@ func TestFlush_StaleDropKeepsNewerUpsert(t *testing.T) {
 	d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.9", "4.0.10")})
 	// sonarr is already at 4.0.10, so the row is stale; a newer version
 	// arrives while the flush is deciding (inside the current() lookup).
-	current := func(string) (string, bool) {
+	current := func(string) (string, map[string]string, bool) {
 		d.Dispatch(ctx, []Event{newVersion("sonarr", "4.0.10", "4.0.11")})
-		return "4.0.10", true
+		return "4.0.10", nil, true
 	}
 	d.FlushSummaries(ctx, current, time.Now())
 	rows := pending(t, st, sum)
