@@ -69,7 +69,7 @@ func Detect(prev map[string]storage.NotifyContainerState, snaps []Snapshot, s Se
 					emit(Event{Kind: EventNewVersion, FromVersion: sn.CurrentVersion, ToVersion: target, Level: lvl})
 					st.LastNotifiedVersion = target
 				}
-			} else if comparisonUnknown(sn.CurrentVersion, target) && digestEnabled(sn.Labels, s) && sn.LatestDigest != "" &&
+			} else if digestComparable(sn.CurrentVersion, target) && digestEnabled(sn.Labels, s) && sn.LatestDigest != "" &&
 				sn.LatestDigest != sn.CurrentDigest && sn.LatestDigest != st.LastNotifiedDigest {
 				emit(Event{Kind: EventDigestChanged, FromVersion: sn.CurrentVersion, ToVersion: target})
 				st.LastNotifiedDigest = sn.LatestDigest
@@ -154,6 +154,22 @@ func comparisonUnknown(current, target string) bool {
 		return true
 	}
 	return version.NewComparator().GetChangeType(from, to) == version.UnknownChange
+}
+
+// digestComparable reports whether a digest-only change is reportable when the
+// versions carry no ordering information: equal versions (a rebuilt tag that
+// resolves to the same semver) and unparseable tags. Downgrades stay suppressed.
+func digestComparable(current, target string) bool {
+	p := version.NewParser()
+	from, to := p.ParseTag(current), p.ParseTag(target)
+	if from == nil || to == nil {
+		return true
+	}
+	switch version.NewComparator().GetChangeType(from, to) {
+	case version.NoChange, version.UnknownChange:
+		return true
+	}
+	return false
 }
 
 func effectiveMinLevel(labels map[string]string, s Settings) Level {

@@ -71,7 +71,8 @@ func TestDetect(t *testing.T) {
 		{"digest not for downgrade", []step{
 			{[]Snapshot{{Name: "web", Status: "UPDATE_AVAILABLE", CurrentVersion: "1.3.0", LatestVersion: "latest", LatestResolvedVersion: "1.2.0", CurrentDigest: "sha:a", LatestDigest: "sha:b", Labels: lbl("docksmith.notify-digest", "true")}}, nil},
 		}, nil},
-		{"digest not for equal resolved", []step{
+		{"digest for equal resolved rebuild", []step{
+			{[]Snapshot{{Name: "web", Status: "UPDATE_AVAILABLE", CurrentVersion: "1.3.0", LatestVersion: "latest", LatestResolvedVersion: "1.3.0", CurrentDigest: "sha:a", LatestDigest: "sha:b", Labels: lbl("docksmith.notify-digest", "true")}}, []EventKind{EventDigestChanged}},
 			{[]Snapshot{{Name: "web", Status: "UPDATE_AVAILABLE", CurrentVersion: "1.3.0", LatestVersion: "latest", LatestResolvedVersion: "1.3.0", CurrentDigest: "sha:a", LatestDigest: "sha:b", Labels: lbl("docksmith.notify-digest", "true")}}, nil},
 		}, nil},
 		{"digest for unparseable pinned tags", []step{
