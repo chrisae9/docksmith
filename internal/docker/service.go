@@ -392,12 +392,14 @@ func (s *Service) ListVolumes(ctx context.Context) ([]VolumeInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
-	return s.ListVolumesWithContainers(ctx, containers)
+	return s.ListVolumesWithContainers(ctx, containers, true)
 }
 
 // ListVolumesWithContainers returns all Docker volumes using pre-fetched containers.
 // This avoids redundant container listing when called from handleExplorer.
-func (s *Service) ListVolumesWithContainers(ctx context.Context, containers []container.Summary) ([]VolumeInfo, error) {
+// When includeSizes is false the expensive DiskUsage call is skipped and every
+// volume keeps Size: -1 (unknown).
+func (s *Service) ListVolumesWithContainers(ctx context.Context, containers []container.Summary, includeSizes bool) ([]VolumeInfo, error) {
 	volumeList, err := s.cli.VolumeList(ctx, volume.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %w", err)
@@ -417,14 +419,17 @@ func (s *Service) ListVolumesWithContainers(ctx context.Context, containers []co
 		}
 	}
 
-	// Get volume sizes via disk usage API (call once, not per volume)
+	// Get volume sizes via disk usage API (call once, not per volume).
+	// DiskUsage is expensive, so callers that do not need sizes skip it entirely.
 	volumeSizes := make(map[string]int64)
-	du, err := s.cli.DiskUsage(ctx, types.DiskUsageOptions{
-		Types: []types.DiskUsageObject{types.VolumeObject},
-	})
-	if err == nil && du.Volumes != nil {
-		for _, v := range du.Volumes {
-			volumeSizes[v.Name] = v.UsageData.Size
+	if includeSizes {
+		du, err := s.cli.DiskUsage(ctx, types.DiskUsageOptions{
+			Types: []types.DiskUsageObject{types.VolumeObject},
+		})
+		if err == nil && du.Volumes != nil {
+			for _, v := range du.Volumes {
+				volumeSizes[v.Name] = v.UsageData.Size
+			}
 		}
 	}
 

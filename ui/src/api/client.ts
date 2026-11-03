@@ -257,8 +257,8 @@ export async function getRegistryTags(imageRef: string): Promise<RegistryTagsAPI
 }
 
 // Explorer data (containers, images, networks, volumes)
-export async function getExplorerData(): Promise<ExplorerResponse> {
-  return fetchAPI('/explorer');
+export async function getExplorerData(options?: { includeVolumeSizes?: boolean }): Promise<ExplorerResponse> {
+  return fetchAPI(`/explorer${options?.includeVolumeSizes ? '?include_volume_sizes=true' : ''}`);
 }
 
 // Container operations
