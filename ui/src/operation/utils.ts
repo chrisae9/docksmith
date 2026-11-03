@@ -222,6 +222,18 @@ export function describeChanges(changes: RestartOperation['labelChanges']): stri
   if (changes.restart_after !== undefined) {
     descriptions.push(changes.restart_after ? `Set restart deps: ${changes.restart_after}` : 'Remove restart dependencies');
   }
+  if (changes.notify !== undefined) {
+    descriptions.push(changes.notify ? 'Enable notifications' : 'Mute notifications');
+  }
+  if (changes.notify_level !== undefined) {
+    descriptions.push(changes.notify_level ? `Set notification level: ${changes.notify_level}` : 'Use global notification level');
+  }
+  if (changes.notify_digest !== undefined) {
+    descriptions.push(changes.notify_digest ? 'Enable digest-change notifications' : 'Disable digest-change notifications');
+  }
+  if (changes.remove_labels?.includes('docksmith.notify-digest')) {
+    descriptions.push('Use global digest-change notification setting');
+  }
 
   return descriptions;
 }
@@ -240,6 +252,12 @@ export function describeLabelOp(labelOp: BatchLabelOperation['labelOp']): string
   if (labelOp.tag_regex) return `Set Tag Filter: ${labelOp.tag_regex}`;
   if (labelOp.script === '') return 'Clear Script';
   if (labelOp.script) return `Set Script: ${labelOp.script}`;
+  if (labelOp.notify === true) return 'Enable Notifications';
+  if (labelOp.notify === false) return 'Mute Notifications';
+  if (labelOp.notify_digest === true) return 'Enable Digest Notifications';
+  if (labelOp.notify_digest === false) return 'Disable Digest Notifications';
+  if (labelOp.notify_level === '') return 'Clear Notification Level';
+  if (labelOp.notify_level) return `Set Notification Level: ${labelOp.notify_level}`;
   return 'Apply Labels';
 }
 

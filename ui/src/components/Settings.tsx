@@ -3,6 +3,7 @@ import { checkContainers, getContainerStatus, getDockerConfig, clearHistory, get
 import type { DiscoveryResult, DockerRegistryInfo } from '../types/api';
 import { formatTimeAgo } from '../utils/time';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { NotificationSettings } from './NotificationSettings';
 
 export function Settings() {
   const [loading, setLoading] = useState(false);
@@ -303,6 +304,8 @@ export function Settings() {
             )}
           </div>
         </section>
+
+        <NotificationSettings />
 
         {/* Configuration */}
         <section className="settings-section">

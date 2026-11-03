@@ -74,6 +74,9 @@ export function ContainerPage() {
   const [versionPin, setVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
   const [restartAfter, setRestartAfter] = useState<string>('');
   const [tagRegex, setTagRegex] = useState<string>('');
+  const [notifyFlag, setNotifyFlag] = useState(true);
+  const [notifyLevel, setNotifyLevel] = useState<string>('');
+  const [notifyDigest, setNotifyDigest] = useState<'' | 'true' | 'false'>('');
   const [hasChanges, setHasChanges] = useState(false);
   const [refreshingPrecheck, setRefreshingPrecheck] = useState(false);
   const [activeHelp, setActiveHelp] = useState<string | null>(null);
@@ -100,6 +103,18 @@ export function ContainerPage() {
       title: 'Pre-Update Script',
       description: 'Run a custom script before updating. If the script exits with a non-zero code, the update is blocked. Useful for health checks or backup verification.',
     },
+    notify: {
+      title: 'Notifications',
+      description: 'Turn off to mute all notifications for this container. Notification services are configured in Settings.',
+    },
+    notifyLevel: {
+      title: 'Notification Level',
+      description: 'Override the global minimum update level for new-version notifications on this container. "Use global" follows the setting in Settings.',
+    },
+    notifyDigest: {
+      title: 'Digest Notifications',
+      description: 'Notify when the image digest changes for this container, even if the tag stays the same.',
+    },
     restartDeps: {
       title: 'Restart Dependencies',
       description: 'Automatically restart selected containers after this container is updated. Useful for services that depend on this container.',
@@ -113,6 +128,9 @@ export function ContainerPage() {
   const [originalVersionPin, setOriginalVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
   const [originalRestartAfter, setOriginalRestartAfter] = useState<string>('');
   const [originalTagRegex, setOriginalTagRegex] = useState<string>('');
+  const [originalNotify, setOriginalNotify] = useState(true);
+  const [originalNotifyLevel, setOriginalNotifyLevel] = useState<string>('');
+  const [originalNotifyDigest, setOriginalNotifyDigest] = useState<'' | 'true' | 'false'>('');
 
   // Track pending state from sub-pages
   const pendingStateRef = useRef<{ selectedScript?: string; restartAfter?: string; tagRegex?: string }>({});
@@ -160,6 +178,9 @@ export function ContainerPage() {
           const allowLatest = labels['docksmith.allow-latest'] === 'true';
           const restartDeps = labels['docksmith.restart-after'] || '';
           const tagRegexValue = labels['docksmith.tag-regex'] || '';
+          const notify = labels['docksmith.notify'] !== 'false';
+          const notifyLevelValue = labels['docksmith.notify-level'] || '';
+          const notifyDigestValue: '' | 'true' | 'false' = labels['docksmith.notify-digest'] === 'true' ? 'true' : labels['docksmith.notify-digest'] === 'false' ? 'false' : '';
 
           // Convert version pin labels to single value
           let pin: 'none' | 'patch' | 'minor' | 'major' = 'none';
@@ -175,6 +196,9 @@ export function ContainerPage() {
           if (!hasPendingScript) setSelectedScript(scriptPath);
           setIgnoreFlag(ignore);
           setAllowLatestFlag(allowLatest);
+          setNotifyFlag(notify);
+          setNotifyLevel(notifyLevelValue);
+          setNotifyDigest(notifyDigestValue);
           setVersionPin(pin);
           if (!hasPendingRestartAfter) setRestartAfter(restartDeps);
           if (!hasPendingTagRegex) setTagRegex(tagRegexValue);
@@ -186,6 +210,9 @@ export function ContainerPage() {
           setOriginalVersionPin(pin);
           setOriginalRestartAfter(restartDeps);
           setOriginalTagRegex(tagRegexValue);
+          setOriginalNotify(notify);
+          setOriginalNotifyLevel(notifyLevelValue);
+          setOriginalNotifyDigest(notifyDigestValue);
 
           pendingStateRef.current = {};
         }
@@ -312,8 +339,9 @@ export function ContainerPage() {
     const versionPinChanged = versionPin !== originalVersionPin;
     const restartAfterChanged = restartAfter !== originalRestartAfter;
     const tagRegexChanged = tagRegex !== originalTagRegex;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinChanged || restartAfterChanged || tagRegexChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPin, restartAfter, tagRegex, originalScript, originalIgnore, originalAllowLatest, originalVersionPin, originalRestartAfter, originalTagRegex]);
+    const notifyChanged = notifyFlag !== originalNotify || notifyLevel !== originalNotifyLevel || notifyDigest !== originalNotifyDigest;
+    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinChanged || restartAfterChanged || tagRegexChanged || notifyChanged);
+  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPin, restartAfter, tagRegex, notifyFlag, notifyLevel, notifyDigest, originalScript, originalIgnore, originalAllowLatest, originalVersionPin, originalRestartAfter, originalTagRegex, originalNotify, originalNotifyLevel, originalNotifyDigest]);
 
   // Handle scroll events
   const handleLogsScroll = useCallback(() => {
@@ -367,7 +395,7 @@ export function ContainerPage() {
   const handleSave = (force = false) => {
     if (!docksmithData) return;
 
-    const labelChanges: Record<string, boolean | string> = {};
+    const labelChanges: Record<string, boolean | string | string[]> = {};
 
     if (ignoreFlag !== originalIgnore) labelChanges.ignore = ignoreFlag;
     if (allowLatestFlag !== originalAllowLatest) labelChanges.allow_latest = allowLatestFlag;
@@ -379,6 +407,12 @@ export function ContainerPage() {
     if (selectedScript !== originalScript) labelChanges.script = selectedScript || '';
     if (restartAfter !== originalRestartAfter) labelChanges.restart_after = restartAfter || '';
     if (tagRegex !== originalTagRegex) labelChanges.tag_regex = tagRegex || '';
+    if (notifyFlag !== originalNotify) labelChanges.notify = notifyFlag;
+    if (notifyLevel !== originalNotifyLevel) labelChanges.notify_level = notifyLevel;
+    if (notifyDigest !== originalNotifyDigest) {
+      if (notifyDigest === '') labelChanges.remove_labels = ['docksmith.notify-digest'];
+      else labelChanges.notify_digest = notifyDigest === 'true';
+    }
 
     if (Object.keys(labelChanges).length === 0) return;
 
@@ -401,6 +435,9 @@ export function ContainerPage() {
     setVersionPin(originalVersionPin);
     setRestartAfter(originalRestartAfter);
     setTagRegex(originalTagRegex);
+    setNotifyFlag(originalNotify);
+    setNotifyLevel(originalNotifyLevel);
+    setNotifyDigest(originalNotifyDigest);
     setError(null);
   };
 
@@ -1187,6 +1224,93 @@ export function ContainerPage() {
                 <div className="help-tooltip">
                   <strong>{helpContent.tagFilter.title}</strong>
                   <p>{helpContent.tagFilter.description}</p>
+                </div>
+              )}
+
+              {/* Notifications */}
+              <div className="checkbox-row">
+                <button
+                  className="help-btn"
+                  onClick={() => setActiveHelp(activeHelp === 'notify' ? null : 'notify')}
+                  aria-label="Help for Notifications"
+                >
+                  <i className="fa-solid fa-circle-question"></i>
+                </button>
+                <label className="row-label-area">
+                  <span className="row-label">Notifications</span>
+                  <input
+                    type="checkbox"
+                    checked={notifyFlag}
+                    onChange={(e) => setNotifyFlag(e.target.checked)}
+                  />
+                </label>
+              </div>
+              {activeHelp === 'notify' && (
+                <div className="help-tooltip">
+                  <strong>{helpContent.notify.title}</strong>
+                  <p>{helpContent.notify.description}</p>
+                </div>
+              )}
+
+              <div className="setting-item segmented-row">
+                <div className="setting-label-with-help">
+                  <button
+                    className="help-btn"
+                    onClick={() => setActiveHelp(activeHelp === 'notifyLevel' ? null : 'notifyLevel')}
+                    aria-label="Help for Notification Level"
+                  >
+                    <i className="fa-solid fa-circle-question"></i>
+                  </button>
+                  <label htmlFor="notify-level-select" className="nav-title">Notification Level</label>
+                </div>
+                <select
+                  id="notify-level-select"
+                  className="retention-select"
+                  value={notifyLevel}
+                  disabled={!notifyFlag}
+                  onChange={(e) => setNotifyLevel(e.target.value)}
+                >
+                  <option value="">Use global</option>
+                  <option value="major">Major</option>
+                  <option value="minor">Minor</option>
+                  <option value="patch">Patch</option>
+                  <option value="build">Build</option>
+                </select>
+              </div>
+              {activeHelp === 'notifyLevel' && (
+                <div className="help-tooltip">
+                  <strong>{helpContent.notifyLevel.title}</strong>
+                  <p>{helpContent.notifyLevel.description}</p>
+                </div>
+              )}
+
+              <div className="setting-item segmented-row">
+                <div className="setting-label-with-help">
+                  <button
+                    className="help-btn"
+                    onClick={() => setActiveHelp(activeHelp === 'notifyDigest' ? null : 'notifyDigest')}
+                    aria-label="Help for Digest Notifications"
+                  >
+                    <i className="fa-solid fa-circle-question"></i>
+                  </button>
+                  <label htmlFor="notify-digest-select" className="nav-title">Digest Notifications</label>
+                </div>
+                <select
+                  id="notify-digest-select"
+                  className="retention-select"
+                  value={notifyDigest}
+                  disabled={!notifyFlag}
+                  onChange={(e) => setNotifyDigest(e.target.value as '' | 'true' | 'false')}
+                >
+                  <option value="">Use global</option>
+                  <option value="true">On</option>
+                  <option value="false">Off</option>
+                </select>
+              </div>
+              {activeHelp === 'notifyDigest' && (
+                <div className="help-tooltip">
+                  <strong>{helpContent.notifyDigest.title}</strong>
+                  <p>{helpContent.notifyDigest.description}</p>
                 </div>
               )}
 

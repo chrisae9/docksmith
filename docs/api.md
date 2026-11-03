@@ -122,6 +122,23 @@ Docksmith exposes a REST API at `/api/`.
 | POST | `/api/prune/volumes` | Remove unused volumes |
 | POST | `/api/prune/system` | Remove all unused resources |
 
+### Notifications
+
+Return `503` when notification support is unavailable. Secret values (passwords, tokens, webhook URLs) are never returned: service `config` secrets are shown as `********`, and submitting `********` in a `PUT` keeps the stored value.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/notifications/settings` | Settings plus `timezone`, `timezone_warning`, `check_interval` and the next 3 `next_summaries` (RFC3339) |
+| PUT | `/api/notifications/settings` | Update settings; `400` with the validation message (nothing saved) when invalid |
+| POST | `/api/notifications/validate-cron` | Body `{"cron": "..."}`; returns `{valid, error, next}` (3 upcoming fire times) |
+| GET | `/api/notifications/services` | List services (config secrets masked) |
+| POST | `/api/notifications/services` | Create a service: `{name, type, enabled, config}` |
+| PUT | `/api/notifications/services/{id}` | Update a service; `404` if unknown |
+| DELETE | `/api/notifications/services/{id}` | Delete a service; `404` if unknown |
+| POST | `/api/notifications/services/{id}/test` | Send a test message; `400` with the (redacted) error on failure |
+
+Every enabled service receives the same events. Each event kind's `timing` in the settings is `off`, `immediate` or `summary` (kinds: `new_version`, `digest_changed`, `update_succeeded`, `update_failed`, `rollback`, `update_blocked`, `check_failing`, `compose_mismatch`); summary events are sent together on `summary_cron`.
+
 ---
 
 ## Common Endpoints

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/chis/docksmith/internal/compose"
@@ -20,20 +22,24 @@ import (
 
 // SetLabelsRequest represents a request to set labels
 type SetLabelsRequest struct {
-	Container        string  `json:"container"`
-	Ignore           *bool   `json:"ignore,omitempty"`
-	AllowLatest      *bool   `json:"allow_latest,omitempty"`
-	AllowPrerelease  *bool   `json:"allow_prerelease,omitempty"`
-	VersionPinMajor  *bool   `json:"version_pin_major,omitempty"`
-	VersionPinMinor  *bool   `json:"version_pin_minor,omitempty"`
-	VersionPinPatch  *bool   `json:"version_pin_patch,omitempty"`
-	TagRegex         *string `json:"tag_regex,omitempty"`
-	VersionMin       *string `json:"version_min,omitempty"`
-	VersionMax       *string `json:"version_max,omitempty"`
-	Script           *string `json:"script,omitempty"`
-	RestartAfter *string `json:"restart_after,omitempty"`
-	NoRestart        bool    `json:"no_restart,omitempty"`
-	Force            bool    `json:"force,omitempty"`
+	Container       string   `json:"container"`
+	Ignore          *bool    `json:"ignore,omitempty"`
+	AllowLatest     *bool    `json:"allow_latest,omitempty"`
+	AllowPrerelease *bool    `json:"allow_prerelease,omitempty"`
+	VersionPinMajor *bool    `json:"version_pin_major,omitempty"`
+	VersionPinMinor *bool    `json:"version_pin_minor,omitempty"`
+	VersionPinPatch *bool    `json:"version_pin_patch,omitempty"`
+	TagRegex        *string  `json:"tag_regex,omitempty"`
+	VersionMin      *string  `json:"version_min,omitempty"`
+	VersionMax      *string  `json:"version_max,omitempty"`
+	Script          *string  `json:"script,omitempty"`
+	RestartAfter    *string  `json:"restart_after,omitempty"`
+	Notify          *bool    `json:"notify,omitempty"`
+	NotifyDigest    *bool    `json:"notify_digest,omitempty"`
+	NotifyLevel     *string  `json:"notify_level,omitempty"`
+	RemoveLabels    []string `json:"remove_labels,omitempty"`
+	NoRestart       bool     `json:"no_restart,omitempty"`
+	Force           bool     `json:"force,omitempty"`
 }
 
 // RemoveLabelsRequest represents a request to remove labels
@@ -72,6 +78,9 @@ var docksmithLabels = []string{
 	scripts.VersionMaxLabel,
 	scripts.PreUpdateCheckLabel,
 	scripts.RestartAfterLabel,
+	scripts.NotifyLabel,
+	scripts.NotifyLevelLabel,
+	scripts.NotifyDigestLabel,
 }
 
 // getDocksmithLabels extracts all docksmith labels from a container's labels
@@ -126,9 +135,26 @@ func (s *Server) handleLabelsSet(w http.ResponseWriter, r *http.Request) {
 
 	if req.Ignore == nil && req.AllowLatest == nil && req.AllowPrerelease == nil && req.VersionPinMajor == nil && req.VersionPinMinor == nil && req.VersionPinPatch == nil &&
 		req.TagRegex == nil && req.VersionMin == nil && req.VersionMax == nil &&
-		req.Script == nil && req.RestartAfter == nil {
+		req.Script == nil && req.RestartAfter == nil &&
+		req.Notify == nil && req.NotifyDigest == nil && req.NotifyLevel == nil && len(req.RemoveLabels) == 0 {
 		RespondBadRequest(w, fmt.Errorf("no labels specified"))
 		return
+	}
+
+	if err := validateRemoveLabels(req.RemoveLabels); err != nil {
+		RespondBadRequest(w, err)
+		return
+	}
+	if err := validateNoSetRemoveOverlap(&req); err != nil {
+		RespondBadRequest(w, err)
+		return
+	}
+
+	if req.NotifyLevel != nil {
+		if err := validateNotifyLevel(*req.NotifyLevel); err != nil {
+			RespondBadRequest(w, err)
+			return
+		}
 	}
 
 	// Validate tag regex synchronously before launching async operation
@@ -333,17 +359,8 @@ func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID str
 	// Stage 4: Complete (100%)
 	s.publishLabelProgress(operationID, cfg.containerName, stackName, "complete", 100, "Settings saved and container restarted")
 
-	var newLabelsJSON []byte
-	if len(modified) > 0 {
-		newLabelsJSON, _ = json.Marshal(modified)
-	} else if len(removed) > 0 {
-		removedMap := make(map[string]string)
-		for _, labelName := range removed {
-			removedMap[labelName] = ""
-		}
-		newLabelsJSON, _ = json.Marshal(removedMap)
-	}
-	s.completeLabelOperation(ctx, operationID, string(newLabelsJSON))
+	newLabelsJSON := labelHistoryJSON(modified, removed)
+	s.completeLabelOperation(ctx, operationID, newLabelsJSON)
 
 	// Emit container updated event for dashboard refresh
 	if s.eventBus != nil {
@@ -380,62 +397,117 @@ func (s *Server) setLabelsWithConfig(ctx context.Context, req *SetLabelsRequest,
 		force:         req.Force,
 		batchGroupID:  batchGroupID,
 	}, func(service *compose.Service) (map[string]string, []string, error) {
-		modified := make(map[string]string)
-
-		// Apply boolean label updates
-		boolLabels := []struct {
-			value    *bool
-			labelKey string
-		}{
-			{req.Ignore, scripts.IgnoreLabel},
-			{req.AllowLatest, scripts.AllowLatestLabel},
-			{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
-			{req.VersionPinMajor, scripts.VersionPinMajorLabel},
-			{req.VersionPinMinor, scripts.VersionPinMinorLabel},
-			{req.VersionPinPatch, scripts.VersionPinPatchLabel},
-		}
-
-		for _, bl := range boolLabels {
-			if bl.value != nil {
-				val, err := applyBoolLabel(service, bl.labelKey, bl.value)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
-				}
-				modified[bl.labelKey] = val
-			}
-		}
-
-		// Validate tag regex before applying
-		if req.TagRegex != nil && *req.TagRegex != "" {
-			if err := validateRegexPattern(*req.TagRegex); err != nil {
-				return nil, nil, fmt.Errorf("invalid tag regex: %w", err)
-			}
-		}
-
-		// Apply string label updates
-		stringLabels := []struct {
-			value    *string
-			labelKey string
-		}{
-			{req.TagRegex, scripts.TagRegexLabel},
-			{req.VersionMin, scripts.VersionMinLabel},
-			{req.VersionMax, scripts.VersionMaxLabel},
-			{req.Script, scripts.PreUpdateCheckLabel},
-			{req.RestartAfter, scripts.RestartAfterLabel},
-		}
-
-		for _, sl := range stringLabels {
-			if sl.value != nil {
-				val, err := applyStringLabel(service, sl.labelKey, sl.value)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
-				}
-				modified[sl.labelKey] = val
-			}
-		}
-
-		return modified, nil, nil
+		modified, err := applyLabelChanges(service, req)
+		return modified, req.RemoveLabels, err
 	})
+}
+
+// validateNotifyLevel checks that a notify-level value is one of major, minor, patch, build.
+// An empty value is allowed (it removes the label).
+func validateNotifyLevel(level string) error {
+	switch level {
+	case "", "major", "minor", "patch", "build":
+		return nil
+	}
+	return fmt.Errorf("invalid notify_level %q: must be one of major, minor, patch, build", level)
+}
+
+// applyLabelChanges applies the requested label changes to a compose service
+// and returns the labels that were modified.
+func applyLabelChanges(service *compose.Service, req *SetLabelsRequest) (map[string]string, error) {
+	// Validate before mutating any label
+	if err := validateRemoveLabels(req.RemoveLabels); err != nil {
+		return nil, err
+	}
+	if err := validateNoSetRemoveOverlap(req); err != nil {
+		return nil, err
+	}
+
+	if req.NotifyLevel != nil {
+		if err := validateNotifyLevel(*req.NotifyLevel); err != nil {
+			return nil, err
+		}
+	}
+
+	modified := make(map[string]string)
+	// Removals share the same load/modify/save as the sets below
+	for _, name := range req.RemoveLabels {
+		if err := service.RemoveLabel(name); err != nil {
+			return nil, fmt.Errorf("failed to remove label %s: %w", name, err)
+		}
+	}
+
+	// Apply boolean label updates
+	boolLabels := []struct {
+		value    *bool
+		labelKey string
+	}{
+		{req.Ignore, scripts.IgnoreLabel},
+		{req.AllowLatest, scripts.AllowLatestLabel},
+		{req.AllowPrerelease, scripts.AllowPrereleaseLabel},
+		{req.VersionPinMajor, scripts.VersionPinMajorLabel},
+		{req.VersionPinMinor, scripts.VersionPinMinorLabel},
+		{req.VersionPinPatch, scripts.VersionPinPatchLabel},
+	}
+
+	for _, bl := range boolLabels {
+		if bl.value != nil {
+			val, err := applyBoolLabel(service, bl.labelKey, bl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", bl.labelKey, err)
+			}
+			modified[bl.labelKey] = val
+		}
+	}
+
+	// Notify labels keep an explicit "false" (it is meaningful: mute / disable digest)
+	for _, nl := range []struct {
+		value    *bool
+		labelKey string
+	}{
+		{req.Notify, scripts.NotifyLabel},
+		{req.NotifyDigest, scripts.NotifyDigestLabel},
+	} {
+		if nl.value != nil {
+			val := strconv.FormatBool(*nl.value)
+			if err := service.SetLabel(nl.labelKey, val); err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", nl.labelKey, err)
+			}
+			modified[nl.labelKey] = val
+		}
+	}
+
+	// Validate tag regex before applying
+	if req.TagRegex != nil && *req.TagRegex != "" {
+		if err := validateRegexPattern(*req.TagRegex); err != nil {
+			return nil, fmt.Errorf("invalid tag regex: %w", err)
+		}
+	}
+
+	// Apply string label updates
+	stringLabels := []struct {
+		value    *string
+		labelKey string
+	}{
+		{req.TagRegex, scripts.TagRegexLabel},
+		{req.VersionMin, scripts.VersionMinLabel},
+		{req.VersionMax, scripts.VersionMaxLabel},
+		{req.Script, scripts.PreUpdateCheckLabel},
+		{req.RestartAfter, scripts.RestartAfterLabel},
+		{req.NotifyLevel, scripts.NotifyLevelLabel},
+	}
+
+	for _, sl := range stringLabels {
+		if sl.value != nil {
+			val, err := applyStringLabel(service, sl.labelKey, sl.value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to apply %s label: %w", sl.labelKey, err)
+			}
+			modified[sl.labelKey] = val
+		}
+	}
+
+	return modified, nil
 }
 
 // removeLabels implements the label removal logic (atomic: compose update + restart)
@@ -632,9 +704,9 @@ func applyStringLabel(service *compose.Service, labelKey string, value *string) 
 
 // LabelRollbackRequest represents a request to rollback label changes
 type LabelRollbackRequest struct {
-	BatchGroupID   string   `json:"batch_group_id,omitempty"`    // Rollback all operations in this batch
-	OperationIDs   []string `json:"operation_ids,omitempty"`     // Rollback specific operations
-	ContainerNames []string `json:"container_names,omitempty"`   // Rollback specific containers within a batch
+	BatchGroupID   string   `json:"batch_group_id,omitempty"`  // Rollback all operations in this batch
+	OperationIDs   []string `json:"operation_ids,omitempty"`   // Rollback specific operations
+	ContainerNames []string `json:"container_names,omitempty"` // Rollback specific containers within a batch
 	Force          bool     `json:"force,omitempty"`
 }
 
@@ -737,35 +809,7 @@ func (s *Server) handleLabelRollback(w http.ResponseWriter, r *http.Request) {
 			newLabels = make(map[string]string)
 		}
 
-		// Build the inverse label operation
-		// For each label that was changed: restore its old value or remove it
-		rollbackReq := &SetLabelsRequest{
-			Container: op.ContainerName,
-			Force:     req.Force,
-		}
-
-		hasChanges := false
-		for labelKey, newVal := range newLabels {
-			oldVal, hadOldVal := oldLabels[labelKey]
-
-			if newVal == "" {
-				// Label was removed — restore it if it had a value
-				if hadOldVal && oldVal != "" {
-					hasChanges = true
-					s.setRollbackLabel(rollbackReq, labelKey, oldVal)
-				}
-			} else if hadOldVal && oldVal != "" {
-				// Label was changed — restore old value
-				if oldVal != newVal {
-					hasChanges = true
-					s.setRollbackLabel(rollbackReq, labelKey, oldVal)
-				}
-			} else {
-				// Label was added (didn't exist before) — remove it
-				hasChanges = true
-				s.setRollbackLabel(rollbackReq, labelKey, "")
-			}
-		}
+		rollbackReq, hasChanges := s.buildLabelRollbackRequest(op.ContainerName, req.Force, oldLabels, newLabels)
 
 		if !hasChanges {
 			results = append(results, BatchLabelResult{
@@ -810,8 +854,46 @@ func (s *Server) handleLabelRollback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// setRollbackLabel sets a label field on the rollback request based on the label key and target value
+// buildLabelRollbackRequest builds the inverse of a recorded label change: each
+// label in newLabels is restored to its value in oldLabels, or removed if it did
+// not exist before. It reports whether there is anything to roll back.
+func (s *Server) buildLabelRollbackRequest(container string, force bool, oldLabels, newLabels map[string]string) (*SetLabelsRequest, bool) {
+	req := &SetLabelsRequest{Container: container, Force: force}
+	hasChanges := false
+	for labelKey, newVal := range newLabels {
+		oldVal, hadOldVal := oldLabels[labelKey]
+
+		if newVal == "" {
+			// Label was removed — restore it if it had a value
+			if hadOldVal && oldVal != "" {
+				hasChanges = true
+				s.setRollbackLabel(req, labelKey, oldVal)
+			}
+		} else if hadOldVal && oldVal != "" {
+			// Label was changed — restore old value
+			if oldVal != newVal {
+				hasChanges = true
+				s.setRollbackLabel(req, labelKey, oldVal)
+			}
+		} else {
+			// Label was added (didn't exist before) — remove it
+			hasChanges = true
+			s.setRollbackLabel(req, labelKey, "")
+		}
+	}
+	return req, hasChanges
+}
+
+// setRollbackLabel sets a label field on the rollback request based on the label key and target value.
+// An empty value for the notify labels (where an explicit "false" is meaningful)
+// removes the label so the container inherits the default again.
 func (s *Server) setRollbackLabel(req *SetLabelsRequest, labelKey, value string) {
+	if value == "" && (labelKey == scripts.NotifyLabel || labelKey == scripts.NotifyDigestLabel) {
+		if !slices.Contains(req.RemoveLabels, labelKey) {
+			req.RemoveLabels = append(req.RemoveLabels, labelKey)
+		}
+		return
+	}
 	switch labelKey {
 	case scripts.IgnoreLabel:
 		v := value == "true"
@@ -841,6 +923,14 @@ func (s *Server) setRollbackLabel(req *SetLabelsRequest, labelKey, value string)
 		req.Script = &value
 	case scripts.RestartAfterLabel:
 		req.RestartAfter = &value
+	case scripts.NotifyLabel:
+		v := value == "true"
+		req.Notify = &v
+	case scripts.NotifyDigestLabel:
+		v := value == "true"
+		req.NotifyDigest = &v
+	case scripts.NotifyLevelLabel:
+		req.NotifyLevel = &value
 	}
 }
 
@@ -928,4 +1018,60 @@ func (s *Server) handleBatchLabels(w http.ResponseWriter, r *http.Request) {
 		"results":        results,
 		"batch_group_id": batchGroupID,
 	})
+}
+
+// validateNoSetRemoveOverlap rejects a request that both sets and removes the same label.
+func validateNoSetRemoveOverlap(req *SetLabelsRequest) error {
+	if len(req.RemoveLabels) == 0 {
+		return nil
+	}
+	set := map[string]bool{
+		scripts.IgnoreLabel:          req.Ignore != nil,
+		scripts.AllowLatestLabel:     req.AllowLatest != nil,
+		scripts.AllowPrereleaseLabel: req.AllowPrerelease != nil,
+		scripts.VersionPinMajorLabel: req.VersionPinMajor != nil,
+		scripts.VersionPinMinorLabel: req.VersionPinMinor != nil,
+		scripts.VersionPinPatchLabel: req.VersionPinPatch != nil,
+		scripts.TagRegexLabel:        req.TagRegex != nil,
+		scripts.VersionMinLabel:      req.VersionMin != nil,
+		scripts.VersionMaxLabel:      req.VersionMax != nil,
+		scripts.PreUpdateCheckLabel:  req.Script != nil,
+		scripts.RestartAfterLabel:    req.RestartAfter != nil,
+		scripts.NotifyLabel:          req.Notify != nil,
+		scripts.NotifyDigestLabel:    req.NotifyDigest != nil,
+		scripts.NotifyLevelLabel:     req.NotifyLevel != nil,
+	}
+	for _, name := range req.RemoveLabels {
+		if set[name] {
+			return fmt.Errorf("label %q is both set and removed", name)
+		}
+	}
+	return nil
+}
+
+// validateRemoveLabels checks every name is a label docksmith manages.
+func validateRemoveLabels(names []string) error {
+	for _, name := range names {
+		if !slices.Contains(docksmithLabels, name) {
+			return fmt.Errorf("cannot remove label %q: not a docksmith label", name)
+		}
+	}
+	return nil
+}
+
+// labelHistoryJSON records an operation's label changes for history and rollback:
+// modified labels with their new values, removed labels with "".
+func labelHistoryJSON(modified map[string]string, removed []string) string {
+	if len(modified) == 0 && len(removed) == 0 {
+		return ""
+	}
+	history := make(map[string]string, len(modified)+len(removed))
+	for k, v := range modified {
+		history[k] = v
+	}
+	for _, name := range removed {
+		history[name] = ""
+	}
+	b, _ := json.Marshal(history)
+	return string(b)
 }
