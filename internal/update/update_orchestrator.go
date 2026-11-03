@@ -102,13 +102,13 @@ func NewUpdateOrchestrator(
 ) *UpdateOrchestrator {
 	ctx, cancel := context.WithCancel(context.Background())
 	orch := &UpdateOrchestrator{
-		dockerClient:   dockerClient,
-		dockerSDK:      dockerSDK,
-		storage:        store,
-		eventBus:       bus,
-		graphBuilder:   graph.NewBuilder(),
-		stackManager:   docker.NewStackManager(),
-		checker:        NewChecker(dockerClient, registryManager, store),
+		dockerClient: dockerClient,
+		dockerSDK:    dockerSDK,
+		storage:      store,
+		eventBus:     bus,
+		graphBuilder: graph.NewBuilder(),
+		stackManager: docker.NewStackManager(),
+		checker:      NewChecker(dockerClient, registryManager, store),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      60 * time.Second,
 			FallbackWait: 3 * time.Second, // Containers without health checks just need to be "running"
@@ -912,74 +912,106 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	log.Printf("SELF-RESTART: Restart initiated, operation=%s will be completed on next startup", operationID)
 }
 
-// orderIngressLast moves ingress containers after all others, preserving the
-// relative order within each group. Dependency ordering still decides within
-// the non-ingress group; this only makes the UI outage as short as possible.
-func orderIngressLast(containers []*docker.Container) []*docker.Container {
-	last := make([]*docker.Container, 0, len(containers))
-	rest := make([]*docker.Container, 0, len(containers))
-	for _, c := range containers {
-		if docker.IsIngressContainer(c.Name, c.Image) {
-			last = append(last, c)
-			continue
-		}
-		rest = append(rest, c)
+// orderUpdateBatch returns the batch in a single topological order that
+// respects both Compose depends_on edges and Docker network-namespace provider
+// edges. Ingress containers are deferred only among containers that are ready
+// to run, so the UI outage stays as short as possible without ever recreating
+// a dependent before the container it depends on. Cycles never drop
+// containers: once nothing is ready, the remaining nodes are emitted in input
+// order.
+func orderUpdateBatch(containers []*docker.Container, depGraph *graph.Graph) []*docker.Container {
+	n := len(containers)
+	if n == 0 {
+		return nil
 	}
-	return append(rest, last...)
-}
 
-// orderByNetworkMode returns containers ordered so that a container whose
-// network namespace is provided by another member of the batch follows that
-// provider. Ties keep the input order; containers with no in-batch provider
-// are emitted first, in input order.
-func orderByNetworkMode(containers []*docker.Container) []*docker.Container {
-	ordered := make([]*docker.Container, 0, len(containers))
-	emitted := make([]bool, len(containers))
+	index := make(map[string]int, n)
+	for i, c := range containers {
+		index[c.Name] = i
+	}
 
-	// providerIndex resolves the in-batch container that supplies the network
-	// namespace for containers[i], or -1 when there is none.
-	providerIndex := func(i int) int {
-		target := strings.TrimPrefix(containers[i].NetworkMode, "container:")
-		if target == "" || target == containers[i].NetworkMode {
-			// Not a container:<target> network mode.
-			return -1
+	// preds[i] holds the batch indexes that must be emitted before i.
+	preds := make([]map[int]bool, n)
+	for i := range preds {
+		preds[i] = make(map[int]bool)
+	}
+	addEdge := func(before, after int) {
+		if before != after {
+			preds[after][before] = true
+		}
+	}
+
+	// Compose depends_on (and any label-recorded network_mode) edges.
+	if depGraph != nil {
+		for name, i := range index {
+			node, ok := depGraph.GetNode(name)
+			if !ok {
+				continue
+			}
+			for _, dep := range node.Dependencies {
+				if j, ok := index[dep]; ok {
+					addEdge(j, i)
+				}
+			}
+		}
+	}
+
+	// Live network-namespace edges. The Docker API is authoritative when the
+	// compose label is missing or stale.
+	for i, c := range containers {
+		target := strings.TrimPrefix(c.NetworkMode, "container:")
+		if target == "" || target == c.NetworkMode {
+			continue
 		}
 		for j, other := range containers {
-			if j == i {
-				continue
-			}
-			if networkModeTargetMatches(target, other) {
-				return j
+			if j != i && networkModeTargetMatches(target, other) {
+				addEdge(j, i)
+				break
 			}
 		}
-		return -1
 	}
 
-	for len(ordered) < len(containers) {
-		progress := false
+	emitted := make([]bool, n)
+	ordered := make([]*docker.Container, 0, n)
+
+	ready := func(i int) bool {
+		for pred := range preds[i] {
+			if !emitted[pred] {
+				return false
+			}
+		}
+		return true
+	}
+
+	for len(ordered) < n {
+		best := -1
 		for i, c := range containers {
-			if emitted[i] {
+			if emitted[i] || !ready(i) {
 				continue
 			}
-			provider := providerIndex(i)
-			if provider == -1 || emitted[provider] {
-				ordered = append(ordered, c)
-				emitted[i] = true
-				progress = true
+			if best == -1 {
+				best = i
+				continue
+			}
+			// Input order wins ties; only a non-ingress container may jump
+			// ahead of an ingress one.
+			if docker.IsIngressContainer(containers[best].Name, containers[best].Image) &&
+				!docker.IsIngressContainer(c.Name, c.Image) {
+				best = i
 			}
 		}
-		if progress {
-			continue
-		}
-		// A full pass emitted nothing: the remaining containers form a cycle
-		// (or reference themselves). Emit them in input order and stop — never
-		// loop and never drop a container.
-		for i, c := range containers {
-			if !emitted[i] {
-				ordered = append(ordered, c)
-				emitted[i] = true
+		if best == -1 {
+			// No ready node: the remaining graph has a cycle. Emit the first
+			// remaining container and continue so nothing is dropped.
+			for i := range containers {
+				if !emitted[i] {
+					best = i
+					break
+				}
 			}
 		}
+		ordered = append(ordered, containers[best])
+		emitted[best] = true
 	}
 
 	return ordered
@@ -1179,10 +1211,9 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 		}
 	}
 
-	orderedContainers = orderIngressLast(orderedContainers)
-	// Network namespace correctness wins over the ingress-last optimization:
-	// a dependent sharing its provider's namespace must be recreated after it.
-	orderedContainers = orderByNetworkMode(orderedContainers)
+	// One topological order over both Compose depends_on and Docker
+	// network-namespace edges; ingress-last is only a tie-breaker.
+	orderedContainers = orderUpdateBatch(orderedContainers, depGraph)
 
 	// Recreate, health-check, and mark each container individually (60-95%)
 	// All phases merged into one per-container loop so the frontend gets continuous SSE events.
@@ -2250,17 +2281,17 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 	// Create rollback operation
 	rollbackOpID := uuid.New().String()
 	rollbackOp := storage.UpdateOperation{
-		OperationID:    rollbackOpID,
-		ContainerID:    targetContainer.ID,
-		ContainerName:  origOp.ContainerName,
-		StackName:      origOp.StackName,
-		OperationType:  "rollback",
-		Status:         "in_progress",
-		OldVersion:     origOp.NewVersion, // Current version (what we're rolling back from)
-		NewVersion:     targetVersion,     // Target version from database (what we're rolling back to)
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
-		StartedAt:      func() *time.Time { t := time.Now(); return &t }(),
+		OperationID:   rollbackOpID,
+		ContainerID:   targetContainer.ID,
+		ContainerName: origOp.ContainerName,
+		StackName:     origOp.StackName,
+		OperationType: "rollback",
+		Status:        "in_progress",
+		OldVersion:    origOp.NewVersion, // Current version (what we're rolling back from)
+		NewVersion:    targetVersion,     // Target version from database (what we're rolling back to)
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		StartedAt:     func() *time.Time { t := time.Now(); return &t }(),
 	}
 
 	if err := o.storage.SaveUpdateOperation(ctx, rollbackOp); err != nil {
