@@ -36,6 +36,7 @@ type ContainerUpdate struct {
 	IsLocal            bool                `json:"is_local"`
 	RecommendedTag     string              `json:"recommended_tag,omitempty"` // Recommended semver tag to switch to (if using :latest)
 	UsingLatestTag     bool                `json:"using_latest_tag"`
+	UsingFloatingTag   bool                `json:"using_floating_tag"` // True for latest/latest-*/meta tags with no fixed version
 	PreUpdateCheck     string              `json:"pre_update_check,omitempty"`      // Path to pre-update check script
 	PreUpdateCheckFail string              `json:"pre_update_check_fail,omitempty"` // Reason why pre-update check failed (if blocked)
 	PreUpdateCheckPass bool                `json:"pre_update_check_pass"`           // True if pre-update check passed
