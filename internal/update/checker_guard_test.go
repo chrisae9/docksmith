@@ -73,6 +73,49 @@ func TestNoDowngradeRecommendation(t *testing.T) {
 	}
 }
 
+// TestNoDowngradeOnMetaTagUpdate covers the meta-tag fallback guard: when a
+// digest mismatch produces UPDATE_AVAILABLE but the registry tag list only
+// contains older tags, the fallback must not resolve LatestResolvedVersion or
+// RecommendedTag to an older version.
+func TestNoDowngradeOnMetaTagUpdate(t *testing.T) {
+	mockDocker := &mockDockerClient{
+		containers: []docker.Container{
+			{ID: "c", Name: "app", Image: "reg.example/app:stable"},
+		},
+		imageDigests:  map[string]string{"reg.example/app:stable": "sha256:current"},
+		imageVersions: map[string]string{"reg.example/app:stable": "6.4.4.10685-ls324"},
+		localImages:   map[string]bool{},
+	}
+	mockRegistry := &mockRegistryClient{
+		tags: map[string][]string{
+			"reg.example/app": {"3.0.0.4039-ls29", "amd64-3.0.0.3978-ls27"},
+		},
+		tagDigests: map[string]string{
+			"reg.example/app:stable": "sha256:newer",
+		},
+		digestMappings: map[string]map[string][]string{
+			"reg.example/app": {},
+		},
+	}
+	checker := NewChecker(mockDocker, mockRegistry, newMockStorage())
+
+	result, err := checker.CheckForUpdates(context.Background())
+	if err != nil {
+		t.Fatalf("CheckForUpdates failed: %v", err)
+	}
+	update := result.Updates[0]
+
+	if update.Status != UpdateAvailable {
+		t.Fatalf("status = %s, want UPDATE_AVAILABLE", update.Status)
+	}
+	if update.LatestResolvedVersion != "" {
+		t.Fatalf("LatestResolvedVersion = %q, want empty (no older tag may be resolved)", update.LatestResolvedVersion)
+	}
+	if update.RecommendedTag != "" {
+		t.Fatalf("RecommendedTag = %q, want empty", update.RecommendedTag)
+	}
+}
+
 func TestPinTargetAtRunningVersion(t *testing.T) {
 	mockDocker := &mockDockerClient{
 		containers: []docker.Container{
