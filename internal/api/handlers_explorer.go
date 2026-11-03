@@ -22,10 +22,14 @@ type ExplorerData struct {
 // handleExplorer returns combined data for the explorer view
 // GET /api/explorer
 func (s *Server) handleExplorer(w http.ResponseWriter, r *http.Request) {
-	// Task 8 will derive this from the include_volume_sizes query flag.
+	// Volume sizes require an expensive Docker DiskUsage call, so they are opt-in.
+	includeSizes := r.URL.Query().Get("include_volume_sizes") == "true"
 	key := "default"
+	if includeSizes {
+		key = "sizes"
+	}
 	data, err := s.explorerCache.get(r.Context(), key, func(ctx context.Context) (*ExplorerData, error) {
-		return s.computeExplorer(ctx, false)
+		return s.computeExplorer(ctx, includeSizes)
 	})
 	if err != nil {
 		RespondInternalError(w, err)
@@ -82,7 +86,7 @@ func (s *Server) computeExplorer(ctx context.Context, includeVolumeSizes bool) (
 
 	// Volumes (uses pre-fetched containers)
 	g.Go(func() error {
-		result, err := s.dockerService.ListVolumesWithContainers(gCtx, rawContainers)
+		result, err := s.dockerService.ListVolumesWithContainers(gCtx, rawContainers, includeVolumeSizes)
 		if err != nil {
 			return err
 		}

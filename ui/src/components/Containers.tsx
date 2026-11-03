@@ -93,7 +93,14 @@ export function Containers() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  // Data hook
+  // Sub-tab state
+  const [activeSubTab, setActiveSubTab] = useState<SubTab>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_SUBTAB);
+    return (saved as SubTab) || 'containers';
+  });
+
+  // Data hook. Volume sizes are opt-in because they need an expensive Docker
+  // DiskUsage call; only the Volumes tab shows them.
   const {
     containers,
     containerStacks,
@@ -107,13 +114,7 @@ export function Containers() {
     reconnecting,
     refresh,
     cacheRefresh,
-  } = useContainersData();
-
-  // Sub-tab state
-  const [activeSubTab, setActiveSubTab] = useState<SubTab>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_SUBTAB);
-    return (saved as SubTab) || 'containers';
-  });
+  } = useContainersData({ includeVolumeSizes: activeSubTab === 'volumes' });
 
   // Container view settings (filter, show ignored, etc.)
   const [viewSettings, setViewSettings] = useState<ContainerViewSettings>(loadContainerViewSettings);
