@@ -1,5 +1,5 @@
 # Stage 1: Build React frontend
-FROM node:24-alpine3.22 AS frontend-builder
+FROM node:24.22.2-alpine3.23 AS frontend-builder
 
 WORKDIR /build/ui
 COPY ui/package*.json ./
@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go backend
-FROM golang:1.25-alpine3.22 AS backend-builder
+FROM golang:1.26.10-alpine3.23 AS backend-builder
 
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -19,7 +19,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
 
 # Stage 3: Runtime
-FROM alpine:3.23
+FROM alpine:3.23.7
 
 RUN apk add --no-cache ca-certificates bash curl jq docker-cli docker-cli-compose
 
