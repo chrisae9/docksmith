@@ -1,5 +1,5 @@
 # Stage 1: Build React frontend
-FROM node:24.22.2-alpine3.23 AS frontend-builder
+FROM node:26.13.0-alpine3.23 AS frontend-builder
 
 WORKDIR /build/ui
 COPY ui/package*.json ./
