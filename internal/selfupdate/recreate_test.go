@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // captureHelper swaps runHelperCommand for the duration of the test and returns
@@ -213,5 +214,94 @@ func TestComposeInputDirsSkipsMissingReferences(t *testing.T) {
 
 	if got := composeInputDirs("/srv/stacks/docksmith/compose.yaml"); len(got) != 0 {
 		t.Errorf("composeInputDirs() = %v, want none for a missing reference", got)
+	}
+}
+
+// A service inherited through extends brings its own env_file with it; the
+// helper must walk the extends target, not just mount its directory.
+func TestRecreateSelfMountsExtendsInheritedEnvFile(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml": "services:\n  docksmith:\n    extends:\n      file: ../base/common.yaml\n      service: docksmith\n",
+		"/srv/stacks/base/common.yaml":       "services:\n  docksmith:\n    env_file: /srv/secrets/shared.env\n",
+		"/srv/secrets/shared.env":            "SECRET=1\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	for _, want := range []string{
+		"-v /srv/stacks/base:/srv/stacks/base:ro",
+		"-v /srv/secrets:/srv/secrets:ro",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("helper command %q missing %q", args, want)
+		}
+	}
+}
+
+// include.path may be a list of files in long form.
+func TestRecreateSelfMountsIncludePathList(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml": "include:\n  - path:\n      - ../other/compose.yaml\n      - ../overrides/compose.yaml\nservices:\n  docksmith: {}\n",
+		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
+		"/srv/stacks/overrides/compose.yaml": "services:\n  overrides: {}\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	for _, want := range []string{
+		"-v /srv/stacks/other:/srv/stacks/other:ro",
+		"-v /srv/stacks/overrides:/srv/stacks/overrides:ro",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("helper command %q missing %q", args, want)
+		}
+	}
+}
+
+// Long-form include entries may declare their own env_file for interpolation.
+func TestRecreateSelfMountsIncludeEnvFile(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml": "include:\n  - path: ../other/compose.yaml\n    env_file: /srv/secrets/include.env\nservices:\n  docksmith: {}\n",
+		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
+		"/srv/secrets/include.env":           "OTHER=1\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	if !strings.Contains(args, "-v /srv/secrets:/srv/secrets:ro") {
+		t.Errorf("helper command %q must mount the include env_file directory", args)
+	}
+}
+
+// Mutually extending files must not recurse forever.
+func TestComposeInputDirsExtendsCycleTerminates(t *testing.T) {
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml": "services:\n  app:\n    extends:\n      file: ../base/a.yaml\n      service: app\n",
+		"/srv/stacks/base/a.yaml":            "services:\n  app:\n    extends:\n      file: b.yaml\n      service: app\n",
+		"/srv/stacks/base/b.yaml":            "services:\n  app:\n    extends:\n      file: a.yaml\n      service: app\n",
+	})
+
+	done := make(chan []string, 1)
+	go func() { done <- composeInputDirs("/srv/stacks/docksmith/compose.yaml") }()
+
+	select {
+	case got := <-done:
+		if len(got) != 1 || got[0] != "/srv/stacks/base" {
+			t.Errorf("composeInputDirs() = %v, want [/srv/stacks/base]", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("composeInputDirs did not terminate on an extends cycle")
 	}
 }

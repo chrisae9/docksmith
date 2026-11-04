@@ -160,7 +160,10 @@ func composeInputDirs(composeFilePath string) []string {
 		}
 
 		baseDir := path.Dir(file)
-		for _, ref := range composeReferencePaths(&doc.Include) {
+		// walkReference mounts the path a reference resolves to and parses that
+		// file too, so references it makes in turn — extends chains and nested
+		// includes — are discovered.
+		walkReference := func(ref string) {
 			addReference(ref, baseDir)
 			for _, candidate := range resolveComposeReference(ref, baseDir, composeDir) {
 				if composeFileExists(candidate) {
@@ -169,12 +172,22 @@ func composeInputDirs(composeFilePath string) []string {
 				}
 			}
 		}
+
+		for _, include := range composeIncludes(&doc.Include) {
+			for _, ref := range include.paths {
+				walkReference(ref)
+			}
+			// Long-form include entries may declare env_file for interpolation.
+			for _, ref := range include.envFiles {
+				addReference(ref, baseDir)
+			}
+		}
 		for _, service := range doc.Services {
 			for _, ref := range composeReferencePaths(&service.EnvFile) {
 				addReference(ref, baseDir)
 			}
 			if ref := composeExtendsFile(&service.Extends); ref != "" {
-				addReference(ref, baseDir)
+				walkReference(ref)
 			}
 		}
 	}
@@ -239,11 +252,54 @@ func composeReferenceFromNode(node *yaml.Node) []string {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			if node.Content[i].Value == "path" {
-				return composeReferenceFromNode(node.Content[i+1])
+				// Long-form include entries allow path to be a list.
+				return composeReferencePaths(node.Content[i+1])
 			}
 		}
 	}
 	return nil
+}
+
+// composeInclude is one include entry: compose files to load plus optional
+// interpolation env files.
+type composeInclude struct {
+	paths    []string
+	envFiles []string
+}
+
+// composeIncludes parses the include key, accepting the short form (paths) and
+// the long form (entries with path and env_file keys), where path may itself be
+// a list.
+func composeIncludes(node *yaml.Node) []composeInclude {
+	var includes []composeInclude
+	var visit func(*yaml.Node)
+	visit = func(n *yaml.Node) {
+		switch n.Kind {
+		case yaml.SequenceNode:
+			for i := range n.Content {
+				visit(n.Content[i])
+			}
+		case yaml.ScalarNode:
+			if n.Value != "" {
+				includes = append(includes, composeInclude{paths: []string{n.Value}})
+			}
+		case yaml.MappingNode:
+			var include composeInclude
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				switch n.Content[i].Value {
+				case "path":
+					include.paths = composeReferencePaths(n.Content[i+1])
+				case "env_file":
+					include.envFiles = composeReferencePaths(n.Content[i+1])
+				}
+			}
+			includes = append(includes, include)
+		}
+	}
+	if node.Kind != 0 {
+		visit(node)
+	}
+	return includes
 }
 
 // composeExtendsFile returns the file a service extends, or "" when extends
