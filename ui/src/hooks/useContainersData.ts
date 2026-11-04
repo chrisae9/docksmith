@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getContainerStatus, getExplorerData, checkContainers, triggerCheck } from '../api/client';
+import { getSnapshot, setSnapshot } from '../api/snapshot';
 import { useEventStream } from '../context/EventStreamContext';
 import { usePeriodicRefresh } from './usePeriodicRefresh';
 import { checkFinished, planRefresh } from './refreshTrigger';
@@ -29,6 +30,8 @@ interface ContainersDataResult {
   loading: boolean;
   error: string | null;
   checking: boolean;
+  refreshing: boolean;
+  lastBackgroundRun?: string;
   checkProgress: { checked: number; total: number; percent: number; message: string } | null;
   reconnecting: boolean;
   refresh: () => Promise<void>;
@@ -80,6 +83,7 @@ function mergeContainerData(
       update_status: status?.status,
       recommended_tag: status?.recommended_tag,
       using_latest_tag: status?.using_latest_tag,
+      using_floating_tag: status?.using_floating_tag,
       env_controlled: status?.env_controlled,
       env_var_name: status?.env_var_name,
       compose_image: status?.compose_image,
@@ -114,11 +118,14 @@ function mergeContainerData(
 
 export function useContainersData(options: { includeVolumeSizes?: boolean } = {}): ContainersDataResult {
   const { includeVolumeSizes = false } = options;
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getSnapshot()?.explorer);
   const [error, setError] = useState<string | null>(null);
-  const [explorerData, setExplorerData] = useState<ExplorerData | null>(null);
-  const [statusData, setStatusData] = useState<DiscoveryResult | null>(null);
-  const hasInitialData = useRef(false);
+  const [explorerData, setExplorerData] = useState<ExplorerData | null>(() => getSnapshot()?.explorer ?? null);
+  const [statusData, setStatusData] = useState<DiscoveryResult | null>(() => getSnapshot()?.status ?? null);
+  // True while a refresh run started an actual check and is still polling for it.
+  // Only the run that received triggered=true sets it; deduped runs never do.
+  const [refreshing, setRefreshing] = useState(false);
+  const hasInitialData = useRef(!!getSnapshot()?.explorer);
   const mountedRef = useRef(true);
   const inFlightRefresh = useRef<Promise<void> | null>(null);
   const lastRefreshStart = useRef(0);
@@ -133,37 +140,35 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
 
   const { checkProgress, containerUpdated, reconnecting, wasDisconnected, clearWasDisconnected } = useEventStream();
 
-  // Fetch both data sources in parallel
+  // Fetch both data sources in parallel. They settle independently; the explorer
+  // request alone owns the loading gate, and status is optional on top of it.
   const fetchData = useCallback(async () => {
-    try {
-      const [explorerRes, statusRes] = await Promise.all([
-        getExplorerData({ includeVolumeSizes }),
-        getContainerStatus(),
-      ]);
-
-      if (explorerRes.success && explorerRes.data) {
-        setExplorerData(explorerRes.data);
-      }
-      if (statusRes.success && statusRes.data) {
-        setStatusData(statusRes.data);
-      }
-
-      if (!explorerRes.success) {
-        // Explorer is required for the container list — without it, data is empty
-        if (!hasInitialData.current) {
-          setError(explorerRes.error || 'Failed to fetch container data');
+    const explorerPromise = getExplorerData({ includeVolumeSizes })
+      .then(res => {
+        if (res.success && res.data) {
+          setExplorerData(res.data);
+          setSnapshot({ explorer: res.data });
+          hasInitialData.current = true;
+          setError(null);
+        } else if (!hasInitialData.current) {
+          setError(res.error || 'Failed to fetch container data');
         }
-      } else {
-        setError(null);
-        hasInitialData.current = true;
-      }
-    } catch (err) {
-      if (!hasInitialData.current) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      }
-    } finally {
-      setLoading(false);
-    }
+      })
+      .catch(err => {
+        if (!hasInitialData.current) setError(err instanceof Error ? err.message : 'Unknown error');
+      })
+      .finally(() => setLoading(false));
+
+    const statusPromise = getContainerStatus()
+      .then(res => {
+        if (res.success && res.data) {
+          setStatusData(res.data);
+          setSnapshot({ status: res.data });
+        }
+      })
+      .catch(() => { /* status is optional; explorer already carries the list */ });
+
+    await Promise.allSettled([explorerPromise, statusPromise]);
   }, [includeVolumeSizes]);
 
   // Background refresh — trigger background check, wait for it to complete, then fetch cached data.
@@ -176,11 +181,21 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
       if (!triggerRes.success) {
         console.warn('Background check trigger failed:', triggerRes.error);
       }
+      const triggered = triggerRes.success && triggerRes.data?.triggered === true;
+      // Surface an in-flight check as soon as this run starts one, so the header can
+      // show "Checking…" without waiting for the next /api/status refetch.
+      if (triggered && mountedRef.current) setRefreshing(true);
 
       // A deduplicated trigger that neither started nor joined a check means the
       // cached result is already current; read it immediately instead of polling
       // for a last-run timestamp that cannot advance.
       const plan = planRefresh(triggerRes.success ? triggerRes.data : null);
+      // The server stamps last_background_run with second precision on its own
+      // clock, so a check that completes inside the trigger's own second never
+      // reads as "advanced past triggerAt" and the poll would run to its deadline
+      // with the header stuck on "Checking…". A last run that differs from the
+      // one the trigger reported is equally proof that our check finished.
+      const baselineRun = triggerRes.success ? triggerRes.data?.last_background_run : undefined;
       const pollDeadline = triggerAt + 15000;
       let finalStatus: DiscoveryResult | null = null;
       while (plan.poll && mountedRef.current && Date.now() < pollDeadline) {
@@ -188,8 +203,14 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
         if (!mountedRef.current) return;
         const statusRes = await getContainerStatus(5000);
         if (!statusRes.success || !statusRes.data) continue;
-        if (checkFinished(plan.mode, triggerAt, statusRes.data)) {
-          finalStatus = statusRes.data;
+        const status = statusRes.data;
+        const runAdvanced =
+          plan.mode === 'triggered' &&
+          !status.checking &&
+          baselineRun !== undefined &&
+          status.last_background_run !== baselineRun;
+        if (runAdvanced || checkFinished(plan.mode, triggerAt, status)) {
+          finalStatus = status;
           break;
         }
       }
@@ -206,12 +227,29 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
         }
       }
       if (!mountedRef.current) return;
-      if (explorerRes.success && explorerRes.data) setExplorerData(explorerRes.data);
-      if (resolvedStatus) setStatusData(resolvedStatus);
-      if (explorerRes.success || statusOk) setError(null);
+      if (explorerRes.success && explorerRes.data) {
+        setExplorerData(explorerRes.data);
+        setSnapshot({ explorer: explorerRes.data });
+      }
+      if (resolvedStatus) {
+        setStatusData(resolvedStatus);
+        setSnapshot({ status: resolvedStatus });
+      }
+      if (explorerRes.success || statusOk) {
+        setError(null);
+      } else if (force) {
+        // A user-initiated refresh that returned nothing leaves the existing rows
+        // on screen; say so instead of letting them look freshly checked.
+        setError(explorerRes.error || 'Failed to refresh container data');
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       console.error('Background refresh failed:', err);
+      if (force) setError(err instanceof Error ? err.message : 'Failed to refresh container data');
+    } finally {
+      // Covers the poll loop and the post-poll refetch, including every early return.
+      // Skipped after unmount, like every other state write in this hook.
+      if (mountedRef.current) setRefreshing(false);
     }
   }, [includeVolumeSizes]);
 
@@ -244,15 +282,21 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
 
   // Cache refresh — clears cache and triggers fresh registry queries
   const cacheRefresh = useCallback(async () => {
-    setLoading(true);
+    if (!hasInitialData.current) setLoading(true);
     setError(null);
     try {
       const [explorerRes, statusRes] = await Promise.all([
         getExplorerData({ includeVolumeSizes }),
         checkContainers(),
       ]);
-      if (explorerRes.success && explorerRes.data) setExplorerData(explorerRes.data);
-      if (statusRes.success && statusRes.data) setStatusData(statusRes.data);
+      if (explorerRes.success && explorerRes.data) {
+        setExplorerData(explorerRes.data);
+        setSnapshot({ explorer: explorerRes.data });
+      }
+      if (statusRes.success && statusRes.data) {
+        setStatusData(statusRes.data);
+        setSnapshot({ status: statusRes.data });
+      }
       if (!explorerRes.success && !statusRes.success) {
         setError(explorerRes.error || statusRes.error || 'Failed to refresh');
       }
@@ -284,8 +328,10 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
     fetchData();
   }, [includeVolumeSizes, fetchData]);
 
-  // Periodic background refresh (every 60 seconds)
-  usePeriodicRefresh(backgroundRefresh, 60000, true, () => loading);
+  // Periodic background refresh, ~1 min. The server's 60 s floor counts from check
+  // completion, so a 60 s tick is deduped every other run; 65 s keeps a roughly
+  // one-minute cadence while still honouring "at most one check per 60 s".
+  usePeriodicRefresh(backgroundRefresh, 65000, true, () => loading);
 
   // Refresh on visibility/focus changes
   useEffect(() => {
@@ -344,6 +390,8 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
     loading,
     error,
     checking: statusData?.checking ?? false,
+    refreshing,
+    lastBackgroundRun: statusData?.last_background_run,
     checkProgress,
     reconnecting,
     refresh,

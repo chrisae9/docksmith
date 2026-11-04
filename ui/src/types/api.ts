@@ -28,6 +28,7 @@ export interface ContainerInfo {
   is_local: boolean;
   recommended_tag?: string;
   using_latest_tag: boolean;
+  using_floating_tag: boolean;
   pre_update_check?: string;
   pre_update_check_fail?: string;
   pre_update_check_pass: boolean;
@@ -57,7 +58,8 @@ export interface Stack {
 // Discovery Result (matches update.DiscoveryResult)
 export interface DiscoveryResult {
   containers: ContainerInfo[];
-  stacks: Record<string, Stack>;
+  // Omitted by /api/status (which only reports cache state); present on /api/check.
+  stacks?: Record<string, Stack>;
   standalone_containers: ContainerInfo[];
   update_order: string[];
   total_checked: number;
@@ -68,11 +70,18 @@ export interface DiscoveryResult {
   ignored: number;
   // Status endpoint specific fields
   last_cache_refresh?: string; // ISO timestamp of when cache was last cleared (cache refresh)
-  last_background_run?: string; // ISO timestamp of when background check last ran
+  last_background_run: string; // ISO timestamp of when background check last ran
   checking?: boolean;
   next_check?: string; // ISO timestamp
   check_interval?: string; // Duration string like "5m0s"
   cache_ttl?: string; // Duration string like "1h0m0s"
+}
+
+// Trigger check response (matches POST /api/trigger-check)
+export interface TriggerCheckResponse {
+  triggered: boolean;
+  checking: boolean;
+  last_background_run: string;
 }
 
 // Batch Container Detail (matches storage.BatchContainerDetail)
@@ -452,6 +461,7 @@ export interface UnifiedContainerItem {
   update_status?: string;
   recommended_tag?: string;
   using_latest_tag?: boolean;
+  using_floating_tag?: boolean;
   env_controlled?: boolean;
   env_var_name?: string;
   compose_image?: string;

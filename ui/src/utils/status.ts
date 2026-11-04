@@ -1,12 +1,22 @@
 /**
+ * Checks if a container status indicates a real version update is available.
+ */
+export function isVersionUpdate(status: string): boolean {
+  return status === 'UPDATE_AVAILABLE' || status === 'UPDATE_AVAILABLE_BLOCKED';
+}
+
+/**
+ * Checks if a container is up to date but sits on a floating tag that could be pinned.
+ */
+export function isPinnable(status: string): boolean {
+  return status === 'UP_TO_DATE_PINNABLE';
+}
+
+/**
  * Checks if a container status indicates it can be updated.
  */
 export function isUpdatable(status: string): boolean {
-  return (
-    status === 'UPDATE_AVAILABLE' ||
-    status === 'UPDATE_AVAILABLE_BLOCKED' ||
-    status === 'UP_TO_DATE_PINNABLE'
-  );
+  return isVersionUpdate(status) || isPinnable(status);
 }
 
 /**

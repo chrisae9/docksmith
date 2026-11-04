@@ -1,3 +1,5 @@
+import { Tooltip } from './Tooltip';
+
 interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
@@ -26,13 +28,14 @@ export function SearchBar({
         aria-label={placeholder}
       />
       {value && !disabled && (
-        <button
-          className="clear-search"
-          onClick={() => onChange('')}
-          aria-label="Clear search"
-        >
-          <i className="fa-solid fa-times" aria-hidden="true"></i>
-        </button>
+        <Tooltip label="Clear search" placement="bottom" align="end">
+          <button
+            className="clear-search"
+            onClick={() => onChange('')}
+          >
+            <i className="fa-solid fa-times" aria-hidden="true"></i>
+          </button>
+        </Tooltip>
       )}
     </div>
   );

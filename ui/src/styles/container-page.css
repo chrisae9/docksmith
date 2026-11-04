@@ -123,6 +123,17 @@
 .container-page .docksmith-badge.metadata { background: var(--color-slate-dim); color: var(--color-slate); }
 .container-page .docksmith-badge.mismatch { background: var(--color-warning-dim); color: var(--color-warning); }
 .container-page .docksmith-badge.unknown { background: var(--color-badge-ignored-dim); color: var(--color-badge-ignored); }
+.container-page .docksmith-badge.floating { background: var(--color-warning-dim); color: var(--color-warning); }
+.container-page .pin-inert-warning {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-warning-dim);
+  color: var(--color-warning);
+  font-size: 0.85rem;
+}
 
 .container-page .change-badge {
   display: inline-flex;
@@ -250,13 +261,50 @@
 .container-page .main-loading {
   flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--space-6);
+  padding: var(--space-8);
+  overflow-y: auto;
 }
 
-.container-page .loading-spinner i {
-  font-size: var(--text-6xl);
+.container-page .loading-hint-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
+.container-page .loading-hint-row > i {
+  font-size: var(--text-lg);
   color: var(--color-accent);
+}
+
+.container-page .loading-hint {
+  margin: 0;
+  max-width: 360px;
+  text-align: center;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.container-page .retry-btn {
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.container-page .retry-btn:hover {
+  filter: brightness(1.1);
 }
 
 .container-page .error-state {
@@ -1423,6 +1471,9 @@
   transform: translateY(0);
   pointer-events: auto;
 }
+
+.container-page .logs-scroll-btn { visibility: hidden; }
+.container-page .logs-scroll-btn.visible { visibility: visible; }
 
 .container-page .logs-scroll-btn:hover {
   background: var(--color-accent-bright);

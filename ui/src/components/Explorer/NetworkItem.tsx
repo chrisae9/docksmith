@@ -46,6 +46,7 @@ export function NetworkItem({
           <ActionMenuButton
             isActive={isActive}
             isLoading={isLoading}
+            ariaLabel="Network actions"
             onClick={onMenuToggle}
           />
           <ActionMenu isActive={isActive}>

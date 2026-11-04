@@ -911,10 +911,17 @@
   color: var(--color-text-primary);
 }
 
-.tab-badge {
+/* Badge group anchored to the top-right of the tab icon */
+.tab-badges {
   position: absolute;
   top: -6px;
   right: -8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab-badge {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
@@ -928,6 +935,16 @@
   justify-content: center;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Version updates keep the accent color */
+.tab-badge.update {
+  background: var(--color-accent);
+}
+
+/* Floating-tag containers get their own purple badge */
+.tab-badge.pinnable {
+  background: var(--color-badge-pinnable);
 }
 
 .tab-label {
