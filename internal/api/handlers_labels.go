@@ -304,6 +304,19 @@ func (s *Server) executeLabelOperation(ctx context.Context, cfg labelOperationCo
 // itself. Overridden in tests.
 var selfRecreate = selfupdate.RecreateSelf
 
+// selfPreflight validates the helper's view of the Compose project before the
+// operation is parked as pending_restart. Overridden in tests.
+var selfPreflight = selfupdate.Preflight
+
+// selfHelperOptions captures how a helper container must see the host
+// filesystem and interpolation environment, from Docksmith's own bind mounts.
+func selfHelperOptions(translator *docker.PathTranslator) selfupdate.HelperOptions {
+	if translator == nil {
+		return selfupdate.HelperOptions{}
+	}
+	return selfupdate.HelperOptions{Mounts: translator.GetMappings()}
+}
+
 // executeLabelOperationAsync runs the label modification and restart in the background.
 // This is analogous to executeSingleUpdate in the update orchestrator.
 func (s *Server) executeLabelOperationAsync(ctx context.Context, operationID string, container *docker.Container, cfg labelOperationConfig, composeFilePath, serviceName string, modify labelModifier) {
@@ -419,6 +432,17 @@ func (s *Server) executeSelfLabelRestart(ctx context.Context, operationID string
 
 	log.Printf("LABEL_OP: %s is docksmith itself, delegating restart to helper container", container.Name)
 
+	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
+	helperOpts := selfHelperOptions(s.pathTranslator)
+
+	// Validate the helper's view of the project before anything is recorded as
+	// pending_restart: missing inputs must fail while docksmith is still running.
+	if err := selfPreflight(ctx, container.Image, hostComposePath, serviceName, helperOpts); err != nil {
+		s.failLabelOperationWithEvent(ctx, operationID, container.Name, stackName,
+			fmt.Sprintf("self-restart preflight failed: %v", err))
+		return
+	}
+
 	s.publishLabelProgress(operationID, container.Name, stackName, "pending_restart", 90, "Docksmith is restarting to apply the label change...")
 
 	// Persist the prepared state before this process exits so history and
@@ -437,10 +461,8 @@ func (s *Server) executeSelfLabelRestart(ctx context.Context, operationID string
 		}
 	}
 
-	hostComposePath := s.pathTranslator.TranslateToHost(composeFilePath)
-
 	go func() {
-		if err := selfRecreate(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+		if err := selfRecreate(context.Background(), container.Image, hostComposePath, serviceName, helperOpts); err != nil {
 			log.Printf("LABEL_OP: Failed to start self-recreate helper for %s: %v", container.Name, err)
 			s.failLabelOperationWithEvent(context.Background(), operationID, container.Name, stackName,
 				fmt.Sprintf("failed to start self-recreate helper: %v", err))

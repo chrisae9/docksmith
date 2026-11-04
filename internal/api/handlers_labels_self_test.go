@@ -11,6 +11,7 @@ import (
 	"github.com/chis/docksmith/internal/compose"
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/scripts"
+	"github.com/chis/docksmith/internal/selfupdate"
 	"github.com/chis/docksmith/internal/storage"
 )
 
@@ -50,8 +51,15 @@ func TestLabelOperationOnSelfContainerDefersRestartToHelper(t *testing.T) {
 	}
 	calls := make(chan helperCall, 1)
 	origRecreate := selfRecreate
-	t.Cleanup(func() { selfRecreate = origRecreate })
-	selfRecreate = func(_ context.Context, image, hostComposePath, serviceName string) error {
+	origPreflight := selfPreflight
+	t.Cleanup(func() {
+		selfRecreate = origRecreate
+		selfPreflight = origPreflight
+	})
+	selfPreflight = func(_ context.Context, _, _, _ string, _ selfupdate.HelperOptions) error {
+		return nil
+	}
+	selfRecreate = func(_ context.Context, image, hostComposePath, serviceName string, _ selfupdate.HelperOptions) error {
 		calls <- helperCall{image: image, compose: hostComposePath, service: serviceName}
 		return nil
 	}

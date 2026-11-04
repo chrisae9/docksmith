@@ -776,6 +776,20 @@ func (o *UpdateOrchestrator) executeSelfUpdate(ctx context.Context, operationID 
 	}
 	close(progressChan)
 
+	hostComposePath := o.getComposeFilePathForHost(container)
+	if hostComposePath == "" {
+		hostComposePath = resolvedPath
+	}
+	serviceName := selfComposeServiceName(container)
+	helperOpts := o.selfHelperOptions()
+
+	// Validate what the helper will be able to read before recording
+	// pending_restart, so a missing input fails while docksmith still runs.
+	if err := selfupdate.Preflight(ctx, container.Image, hostComposePath, serviceName, helperOpts); err != nil {
+		o.failOperation(ctx, operationID, "pending_restart", fmt.Sprintf("Self-update preflight failed: %v", err))
+		return
+	}
+
 	// Step 3: Mark operation as pending_restart
 	log.Printf("SELF-UPDATE: Image pulled, marking as pending_restart")
 	o.publishProgress(operationID, container.Name, stackName, "pending_restart", 80, "Docksmith is restarting to apply update...")
@@ -806,15 +820,9 @@ func (o *UpdateOrchestrator) executeSelfUpdate(ctx context.Context, operationID 
 	// Step 4: Hand the recreate to a helper container outside docksmith.
 	// Running docker compose here would kill this process when compose stops the
 	// container, before compose could create the replacement.
-	hostComposePath := o.getComposeFilePathForHost(container)
-	if hostComposePath == "" {
-		hostComposePath = resolvedPath
-	}
-	serviceName := selfComposeServiceName(container)
-
 	log.Printf("SELF-UPDATE: Starting helper container to recreate docksmith")
 	go func() {
-		if err := selfupdate.RecreateSelf(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+		if err := selfupdate.RecreateSelf(context.Background(), container.Image, hostComposePath, serviceName, helperOpts); err != nil {
 			log.Printf("SELF-UPDATE: Failed to start self-recreate helper: %v", err)
 			return
 		}
@@ -842,6 +850,20 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	resolvedPath, err := o.resolveComposeFile(composeFilePath)
 	if err != nil {
 		o.failOperation(ctx, operationID, "stopping", fmt.Sprintf("Failed to resolve compose file: %v", err))
+		return
+	}
+
+	hostComposePath := o.getComposeFilePathForHost(container)
+	if hostComposePath == "" {
+		hostComposePath = resolvedPath
+	}
+	serviceName := selfComposeServiceName(container)
+	helperOpts := o.selfHelperOptions()
+
+	// Validate what the helper will be able to read before recording
+	// pending_restart, so a missing input fails while docksmith still runs.
+	if err := selfupdate.Preflight(ctx, container.Image, hostComposePath, serviceName, helperOpts); err != nil {
+		o.failOperation(ctx, operationID, "pending_restart", fmt.Sprintf("Self-restart preflight failed: %v", err))
 		return
 	}
 
@@ -875,15 +897,9 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	// Trigger the restart from a helper container outside docksmith.
 	// Running docker compose here would kill this process when compose stops the
 	// container, before compose could start it again.
-	hostComposePath := o.getComposeFilePathForHost(container)
-	if hostComposePath == "" {
-		hostComposePath = resolvedPath
-	}
-	serviceName := selfComposeServiceName(container)
-
 	log.Printf("SELF-RESTART: Starting helper container to restart docksmith")
 	go func() {
-		if err := selfupdate.RestartSelf(context.Background(), container.Image, hostComposePath, serviceName); err != nil {
+		if err := selfupdate.RestartSelf(context.Background(), container.Image, hostComposePath, serviceName, helperOpts); err != nil {
 			log.Printf("SELF-RESTART: Failed to start self-restart helper: %v", err)
 			return
 		}
@@ -891,6 +907,15 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	}()
 
 	// Note: We don't mark as complete here - that happens on next startup via resumePendingSelfUpdates()
+}
+
+// selfHelperOptions captures how a helper container must see the host
+// filesystem and interpolation environment, from Docksmith's own bind mounts.
+func (o *UpdateOrchestrator) selfHelperOptions() selfupdate.HelperOptions {
+	if o.pathTranslator == nil {
+		return selfupdate.HelperOptions{}
+	}
+	return selfupdate.HelperOptions{Mounts: o.pathTranslator.GetMappings()}
 }
 
 // selfComposeServiceName returns the compose service name for a container,

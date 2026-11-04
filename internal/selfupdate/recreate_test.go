@@ -3,10 +3,11 @@ package selfupdate
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // captureHelper swaps runHelperCommand for the duration of the test and returns
@@ -33,10 +34,9 @@ func TestRecreateSelfRunsComposeInDetachedHelper(t *testing.T) {
 		"ghcr.io/chrisae9/docksmith:latest",
 		"/srv/stacks/app/docker-compose.yaml",
 		"docksmith",
+		HelperOptions{},
 	)
-	if err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
+	require.NoError(t, err)
 
 	args := strings.Join(*got, " ")
 	for _, want := range []string{
@@ -62,10 +62,9 @@ func TestRestartSelfRunsComposeRestartInDetachedHelper(t *testing.T) {
 		"ghcr.io/chrisae9/docksmith:latest",
 		"/srv/stacks/app/docker-compose.yaml",
 		"docksmith",
+		HelperOptions{},
 	)
-	if err != nil {
-		t.Fatalf("RestartSelf returned error: %v", err)
-	}
+	require.NoError(t, err)
 
 	args := strings.Join(*got, " ")
 	if !strings.Contains(args, "docker compose --project-directory '/srv/stacks/app' -f '/srv/stacks/app/docker-compose.yaml' restart 'docksmith'") {
@@ -76,13 +75,122 @@ func TestRestartSelfRunsComposeRestartInDetachedHelper(t *testing.T) {
 	}
 }
 
+// Docksmith's bind mappings are reproduced read-only at their container
+// destinations, and mirrored at their host paths when the two differ.
+func TestRecreateSelfMountsDocksmithBindings(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+
+	err := RecreateSelf(
+		context.Background(),
+		"docksmith:latest",
+		"/srv/stacks/app/docker-compose.yaml",
+		"docksmith",
+		HelperOptions{Mounts: map[string]string{
+			"/srv/stacks/":  "/stacks/",
+			"/srv/secrets/": "/srv/secrets/",
+		}},
+	)
+	require.NoError(t, err)
+
+	args := strings.Join(*got, " ")
+	for _, want := range []string{
+		"-v /srv/stacks:/stacks:ro",
+		"-v /srv/stacks:/srv/stacks:ro",
+		"-v /srv/secrets:/srv/secrets:ro",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("helper command %q missing %q", args, want)
+		}
+	}
+}
+
+// Process interpolation variables are forwarded, and HelperOptions wins.
+func TestRecreateSelfForwardsInterpolationEnvironment(t *testing.T) {
+	t.Setenv("DOCKS_IT_ENV_TEST", "from-process")
+	got := captureHelper(t, nil, nil)
+
+	err := RecreateSelf(
+		context.Background(),
+		"docksmith:latest",
+		"/srv/stacks/app/docker-compose.yaml",
+		"docksmith",
+		HelperOptions{Environment: []string{"DOCKS_IT_ENV_TEST=from-opts", "DOCKS_IT_ONLY_OPTS=1"}},
+	)
+	require.NoError(t, err)
+
+	args := strings.Join(*got, " ")
+	for _, want := range []string{
+		"-e DOCKS_IT_ENV_TEST=from-opts",
+		"-e DOCKS_IT_ONLY_OPTS=1",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("helper command %q missing %q", args, want)
+		}
+	}
+	if strings.Contains(args, "DOCKS_IT_ENV_TEST=from-process") {
+		t.Errorf("HelperOptions environment should override the process: %q", args)
+	}
+}
+
+func TestPreflightRunsComposeConfigCheck(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+
+	err := Preflight(
+		context.Background(),
+		"docksmith:latest",
+		"/srv/stacks/app/docker-compose.yaml",
+		"docksmith",
+		HelperOptions{Mounts: map[string]string{"/srv/stacks/": "/stacks/"}},
+	)
+	require.NoError(t, err)
+
+	args := strings.Join(*got, " ")
+	if !strings.HasPrefix(args, "run --rm ") {
+		t.Errorf("preflight must run attached and disposable: %q", args)
+	}
+	if strings.Contains(args, "run -d") || strings.Contains(args, "sleep") {
+		t.Errorf("preflight must not detach or delay: %q", args)
+	}
+	if !strings.Contains(args, "docker compose --project-directory '/srv/stacks/app' -f '/srv/stacks/app/docker-compose.yaml' config --quiet") {
+		t.Errorf("preflight command %q does not validate the project", args)
+	}
+	if !strings.Contains(args, "-v /srv/stacks:/stacks:ro") {
+		t.Errorf("preflight command %q missing the helper mounts", args)
+	}
+}
+
+func TestPreflightPropagatesConfigurationFailure(t *testing.T) {
+	captureHelper(t, []byte(`service "docksmith" refers to undefined volume`), errors.New("exit status 1"))
+
+	err := Preflight(context.Background(), "docksmith:latest", "/srv/stacks/app/compose.yaml", "docksmith", HelperOptions{})
+	require.Error(t, err)
+	if !strings.Contains(err.Error(), "self-preflight") {
+		t.Errorf("error %q should identify the preflight", err)
+	}
+	if !strings.Contains(err.Error(), "undefined volume") {
+		t.Errorf("error %q should include compose output", err)
+	}
+}
+
+func TestPreflightRequiresComposeFile(t *testing.T) {
+	captureHelper(t, nil, nil)
+
+	if err := Preflight(context.Background(), "docksmith:latest", "", "docksmith", HelperOptions{}); err == nil {
+		t.Error("expected error for empty compose file path")
+	}
+	if err := Preflight(context.Background(), "", "/srv/app/docker-compose.yaml", "docksmith", HelperOptions{}); err == nil {
+		t.Error("expected error for empty image")
+	}
+	if err := Preflight(context.Background(), "docksmith:latest", "docker-compose.yaml", "docksmith", HelperOptions{}); err == nil {
+		t.Error("expected error for relative compose file path")
+	}
+}
+
 func TestRecreateSelfPropagatesHelperFailure(t *testing.T) {
 	captureHelper(t, []byte("unable to find image"), errors.New("exit status 125"))
 
-	err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/app/docker-compose.yaml", "docksmith")
-	if err == nil {
-		t.Fatal("expected error when helper container cannot start")
-	}
+	err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/app/docker-compose.yaml", "docksmith", HelperOptions{})
+	require.Error(t, err)
 	if !strings.Contains(err.Error(), "unable to find image") {
 		t.Errorf("error %q should include helper output", err)
 	}
@@ -91,22 +199,62 @@ func TestRecreateSelfPropagatesHelperFailure(t *testing.T) {
 func TestRecreateSelfRequiresImageAndComposeFile(t *testing.T) {
 	captureHelper(t, nil, nil)
 
-	if err := RecreateSelf(context.Background(), "", "/srv/app/docker-compose.yaml", "docksmith"); err == nil {
+	if err := RecreateSelf(context.Background(), "", "/srv/app/docker-compose.yaml", "docksmith", HelperOptions{}); err == nil {
 		t.Error("expected error for empty image")
 	}
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "", "docksmith"); err == nil {
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "", "docksmith", HelperOptions{}); err == nil {
 		t.Error("expected error for empty compose file path")
 	}
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/app/docker-compose.yaml", ""); err == nil {
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/app/docker-compose.yaml", "", HelperOptions{}); err == nil {
 		t.Error("expected error for empty service name")
 	}
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "docker-compose.yaml", "docksmith"); err == nil {
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "docker-compose.yaml", "docksmith", HelperOptions{}); err == nil {
 		t.Error("expected error for relative compose file path")
 	}
 }
 
+func TestHelperMountsMirrorRemappedBinding(t *testing.T) {
+	got := helperMounts(map[string]string{"/srv/stacks/": "/stacks/"})
+
+	assert.ElementsMatch(t, []helperMount{
+		{Source: "/srv/stacks", Destination: "/srv/stacks"},
+		{Source: "/srv/stacks", Destination: "/stacks"},
+	}, got)
+}
+
+func TestHelperMountsDoNotMirrorIdentityBinding(t *testing.T) {
+	got := helperMounts(map[string]string{"/srv/stacks/": "/srv/stacks/"})
+
+	assert.Equal(t, []helperMount{{Source: "/srv/stacks", Destination: "/srv/stacks"}}, got)
+}
+
+// The compose directory is not mounted twice when a binding already provides
+// that destination.
+func TestHelperVolumeArgsDeduplicateDestinations(t *testing.T) {
+	got := helperVolumeArgs(map[string]string{"/srv/stacks/": "/stacks/"}, "/stacks")
+
+	assert.Equal(t, []string{
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"-v", "/srv/stacks:/srv/stacks:ro",
+		"-v", "/srv/stacks:/stacks:ro",
+	}, got)
+}
+
+func TestHelperMountsKeepNestedBindings(t *testing.T) {
+	got := helperMounts(map[string]string{
+		"/srv/":         "/srv/",
+		"/srv/secrets/": "/secrets/",
+	})
+
+	assert.ElementsMatch(t, []helperMount{
+		{Source: "/srv", Destination: "/srv"},
+		{Source: "/srv/secrets", Destination: "/secrets"},
+		{Source: "/srv/secrets", Destination: "/srv/secrets"},
+	}, got)
+}
+
 func TestHelperScriptQuotesShellMetacharacters(t *testing.T) {
-	script := helperScript("/srv/my stacks/a'b/docker-compose.yaml", "dock smith", composeUpForceRecreate)
+	script := helperScript("/srv/my stacks/a'b/docker-compose.yaml", "dock smith", composeUpForceRecreate, true)
 
 	want := `-f '/srv/my stacks/a'\''b/docker-compose.yaml'`
 	if !strings.Contains(script, want) {
@@ -117,277 +265,5 @@ func TestHelperScriptQuotesShellMetacharacters(t *testing.T) {
 	}
 	if !strings.Contains(script, `force-recreate 'dock smith'`) {
 		t.Errorf("script %q should quote the service name", script)
-	}
-}
-
-// withComposeFS swaps the compose-file reader and existence probe for the
-// duration of the test, so virtual host paths can be used on any platform.
-func withComposeFS(t *testing.T, files map[string]string) {
-	t.Helper()
-	origRead, origExists := readComposeFile, composeFileExists
-	t.Cleanup(func() {
-		readComposeFile, composeFileExists = origRead, origExists
-	})
-	readComposeFile = func(name string) ([]byte, error) {
-		if content, ok := files[name]; ok {
-			return []byte(content), nil
-		}
-		return nil, os.ErrNotExist
-	}
-	composeFileExists = func(name string) bool {
-		_, ok := files[name]
-		return ok
-	}
-}
-
-// A compose file that reads ../shared.env needs the parent directory mounted
-// in the helper, not just the compose directory.
-func TestRecreateSelfMountsExternalEnvFile(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "services:\n  docksmith:\n    env_file: ../shared.env\n",
-		"/srv/stacks/shared.env":             "FOO=bar\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/stacks:/srv/stacks:ro") {
-		t.Errorf("helper command %q must mount the env_file's directory", args)
-	}
-	if !strings.Contains(args, "-v /srv/stacks/docksmith:/srv/stacks/docksmith:ro") {
-		t.Errorf("helper command %q must still mount the compose directory", args)
-	}
-}
-
-// Included compose files and inputs they reference outside the compose
-// directory must be reachable too.
-func TestRecreateSelfMountsIncludedComposeInputs(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "include:\n  - ../other/compose.yaml\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/other/compose.yaml":     "services:\n  db:\n    env_file: ../secrets/db.env\n",
-		"/srv/stacks/secrets/db.env":         "DB_PASSWORD=secret\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	for _, want := range []string{
-		"-v /srv/stacks/other:/srv/stacks/other:ro",
-		"-v /srv/stacks/secrets:/srv/stacks/secrets:ro",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("helper command %q missing %q", args, want)
-		}
-	}
-}
-
-// An extends target outside the compose directory must be mounted as well.
-func TestRecreateSelfMountsExternalExtendsFile(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "services:\n  docksmith:\n    extends:\n      file: ../base/common.yaml\n      service: docksmith\n",
-		"/srv/stacks/base/common.yaml":       "services:\n  docksmith: {}\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/stacks/base:/srv/stacks/base:ro") {
-		t.Errorf("helper command %q must mount the extends directory", args)
-	}
-}
-
-// References that do not exist are skipped: mounting a missing host path would
-// make Docker create it as an empty root-owned directory.
-func TestComposeInputDirsSkipsMissingReferences(t *testing.T) {
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "services:\n  docksmith:\n    env_file: ../../does-not-exist.env\n",
-	})
-
-	if got := composeInputDirs("/srv/stacks/docksmith/compose.yaml"); len(got) != 0 {
-		t.Errorf("composeInputDirs() = %v, want none for a missing reference", got)
-	}
-}
-
-// A service inherited through extends brings its own env_file with it; the
-// helper must walk the extends target, not just mount its directory.
-func TestRecreateSelfMountsExtendsInheritedEnvFile(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "services:\n  docksmith:\n    extends:\n      file: ../base/common.yaml\n      service: docksmith\n",
-		"/srv/stacks/base/common.yaml":       "services:\n  docksmith:\n    env_file: /srv/secrets/shared.env\n",
-		"/srv/secrets/shared.env":            "SECRET=1\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	for _, want := range []string{
-		"-v /srv/stacks/base:/srv/stacks/base:ro",
-		"-v /srv/secrets:/srv/secrets:ro",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("helper command %q missing %q", args, want)
-		}
-	}
-}
-
-// include.path may be a list of files in long form.
-func TestRecreateSelfMountsIncludePathList(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "include:\n  - path:\n      - ../other/compose.yaml\n      - ../overrides/compose.yaml\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
-		"/srv/stacks/overrides/compose.yaml": "services:\n  overrides: {}\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	for _, want := range []string{
-		"-v /srv/stacks/other:/srv/stacks/other:ro",
-		"-v /srv/stacks/overrides:/srv/stacks/overrides:ro",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("helper command %q missing %q", args, want)
-		}
-	}
-}
-
-// Long-form include entries may declare their own env_file for interpolation.
-func TestRecreateSelfMountsIncludeEnvFile(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "include:\n  - path: ../other/compose.yaml\n    env_file: /srv/secrets/include.env\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
-		"/srv/secrets/include.env":           "OTHER=1\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/secrets:/srv/secrets:ro") {
-		t.Errorf("helper command %q must mount the include env_file directory", args)
-	}
-}
-
-// Mutually extending files must not recurse forever.
-func TestComposeInputDirsExtendsCycleTerminates(t *testing.T) {
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "services:\n  app:\n    extends:\n      file: ../base/a.yaml\n      service: app\n",
-		"/srv/stacks/base/a.yaml":            "services:\n  app:\n    extends:\n      file: b.yaml\n      service: app\n",
-		"/srv/stacks/base/b.yaml":            "services:\n  app:\n    extends:\n      file: a.yaml\n      service: app\n",
-	})
-
-	done := make(chan []string, 1)
-	go func() { done <- composeInputDirs("/srv/stacks/docksmith/compose.yaml") }()
-
-	select {
-	case got := <-done:
-		if len(got) != 1 || got[0] != "/srv/stacks/base" {
-			t.Errorf("composeInputDirs() = %v, want [/srv/stacks/base]", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("composeInputDirs did not terminate on an extends cycle")
-	}
-}
-
-// References are interpolated before existence checks: Compose resolves
-// ${VAR:-default} and this discovery must resolve it the same way.
-func TestRecreateSelfMountsDefaultedInterpolatedInclude(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	t.Setenv("DOCKS_IT_INCLUDE_PATH", "")
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml": "include:\n  - \"${DOCKS_IT_INCLUDE_PATH:-../other}/compose.yaml\"\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/stacks/other:/srv/stacks/other:ro") {
-		t.Errorf("helper command %q must mount the interpolated include directory", args)
-	}
-}
-
-// Interpolation uses the project's .env file as well as the process environment.
-func TestRecreateSelfMountsDotEnvInterpolatedInput(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/.env":         "DOCKS_IT_SHARED_DIR=../shared\n",
-		"/srv/stacks/docksmith/compose.yaml": "include:\n  - \"${DOCKS_IT_SHARED_DIR}/compose.yaml\"\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/shared/compose.yaml":    "services:\n  shared: {}\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/stacks/shared:/srv/stacks/shared:ro") {
-		t.Errorf("helper command %q must mount the .env-interpolated include directory", args)
-	}
-}
-
-// project_directory changes where paths inside an included file resolve.
-func TestRecreateSelfMountsIncludeProjectDirectory(t *testing.T) {
-	got := captureHelper(t, nil, nil)
-	withComposeFS(t, map[string]string{
-		"/srv/stacks/docksmith/compose.yaml":      "include:\n  - path: ../shared/compose/compose.yaml\n    project_directory: ../shared\nservices:\n  docksmith: {}\n",
-		"/srv/stacks/shared/compose/compose.yaml": "services:\n  db:\n    env_file: secrets.env\n",
-		"/srv/stacks/shared/secrets.env":          "DB=1\n",
-	})
-
-	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
-		t.Fatalf("RecreateSelf returned error: %v", err)
-	}
-
-	args := strings.Join(*got, " ")
-	if !strings.Contains(args, "-v /srv/stacks/shared:/srv/stacks/shared:ro") {
-		t.Errorf("helper command %q must mount the include project directory", args)
-	}
-}
-
-func TestInterpolateComposeValue(t *testing.T) {
-	env := map[string]string{"SET": "value", "EMPTY": "", "DIR": "../base"}
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"plain", "plain"},
-		{"${SET}", "value"},
-		{"$SET", "value"},
-		{"${UNSET}", ""},
-		{"${UNSET:-fallback}", "fallback"},
-		{"${EMPTY:-fallback}", "fallback"},
-		{"${EMPTY-fallback}", ""},
-		{"${SET:+alt}", "alt"},
-		{"${UNSET:+alt}", ""},
-		{"${SET+alt}", "alt"},
-		{"${UNSET+alt}", ""},
-		{"$${SET}", "${SET}"},
-		{"${DIR}/compose.yaml", "../base/compose.yaml"},
-		{"${UNSET:-${DIR}}/x", "../base/x"},
-	}
-	for _, tt := range tests {
-		if got := interpolateComposeValue(tt.in, env); got != tt.want {
-			t.Errorf("interpolateComposeValue(%q) = %q, want %q", tt.in, got, tt.want)
-		}
 	}
 }
