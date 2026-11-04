@@ -1,0 +1,72 @@
+version: 2
+updates:
+- package-ecosystem: gomod
+  directories:
+  - /
+  schedule:
+    interval: daily
+    time: 04:00
+    timezone: America/New_York
+  open-pull-requests-limit: 5
+  commit-message:
+    prefix: build(deps)
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+- package-ecosystem: npm
+  directories:
+  - /ui
+  - /test/playwright
+  schedule:
+    interval: daily
+    time: 04:00
+    timezone: America/New_York
+  open-pull-requests-limit: 5
+  commit-message:
+    prefix: build(deps)
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+  versioning-strategy: increase
+- package-ecosystem: docker
+  directories:
+  - /
+  schedule:
+    interval: daily
+    time: 04:00
+    timezone: America/New_York
+  open-pull-requests-limit: 5
+  commit-message:
+    prefix: build(deps)
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+- package-ecosystem: github-actions
+  directories:
+  - /
+  schedule:
+    interval: daily
+    time: 04:00
+    timezone: America/New_York
+  open-pull-requests-limit: 5
+  commit-message:
+    prefix: build(deps)
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
