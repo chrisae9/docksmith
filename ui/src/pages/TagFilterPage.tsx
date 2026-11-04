@@ -5,6 +5,7 @@ import { useRegistryTags } from '../hooks/useRegistryTags';
 import { useContainerData } from '../hooks/useContainerData';
 import { ContainerConfigCard } from '../components/ContainerConfigCard';
 import { parseImageRef } from '../utils/registry';
+import { Tooltip } from '../components/shared';
 import './TagFilterPage.css';
 
 interface TagInfo {
@@ -236,14 +237,15 @@ Please provide a regex pattern that matches the tags I want. The pattern should 
                     spellCheck={false}
                   />
                   {pattern && (
-                    <button
-                      type="button"
-                      className="clear-input-button"
-                      onClick={() => setPattern('')}
-                      aria-label="Clear pattern"
-                    >
-                      <i className="fa-solid fa-times"></i>
-                    </button>
+                    <Tooltip label="Clear pattern" placement="bottom" align="end">
+                      <button
+                        type="button"
+                        className="clear-input-button"
+                        onClick={() => setPattern('')}
+                      >
+                        <i className="fa-solid fa-times"></i>
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
                 {errorMessage && <span className="error-message">{errorMessage}</span>}

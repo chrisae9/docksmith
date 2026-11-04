@@ -124,7 +124,7 @@ export function Settings() {
     setLoading(true);
     setError(null);
     try {
-      const triggerRes = await triggerCheck();
+      const triggerRes = await triggerCheck(true);
       if (!triggerRes.success) {
         throw new Error(triggerRes.error || 'Failed to trigger background check');
       }
