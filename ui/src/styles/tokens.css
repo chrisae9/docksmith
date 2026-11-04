@@ -73,6 +73,12 @@
   --space-bottom-nav: 100px;
 
   /* ============================================
+     SURFACES
+     Aliases for the background palette in base.css
+     ============================================ */
+  --surface-2: var(--color-bg-secondary);
+
+  /* ============================================
      BADGE COMPONENT TOKENS
      Shared across dashboard, explorer, history, container pages
      ============================================ */

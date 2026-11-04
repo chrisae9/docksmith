@@ -1,11 +1,7 @@
 // Decision logic for the background-check trigger that backs the dashboard
 // refresh. Kept free of React so the deduplicated-trigger behaviour is testable.
 
-export interface TriggerCheckResponse {
-  triggered: boolean;
-  checking: boolean;
-  last_background_run: string;
-}
+import type { TriggerCheckResponse } from '../types/api';
 
 export type PollMode = 'triggered' | 'joined';
 

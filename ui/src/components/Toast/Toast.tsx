@@ -1,4 +1,5 @@
 import { useToast, type Toast as ToastType } from '../../context/ToastContext';
+import { Tooltip } from '../shared';
 import './Toast.css';
 
 const ICONS: Record<ToastType['type'], string> = {
@@ -21,9 +22,11 @@ function ToastItem({ toast, onDismiss }: { toast: ToastType; onDismiss: () => vo
           {toast.action.label}
         </button>
       )}
-      <button className="toast-dismiss" onClick={onDismiss} aria-label="Dismiss">
-        <i className="fa-solid fa-xmark" />
-      </button>
+      <Tooltip label="Dismiss" placement="bottom" align="end">
+        <button className="toast-dismiss" onClick={onDismiss}>
+          <i className="fa-solid fa-xmark" />
+        </button>
+      </Tooltip>
     </div>
   );
 }

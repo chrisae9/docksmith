@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { Tooltip } from '../shared';
 
 export type ContainerSortBy = 'name' | 'status' | 'created' | 'image';
 export type ContainerGroupBy = 'stack' | 'none' | 'status' | 'image' | 'network';
@@ -73,8 +75,6 @@ interface ExplorerSettingsMenuProps {
   onReset: () => void;
 }
 
-import { useEffect } from 'react';
-
 export function ExplorerSettingsMenu({
   isOpen,
   onClose,
@@ -138,9 +138,11 @@ export function ExplorerSettingsMenu({
       <div className="settings-menu" role="dialog" aria-label="View options">
         <div className="settings-menu-header">
         <span>View Options</span>
-        <button className="settings-reset" onClick={onReset} title="Reset to defaults" aria-label="Reset to defaults">
-          <i className="fa-solid fa-rotate-left" aria-hidden="true"></i>
-        </button>
+        <Tooltip label="Reset to defaults" placement="bottom" align="end">
+          <button className="settings-reset" onClick={onReset}>
+            <i className="fa-solid fa-rotate-left" aria-hidden="true"></i>
+          </button>
+        </Tooltip>
       </div>
 
       {activeTab === 'containers' && (
