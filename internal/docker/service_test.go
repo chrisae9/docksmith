@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 )
 
 func TestConvertContainer(t *testing.T) {
@@ -365,18 +365,18 @@ func TestCombinedStackGrouping(t *testing.T) {
 			},
 		},
 		{
-			Name: "prometheus",
+			Name:   "prometheus",
 			Labels: map[string]string{}, // No compose labels
 		},
 		{
-			Name: "standalone-db",
+			Name:   "standalone-db",
 			Labels: map[string]string{},
 		},
 	}
 
 	expected := map[string]string{
 		"web-app":       "webapp",     // From compose label
-		"prometheus":    "monitoring",  // From manual definition
+		"prometheus":    "monitoring", // From manual definition
 		"standalone-db": "",           // No stack
 	}
 

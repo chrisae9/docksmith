@@ -13,7 +13,7 @@ import (
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
 	"github.com/chis/docksmith/internal/storage"
-	dockerclient "github.com/docker/docker/client"
+	dockerclient "github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,13 +21,13 @@ import (
 // skipWithoutDocker skips the test if Docker daemon is not available
 func skipWithoutDocker(t *testing.T) {
 	t.Helper()
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	dockerSDK, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		t.Skip("Docker not available, skipping integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := dockerSDK.Ping(ctx); err != nil {
+	if _, err := dockerSDK.Ping(ctx, dockerclient.PingOptions{}); err != nil {
 		dockerSDK.Close()
 		t.Skip("Docker daemon not responding, skipping integration test")
 	}
@@ -1033,17 +1033,17 @@ func TestIntegration_MixedStackComposeAndStandalone(t *testing.T) {
 				},
 			},
 			{
-				ID:    "redis1",
-				Name:  "redis",
-				Image: "redis:6",
+				ID:     "redis1",
+				Name:   "redis",
+				Image:  "redis:6",
 				Labels: map[string]string{
 					// No compose labels - standalone container
 				},
 			},
 			{
-				ID:    "memcached1",
-				Name:  "memcached",
-				Image: "memcached:1.6",
+				ID:     "memcached1",
+				Name:   "memcached",
+				Image:  "memcached:1.6",
 				Labels: map[string]string{
 					// No compose labels - standalone container
 				},
@@ -1379,9 +1379,9 @@ func TestIntegration_StandaloneContainerSDKRecreation(t *testing.T) {
 	mockDocker := &MockDockerClient{
 		containers: []docker.Container{
 			{
-				ID:    "redis1",
-				Name:  "redis-standalone",
-				Image: "redis:6.2",
+				ID:     "redis1",
+				Name:   "redis-standalone",
+				Image:  "redis:6.2",
 				Labels: map[string]string{
 					// No compose labels - standalone container
 				},

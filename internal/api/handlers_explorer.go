@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/chis/docksmith/internal/docker"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,7 +41,7 @@ func (s *Server) handleExplorer(w http.ResponseWriter, r *http.Request) {
 // computeExplorer gathers all data needed by the explorer view.
 func (s *Server) computeExplorer(ctx context.Context, includeVolumeSizes bool) (*ExplorerData, error) {
 	// First, fetch raw containers (needed by images and volumes to check usage)
-	rawContainers, err := s.dockerService.GetClient().ContainerList(ctx, container.ListOptions{All: true})
+	rawContainers, err := s.dockerService.GetClient().ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -66,7 +66,7 @@ func (s *Server) computeExplorer(ctx context.Context, includeVolumeSizes bool) (
 
 	// Images (uses pre-fetched containers)
 	g.Go(func() error {
-		result, err := s.dockerService.ListImagesWithContainers(gCtx, rawContainers)
+		result, err := s.dockerService.ListImagesWithContainers(gCtx, rawContainers.Items)
 		if err != nil {
 			return err
 		}
@@ -86,7 +86,7 @@ func (s *Server) computeExplorer(ctx context.Context, includeVolumeSizes bool) (
 
 	// Volumes (uses pre-fetched containers)
 	g.Go(func() error {
-		result, err := s.dockerService.ListVolumesWithContainers(gCtx, rawContainers, includeVolumeSizes)
+		result, err := s.dockerService.ListVolumesWithContainers(gCtx, rawContainers.Items, includeVolumeSizes)
 		if err != nil {
 			return err
 		}

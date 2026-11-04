@@ -6,14 +6,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/storage"
-	"github.com/docker/docker/api/types/container"
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 )
 
 // handleContainerLogs returns logs for a container
@@ -43,7 +44,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set up log options
-	options := container.LogsOptions{
+	options := client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Timestamps: timestamps,
@@ -188,11 +189,11 @@ type ContainerConfigInfo struct {
 
 // NetworkSettingsInfo represents container network settings
 type NetworkSettingsInfo struct {
-	IPAddress   string                    `json:"ip_address"`
-	Gateway     string                    `json:"gateway"`
-	MacAddress  string                    `json:"mac_address"`
-	Ports       map[string][]PortBinding  `json:"ports"`
-	Networks    map[string]NetworkInfo    `json:"networks"`
+	IPAddress  string                   `json:"ip_address"`
+	Gateway    string                   `json:"gateway"`
+	MacAddress string                   `json:"mac_address"`
+	Ports      map[string][]PortBinding `json:"ports"`
+	Networks   map[string]NetworkInfo   `json:"networks"`
 }
 
 // PortBinding represents a port binding
@@ -203,12 +204,12 @@ type PortBinding struct {
 
 // NetworkInfo represents network endpoint information
 type NetworkInfo struct {
-	NetworkID   string   `json:"network_id"`
-	EndpointID  string   `json:"endpoint_id"`
-	Gateway     string   `json:"gateway"`
-	IPAddress   string   `json:"ip_address"`
-	MacAddress  string   `json:"mac_address"`
-	Aliases     []string `json:"aliases"`
+	NetworkID  string   `json:"network_id"`
+	EndpointID string   `json:"endpoint_id"`
+	Gateway    string   `json:"gateway"`
+	IPAddress  string   `json:"ip_address"`
+	MacAddress string   `json:"mac_address"`
+	Aliases    []string `json:"aliases"`
 }
 
 // MountInfo represents a container mount
@@ -222,17 +223,17 @@ type MountInfo struct {
 
 // HostConfigInfo represents host configuration
 type HostConfigInfo struct {
-	Binds           []string          `json:"binds"`
-	NetworkMode     string            `json:"network_mode"`
-	RestartPolicy   RestartPolicyInfo `json:"restart_policy"`
-	PortBindings    map[string][]PortBinding `json:"port_bindings"`
-	Memory          int64             `json:"memory"`
-	MemorySwap      int64             `json:"memory_swap"`
-	CPUShares       int64             `json:"cpu_shares"`
-	CPUPeriod       int64             `json:"cpu_period"`
-	CPUQuota        int64             `json:"cpu_quota"`
-	Privileged      bool              `json:"privileged"`
-	ReadonlyRootfs  bool              `json:"readonly_rootfs"`
+	Binds          []string                 `json:"binds"`
+	NetworkMode    string                   `json:"network_mode"`
+	RestartPolicy  RestartPolicyInfo        `json:"restart_policy"`
+	PortBindings   map[string][]PortBinding `json:"port_bindings"`
+	Memory         int64                    `json:"memory"`
+	MemorySwap     int64                    `json:"memory_swap"`
+	CPUShares      int64                    `json:"cpu_shares"`
+	CPUPeriod      int64                    `json:"cpu_period"`
+	CPUQuota       int64                    `json:"cpu_quota"`
+	Privileged     bool                     `json:"privileged"`
+	ReadonlyRootfs bool                     `json:"readonly_rootfs"`
 }
 
 // RestartPolicyInfo represents restart policy
@@ -259,11 +260,13 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Inspect container
-	inspect, err := s.dockerService.GetClient().ContainerInspect(ctx, ctr.ID)
+	inspectResult, err := s.dockerService.GetClient().ContainerInspect(ctx, ctr.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		RespondInternalError(w, fmt.Errorf("failed to inspect container: %w", err))
 		return
 	}
+
+	inspect := inspectResult.Container
 
 	// Build response with nil guards for edge cases (dead/corrupted containers)
 	response := ContainerInspectResponse{
@@ -290,7 +293,7 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 		if inspect.Config.ExposedPorts != nil {
 			response.Config.ExposedPorts = make(map[string]bool)
 			for port := range inspect.Config.ExposedPorts {
-				response.Config.ExposedPorts[string(port)] = true
+				response.Config.ExposedPorts[port.String()] = true
 			}
 		}
 	}
@@ -298,7 +301,7 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 	// Populate State fields if available
 	if inspect.State != nil {
 		response.State = ContainerStateInfo{
-			Status:     inspect.State.Status,
+			Status:     string(inspect.State.Status),
 			Running:    inspect.State.Running,
 			Paused:     inspect.State.Paused,
 			Restarting: inspect.State.Restarting,
@@ -311,16 +314,18 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 			FinishedAt: inspect.State.FinishedAt,
 		}
 		if inspect.State.Health != nil {
-			response.State.Health = inspect.State.Health.Status
+			response.State.Health = string(inspect.State.Health.Status)
 		}
 	}
 
 	// Parse network settings if available
 	if inspect.NetworkSettings != nil {
-		response.NetworkSettings = NetworkSettingsInfo{
-			IPAddress:  inspect.NetworkSettings.IPAddress,
-			Gateway:    inspect.NetworkSettings.Gateway,
-			MacAddress: inspect.NetworkSettings.MacAddress,
+		// The SDK no longer exposes the deprecated top-level bridge fields.
+		// Keep our response compatible by taking them from the bridge endpoint.
+		if bridge := inspect.NetworkSettings.Networks["bridge"]; bridge != nil {
+			response.NetworkSettings.IPAddress = dockerIPAddress(bridge.IPAddress)
+			response.NetworkSettings.Gateway = dockerIPAddress(bridge.Gateway)
+			response.NetworkSettings.MacAddress = bridge.MacAddress.String()
 		}
 
 		if inspect.NetworkSettings.Ports != nil {
@@ -329,11 +334,11 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 				var portBindings []PortBinding
 				for _, b := range bindings {
 					portBindings = append(portBindings, PortBinding{
-						HostIP:   b.HostIP,
+						HostIP:   dockerIPAddress(b.HostIP),
 						HostPort: b.HostPort,
 					})
 				}
-				response.NetworkSettings.Ports[string(port)] = portBindings
+				response.NetworkSettings.Ports[port.String()] = portBindings
 			}
 		}
 
@@ -341,12 +346,12 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 			response.NetworkSettings.Networks = make(map[string]NetworkInfo)
 			for name, net := range inspect.NetworkSettings.Networks {
 				response.NetworkSettings.Networks[name] = NetworkInfo{
-					NetworkID:   net.NetworkID,
-					EndpointID:  net.EndpointID,
-					Gateway:     net.Gateway,
-					IPAddress:   net.IPAddress,
-					MacAddress:  net.MacAddress,
-					Aliases:     net.Aliases,
+					NetworkID:  net.NetworkID,
+					EndpointID: net.EndpointID,
+					Gateway:    dockerIPAddress(net.Gateway),
+					IPAddress:  dockerIPAddress(net.IPAddress),
+					MacAddress: net.MacAddress.String(),
+					Aliases:    net.Aliases,
 				}
 			}
 		}
@@ -390,11 +395,11 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 				var portBindings []PortBinding
 				for _, b := range bindings {
 					portBindings = append(portBindings, PortBinding{
-						HostIP:   b.HostIP,
+						HostIP:   dockerIPAddress(b.HostIP),
 						HostPort: b.HostPort,
 					})
 				}
-				response.HostConfig.PortBindings[string(port)] = portBindings
+				response.HostConfig.PortBindings[port.String()] = portBindings
 			}
 		}
 	}
@@ -545,7 +550,7 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"stop", "stopping", "stopped"},
 		nil, // No validation — already-stopped containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			_, err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, client.ContainerStopOptions{Timeout: &timeout})
 			if err != nil && (strings.Contains(err.Error(), "is not running") || strings.Contains(err.Error(), "already stopped")) {
 				return nil // Already stopped — idempotent, like docker compose down
 			}
@@ -562,7 +567,7 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"start", "starting", "started"},
 		nil, // No validation — already-running containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			_, err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, client.ContainerStartOptions{})
 			if err != nil && strings.Contains(err.Error(), "already started") {
 				return nil // Already running — idempotent
 			}
@@ -580,7 +585,8 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 		containerOpConfig{"restart", "restarting", "restarted"},
 		nil,
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerRestart(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			_, err := s.dockerService.GetClient().ContainerRestart(ctx, ctrID, client.ContainerRestartOptions{Timeout: &timeout})
+			return err
 		},
 		nil,
 	)
@@ -600,7 +606,8 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerRemove(ctx, ctrID, container.RemoveOptions{Force: force, RemoveVolumes: removeVolumes})
+			_, err := s.dockerService.GetClient().ContainerRemove(ctx, ctrID, client.ContainerRemoveOptions{Force: force, RemoveVolumes: removeVolumes})
+			return err
 		},
 		map[string]any{"force": force, "volumes": removeVolumes},
 	)
@@ -714,7 +721,7 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"start", "starting", "started"}, req,
 		nil, // No validation — already-running containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, container.StartOptions{})
+			_, err := s.dockerService.GetClient().ContainerStart(ctx, ctrID, client.ContainerStartOptions{})
 			if err != nil && strings.Contains(err.Error(), "already started") {
 				return nil // Already running — idempotent
 			}
@@ -742,7 +749,7 @@ func (s *Server) handleBatchStop(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"stop", "stopping", "stopped"}, req,
 		nil, // No validation — already-stopped containers are handled gracefully below
 		func(ctx context.Context, ctrID string) error {
-			err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			_, err := s.dockerService.GetClient().ContainerStop(ctx, ctrID, client.ContainerStopOptions{Timeout: &timeout})
 			if err != nil && (strings.Contains(err.Error(), "is not running") || strings.Contains(err.Error(), "already stopped")) {
 				return nil // Already stopped — idempotent, like docker compose down
 			}
@@ -770,7 +777,8 @@ func (s *Server) handleBatchRestart(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"restart", "restarting", "restarted"}, req,
 		nil,
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerRestart(ctx, ctrID, container.StopOptions{Timeout: &timeout})
+			_, err := s.dockerService.GetClient().ContainerRestart(ctx, ctrID, client.ContainerRestartOptions{Timeout: &timeout})
+			return err
 		},
 	)
 }
@@ -790,7 +798,8 @@ func (s *Server) handleBatchRemove(w http.ResponseWriter, r *http.Request) {
 		containerOpConfig{"remove", "removing", "removed"}, req,
 		nil,
 		func(ctx context.Context, ctrID string) error {
-			return s.dockerService.GetClient().ContainerRemove(ctx, ctrID, container.RemoveOptions{Force: req.Force, RemoveVolumes: false})
+			_, err := s.dockerService.GetClient().ContainerRemove(ctx, ctrID, client.ContainerRemoveOptions{Force: req.Force, RemoveVolumes: false})
+			return err
 		},
 	)
 }
@@ -817,7 +826,7 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Get one-shot stats (not streaming)
-	stats, err := s.dockerService.GetClient().ContainerStats(statsCtx, ctr.ID, false)
+	stats, err := s.dockerService.GetClient().ContainerStats(statsCtx, ctr.ID, client.ContainerStatsOptions{IncludePreviousSample: true})
 	if err != nil {
 		RespondInternalError(w, fmt.Errorf("failed to get container stats: %w", err))
 		return
@@ -834,4 +843,12 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
 	// Return raw stats - let frontend parse what it needs
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(statsBytes)
+}
+
+// dockerIPAddress preserves the API's empty string for an unspecified address.
+func dockerIPAddress(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
 }
