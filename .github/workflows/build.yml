@@ -37,7 +37,7 @@ jobs:
             echo "push=false" >> $GITHUB_OUTPUT
           fi
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ steps.tags.outputs.push }}
