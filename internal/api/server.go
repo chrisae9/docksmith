@@ -22,6 +22,7 @@ import (
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/storage"
 	"github.com/chis/docksmith/internal/update"
+	"github.com/moby/moby/client"
 )
 
 // checkRunner is the subset of *update.BackgroundChecker the API server needs.
@@ -384,10 +385,10 @@ func resolveHostname(ds *docker.Service) string {
 	if ds != nil {
 		if cli := ds.GetClient(); cli != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			info, err := cli.Info(ctx)
+			info, err := cli.Info(ctx, client.InfoOptions{})
 			cancel()
-			if err == nil && info.Name != "" {
-				return info.Name
+			if err == nil && info.Info.Name != "" {
+				return info.Info.Name
 			}
 		}
 	}

@@ -9,7 +9,7 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
-	dockerclient "github.com/docker/docker/client"
+	dockerclient "github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +42,7 @@ func TestExtractServiceNamesForCompose(t *testing.T) {
 			},
 		},
 		{
-			Name: "standalone",
+			Name:   "standalone",
 			Labels: map[string]string{
 				// No compose service label
 			},
@@ -115,9 +115,9 @@ func TestRestartContainerWithDependents_NonComposeFallback(t *testing.T) {
 	mockDocker := &MockDockerClient{
 		containers: []docker.Container{
 			{
-				ID:    "standalone1",
-				Name:  "standalone",
-				Image: "redis:6",
+				ID:     "standalone1",
+				Name:   "standalone",
+				Image:  "redis:6",
 				Labels: map[string]string{
 					// No compose labels
 				},
@@ -129,7 +129,7 @@ func TestRestartContainerWithDependents_NonComposeFallback(t *testing.T) {
 	bus := events.NewBus()
 
 	// Create a mock Docker SDK client
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	dockerSDK, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		t.Skip("Docker not available, skipping test")
 	}
