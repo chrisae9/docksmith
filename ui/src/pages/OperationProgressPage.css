@@ -2,6 +2,27 @@
 /* Base styles are in ../styles/progress-common.css */
 
 /* ============================================
+   OFFLINE NOTE
+   Shown while the event stream is reconnecting
+   ============================================ */
+.operation-offline-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface-2);
+  border-left: 3px solid var(--color-warning);
+  padding: var(--space-2) var(--space-4);
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.operation-offline-note > i {
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+/* ============================================
    SUMMARY BAR
    Replaces StageDisplay + ProgressBar + ProgressStats
    ============================================ */

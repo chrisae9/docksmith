@@ -102,13 +102,13 @@ func NewUpdateOrchestrator(
 ) *UpdateOrchestrator {
 	ctx, cancel := context.WithCancel(context.Background())
 	orch := &UpdateOrchestrator{
-		dockerClient:   dockerClient,
-		dockerSDK:      dockerSDK,
-		storage:        store,
-		eventBus:       bus,
-		graphBuilder:   graph.NewBuilder(),
-		stackManager:   docker.NewStackManager(),
-		checker:        NewChecker(dockerClient, registryManager, store),
+		dockerClient: dockerClient,
+		dockerSDK:    dockerSDK,
+		storage:      store,
+		eventBus:     bus,
+		graphBuilder: graph.NewBuilder(),
+		stackManager: docker.NewStackManager(),
+		checker:      NewChecker(dockerClient, registryManager, store),
 		healthCheckCfg: HealthCheckConfig{
 			Timeout:      60 * time.Second,
 			FallbackWait: 3 * time.Second, // Containers without health checks just need to be "running"
@@ -912,6 +912,127 @@ func (o *UpdateOrchestrator) executeSelfRestart(ctx context.Context, operationID
 	log.Printf("SELF-RESTART: Restart initiated, operation=%s will be completed on next startup", operationID)
 }
 
+// orderUpdateBatch returns the batch in a single topological order that
+// respects both Compose depends_on edges and Docker network-namespace provider
+// edges. Ingress containers are deferred only among containers that are ready
+// to run, so the UI outage stays as short as possible without ever recreating
+// a dependent before the container it depends on. Cycles never drop
+// containers: once nothing is ready, the remaining nodes are emitted in input
+// order.
+func orderUpdateBatch(containers []*docker.Container, depGraph *graph.Graph) []*docker.Container {
+	n := len(containers)
+	if n == 0 {
+		return nil
+	}
+
+	index := make(map[string]int, n)
+	for i, c := range containers {
+		index[c.Name] = i
+	}
+
+	// preds[i] holds the batch indexes that must be emitted before i.
+	preds := make([]map[int]bool, n)
+	for i := range preds {
+		preds[i] = make(map[int]bool)
+	}
+	addEdge := func(before, after int) {
+		if before != after {
+			preds[after][before] = true
+		}
+	}
+
+	// Compose depends_on (and any label-recorded network_mode) edges.
+	if depGraph != nil {
+		for name, i := range index {
+			node, ok := depGraph.GetNode(name)
+			if !ok {
+				continue
+			}
+			for _, dep := range node.Dependencies {
+				if j, ok := index[dep]; ok {
+					addEdge(j, i)
+				}
+			}
+		}
+	}
+
+	// Live network-namespace edges. The Docker API is authoritative when the
+	// compose label is missing or stale.
+	for i, c := range containers {
+		target := strings.TrimPrefix(c.NetworkMode, "container:")
+		if target == "" || target == c.NetworkMode {
+			continue
+		}
+		for j, other := range containers {
+			if j != i && networkModeTargetMatches(target, other) {
+				addEdge(j, i)
+				break
+			}
+		}
+	}
+
+	emitted := make([]bool, n)
+	ordered := make([]*docker.Container, 0, n)
+
+	ready := func(i int) bool {
+		for pred := range preds[i] {
+			if !emitted[pred] {
+				return false
+			}
+		}
+		return true
+	}
+
+	for len(ordered) < n {
+		best := -1
+		for i, c := range containers {
+			if emitted[i] || !ready(i) {
+				continue
+			}
+			if best == -1 {
+				best = i
+				continue
+			}
+			// Input order wins ties; only a non-ingress container may jump
+			// ahead of an ingress one.
+			if docker.IsIngressContainer(containers[best].Name, containers[best].Image) &&
+				!docker.IsIngressContainer(c.Name, c.Image) {
+				best = i
+			}
+		}
+		if best == -1 {
+			// No ready node: the remaining graph has a cycle. Emit the first
+			// remaining container and continue so nothing is dropped.
+			for i := range containers {
+				if !emitted[i] {
+					best = i
+					break
+				}
+			}
+		}
+		ordered = append(ordered, containers[best])
+		emitted[best] = true
+	}
+
+	return ordered
+}
+
+// networkModeTargetMatches reports whether target — the value following
+// "container:" in a Docker HostConfig.NetworkMode — identifies c by full ID,
+// short-ID prefix (either direction), or container name.
+func networkModeTargetMatches(target string, c *docker.Container) bool {
+	if target == "" || c == nil {
+		return false
+	}
+	if c.Name != "" && c.Name == target {
+		return true
+	}
+	if c.ID == "" {
+		return false
+	}
+	return c.ID == target || strings.HasPrefix(c.ID, target) || strings.HasPrefix(target, c.ID)
+}
+
 // executeBatchUpdate executes batch update workflow.
 func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID string, containers []*docker.Container, targetVersions map[string]string, stackName string, forceContainers map[string]bool) {
 	defer o.releaseStackLock(stackName)
@@ -1089,6 +1210,10 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 			}
 		}
 	}
+
+	// One topological order over both Compose depends_on and Docker
+	// network-namespace edges; ingress-last is only a tie-breaker.
+	orderedContainers = orderUpdateBatch(orderedContainers, depGraph)
 
 	// Recreate, health-check, and mark each container individually (60-95%)
 	// All phases merged into one per-container loop so the frontend gets continuous SSE events.
@@ -2156,17 +2281,17 @@ func (o *UpdateOrchestrator) RollbackOperation(ctx context.Context, originalOper
 	// Create rollback operation
 	rollbackOpID := uuid.New().String()
 	rollbackOp := storage.UpdateOperation{
-		OperationID:    rollbackOpID,
-		ContainerID:    targetContainer.ID,
-		ContainerName:  origOp.ContainerName,
-		StackName:      origOp.StackName,
-		OperationType:  "rollback",
-		Status:         "in_progress",
-		OldVersion:     origOp.NewVersion, // Current version (what we're rolling back from)
-		NewVersion:     targetVersion,     // Target version from database (what we're rolling back to)
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
-		StartedAt:      func() *time.Time { t := time.Now(); return &t }(),
+		OperationID:   rollbackOpID,
+		ContainerID:   targetContainer.ID,
+		ContainerName: origOp.ContainerName,
+		StackName:     origOp.StackName,
+		OperationType: "rollback",
+		Status:        "in_progress",
+		OldVersion:    origOp.NewVersion, // Current version (what we're rolling back from)
+		NewVersion:    targetVersion,     // Target version from database (what we're rolling back to)
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		StartedAt:     func() *time.Time { t := time.Now(); return &t }(),
 	}
 
 	if err := o.storage.SaveUpdateOperation(ctx, rollbackOp); err != nil {

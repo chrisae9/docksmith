@@ -704,8 +704,9 @@
   flex-shrink: 0;
 }
 
-/* Self-update warning in selection bar */
-.self-update-warning {
+/* Self-update / ingress warning in selection bar */
+.self-update-warning,
+.ingress-warning {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -718,7 +719,8 @@
   font-weight: var(--font-medium);
 }
 
-.self-update-warning i {
+.self-update-warning i,
+.ingress-warning i {
   font-size: var(--text-sm);
   flex-shrink: 0;
 }

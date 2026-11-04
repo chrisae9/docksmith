@@ -12,6 +12,24 @@ import (
 	"github.com/chis/docksmith/internal/docker"
 )
 
+// Overridable in tests — they must not spawn docker.
+var (
+	dockerCommand = func(ctx context.Context, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	}
+	networkModeWaitTimeout  = 60 * time.Second
+	networkModePollInterval = 1 * time.Second
+	composeRetryBackoff     = []time.Duration{0, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+)
+
+// isNetworkNamespaceRace reports whether a failed `docker compose up` failed
+// only because its network_mode provider was mid-restart.
+func isNetworkNamespaceRace(output []byte) bool {
+	s := string(output)
+	return strings.Contains(s, "is restarting, wait until the container is running") ||
+		strings.Contains(s, "cannot join network namespace")
+}
+
 // Recreator handles compose-based container recreation
 type Recreator struct {
 	dockerClient docker.Client
@@ -43,16 +61,20 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	log.Printf("COMPOSE: Recreating service %s using compose file (host: %s, container: %s)",
 		serviceName, hostComposeFilePath, containerComposeFilePath)
 
+	// If this container joins another container's network namespace, wait for
+	// that provider to be running before recreating.
+	if err := r.waitForNetworkModeProvider(ctx, container); err != nil {
+		return err
+	}
+
 	// First, stop and remove the existing container
 	// This is necessary because docker compose up --force-recreate doesn't work when
 	// the container was created via docker run instead of docker compose
 	log.Printf("COMPOSE: Stopping and removing existing container %s", container.Name)
-	stopCmd := exec.CommandContext(ctx, "docker", "stop", container.Name)
-	stopOutput, _ := stopCmd.CombinedOutput() // Ignore errors if already stopped
+	stopOutput, _ := dockerCommand(ctx, "stop", container.Name) // Ignore errors if already stopped
 	log.Printf("COMPOSE: Stop output: %s", stopOutput)
 
-	rmCmd := exec.CommandContext(ctx, "docker", "rm", container.Name)
-	rmOutput, _ := rmCmd.CombinedOutput() // Ignore errors if doesn't exist
+	rmOutput, _ := dockerCommand(ctx, "rm", container.Name) // Ignore errors if doesn't exist
 	log.Printf("COMPOSE: Remove output: %s", rmOutput)
 
 	// Build the docker compose up command
@@ -62,8 +84,8 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	// Use --force-recreate to avoid Docker volume mount corruption issues
 	args := []string{
 		"compose",
-		"--project-directory", hostComposeDir,  // HOST path for volume mount resolution
-		"-f", containerComposeFilePath,         // CONTAINER path for reading the file
+		"--project-directory", hostComposeDir, // HOST path for volume mount resolution
+		"-f", containerComposeFilePath, // CONTAINER path for reading the file
 		"up",
 		"-d",
 		"--force-recreate", // Force clean recreation to avoid volume mount issues
@@ -71,14 +93,13 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 		serviceName,
 	}
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
 	// Note: Don't set cmd.Dir here - composeDir is a host path that doesn't exist in the container.
 	// The --project-directory flag tells Docker Compose where to resolve relative paths.
 
 	log.Printf("COMPOSE: Executing: docker %s", strings.Join(args, " "))
 
-	// Capture output for logging
-	output, err := cmd.CombinedOutput()
+	// Capture output for logging, retrying while a network_mode provider restarts
+	output, err := r.runComposeWithRetry(ctx, args)
 	if err != nil {
 		return fmt.Errorf("docker compose up failed: %w\nOutput: %s", err, output)
 	}
@@ -87,6 +108,162 @@ func (r *Recreator) RecreateWithCompose(ctx context.Context, container *docker.C
 	log.Printf("COMPOSE: Successfully recreated service %s", serviceName)
 
 	return nil
+}
+
+// runComposeWithRetry runs a docker compose command, retrying with the delays
+// in composeRetryBackoff when it fails only because its network_mode provider
+// is mid-restart.
+func (r *Recreator) runComposeWithRetry(ctx context.Context, args []string) ([]byte, error) {
+	var output []byte
+	var err error
+
+	for _, delay := range composeRetryBackoff {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return output, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
+		output, err = dockerCommand(ctx, args...)
+		if err == nil {
+			return output, nil
+		}
+		if !isNetworkNamespaceRace(output) {
+			return output, err
+		}
+		log.Printf("COMPOSE: docker compose up hit a network namespace race, retrying: %v", err)
+	}
+
+	return output, err
+}
+
+// waitForNetworkModeProvider blocks until the container supplying this
+// container's network namespace (network_mode: service:<name> or
+// container:<name>) is running, or the wait timeout expires.
+func (r *Recreator) waitForNetworkModeProvider(ctx context.Context, c *docker.Container) error {
+	provider, ok := resolveNetworkModeProvider(c)
+	if !ok {
+		return nil
+	}
+
+	project := c.Labels["com.docker.compose.project"]
+	log.Printf("COMPOSE: Waiting for network_mode provider %s:%s to be running", provider.prefix, provider.target)
+
+	waitCtx, cancel := context.WithTimeout(ctx, networkModeWaitTimeout)
+	defer cancel()
+
+	providerName := provider.target
+	firstListing := true
+	for {
+		containers, err := r.dockerClient.ListContainers(waitCtx)
+		if err != nil {
+			log.Printf("COMPOSE: Failed to list containers while waiting for network_mode provider: %v", err)
+		} else {
+			if firstListing && provider.prefix == "container" && !provider.found(containers, project) {
+				// The referenced container is stale (e.g. the provider was
+				// recreated and our HostConfig still points at its old ID) or
+				// simply gone. Don't stall for the full timeout: let compose
+				// try and the retry path handle the daemon's real error.
+				log.Printf("COMPOSE: network_mode provider %s not found, not waiting", provider.target)
+				return nil
+			}
+			firstListing = false
+		}
+		for _, candidate := range containers {
+			if !provider.matches(candidate, project) {
+				continue
+			}
+			providerName = candidate.Name
+			if strings.EqualFold(candidate.State, "running") {
+				log.Printf("COMPOSE: network_mode provider %s is running", provider.target)
+				return nil
+			}
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("network mode provider %s is not running (waited %s)", providerName, networkModeWaitTimeout)
+		case <-time.After(networkModePollInterval):
+		}
+	}
+}
+
+// networkModeProvider identifies which container supplies a container's
+// network namespace.
+type networkModeProvider struct {
+	prefix string // "container" or "service"
+	target string // container ID, container name, or compose service name
+}
+
+// resolveNetworkModeProvider resolves the provider from the Docker API's
+// authoritative HostConfig.NetworkMode field, falling back to the compose
+// network_mode label for service: references (which Docker rewrites to
+// container:<id> on the created container).
+func resolveNetworkModeProvider(c *docker.Container) (networkModeProvider, bool) {
+	if c.NetworkMode != "" {
+		// The Docker API is authoritative: only "container:<id>" shares a
+		// namespace. "host", "none" and "default" have no provider to wait for.
+		if id := containerNetworkModeID(c.NetworkMode); id != "" {
+			return networkModeProvider{prefix: "container", target: id}, true
+		}
+		return networkModeProvider{}, false
+	}
+
+	// No API value (older payloads, tests): fall back to the compose label.
+	label := c.Labels["com.docker.compose.network_mode"]
+	if label == "" {
+		return networkModeProvider{}, false
+	}
+	prefix, target, ok := strings.Cut(label, ":")
+	if !ok || target == "" || (prefix != "service" && prefix != "container") {
+		return networkModeProvider{}, false
+	}
+	return networkModeProvider{prefix: prefix, target: target}, true
+}
+
+// containerNetworkModeID extracts the container ID from a Docker
+// HostConfig.NetworkMode value of the form "container:<id>".
+func containerNetworkModeID(networkMode string) string {
+	if !strings.HasPrefix(networkMode, "container:") {
+		return ""
+	}
+	return strings.TrimPrefix(networkMode, "container:")
+}
+
+// matches reports whether the given container supplies the network namespace.
+// A container: target may be an ID (full or abbreviated) or a container name,
+// since the daemon stores the value verbatim and only resolves it at start.
+func (p networkModeProvider) matches(candidate docker.Container, project string) bool {
+	switch p.prefix {
+	case "container":
+		return containerIDMatches(candidate.ID, p.target) || candidate.Name == p.target
+	case "service":
+		return candidate.Labels["com.docker.compose.service"] == p.target &&
+			candidate.Labels["com.docker.compose.project"] == project
+	default:
+		return false
+	}
+}
+
+// found reports whether any listed container supplies the network namespace.
+func (p networkModeProvider) found(containers []docker.Container, project string) bool {
+	for _, candidate := range containers {
+		if p.matches(candidate, project) {
+			return true
+		}
+	}
+	return false
+}
+
+// containerIDMatches reports whether two container ID references identify the
+// same container, allowing short IDs to match their full ID in either direction.
+func containerIDMatches(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
 // RestartWithCompose restarts a container using docker compose restart
@@ -221,22 +398,21 @@ func (r *Recreator) RecreateMultipleServices(ctx context.Context, hostComposeFil
 	// Use --force-recreate to avoid Docker volume mount corruption issues
 	args := []string{
 		"compose",
-		"--project-directory", hostComposeDir,  // HOST path for volume mount resolution
-		"-f", containerComposeFilePath,         // CONTAINER path for reading the file
+		"--project-directory", hostComposeDir, // HOST path for volume mount resolution
+		"-f", containerComposeFilePath, // CONTAINER path for reading the file
 		"up",
 		"-d",
 		"--force-recreate", // Force clean recreation to avoid volume mount issues
 	}
 	args = append(args, serviceNames...)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
 	// Note: Don't set cmd.Dir here - composeDir is a host path that doesn't exist in the container.
 	// The --project-directory flag tells Docker Compose where to resolve relative paths.
 
 	log.Printf("COMPOSE: Executing: docker %s", strings.Join(args, " "))
 
-	// Capture output for logging
-	output, err := cmd.CombinedOutput()
+	// Capture output for logging, retrying while a network_mode provider restarts
+	output, err := r.runComposeWithRetry(ctx, args)
 	if err != nil {
 		return fmt.Errorf("docker compose up failed: %w\nOutput: %s", err, output)
 	}
@@ -328,4 +504,3 @@ func (r *Recreator) WaitForHealthy(ctx context.Context, containerName string, ti
 		}
 	}
 }
-

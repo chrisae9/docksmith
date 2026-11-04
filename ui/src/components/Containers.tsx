@@ -488,6 +488,16 @@ export function Containers() {
 
     const skippedUpToDate = selected.length - containersToUpdate.length - mismatchContainers.length;
     const totalSkipped = skippedNoData + skippedUpToDate;
+    // Only name ingress containers that will actually restart. Selected
+    // containers with no update data or already up to date are skipped, so
+    // naming them in the outage message would be misleading.
+    const restartingNames = new Set([
+      ...containersToUpdate.map(c => c.name),
+      ...mismatchContainers,
+    ]);
+    const ingressNames = allSelected
+      .filter(c => c.is_ingress && restartingNames.has(c.name))
+      .map(c => c.name);
 
     if (containersToUpdate.length === 0 && mismatchContainers.length === 0) {
       setSelectedContainers(new Set());
@@ -510,7 +520,7 @@ export function Containers() {
     setSelectedContainers(new Set());
 
     if (mismatchContainers.length > 0 && containersToUpdate.length > 0) {
-      navigate('/operation', { state: { mixed: { updates: containersToUpdate, mismatches: mismatchContainers } } });
+      navigate('/operation', { state: { mixed: { updates: containersToUpdate, mismatches: mismatchContainers, ...(ingressNames.length > 0 ? { ingress_names: ingressNames } : {}) } } });
     } else if (mismatchContainers.length > 0) {
       if (mismatchContainers.length === 1) {
         navigate('/operation', { state: { fixMismatch: { containerName: mismatchContainers[0] } } });
@@ -518,7 +528,7 @@ export function Containers() {
         navigate('/operation', { state: { batchFixMismatch: { containerNames: mismatchContainers } } });
       }
     } else if (containersToUpdate.length > 0) {
-      navigate('/operation', { state: { update: { containers: containersToUpdate } } });
+      navigate('/operation', { state: { update: { containers: containersToUpdate, ingress_names: ingressNames } } });
     }
   };
 
@@ -1106,6 +1116,7 @@ export function Containers() {
       hasRunning: selected.some(c => c.state === 'running'),
       hasStopped: selected.some(c => c.state !== 'running'),
       hasSelfUpdate: selected.some(c => c.name.toLowerCase().includes('docksmith') || c.image.toLowerCase().includes('docksmith')),
+      hasIngress: selected.some(c => c.is_ingress),
       hasBlocked: blockedCount > 0,
       patchCount,
       buildCount,
@@ -1377,6 +1388,9 @@ export function Containers() {
 
           {selectedAnalysis.hasSelfUpdate && (
             <div className="self-update-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Docksmith will restart to apply the update</span></div>
+          )}
+          {selectedAnalysis.hasIngress && (
+            <div className="ingress-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Selected containers serve the Docksmith UI. You will lose access until they restart.</span></div>
           )}
           <div className="selection-actions">
             <div className="selection-summary">
