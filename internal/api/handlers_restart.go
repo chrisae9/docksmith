@@ -10,7 +10,7 @@ import (
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/scripts"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // Timeout constants are defined in constants.go
@@ -50,27 +50,27 @@ func (s *Server) waitForContainerHealthy(ctx context.Context, containerName stri
 		case <-ctx.Done():
 			return fmt.Errorf("health check timeout for %s", containerName)
 		case <-ticker.C:
-			inspect, err := s.dockerService.GetClient().ContainerInspect(ctx, containerName)
+			inspect, err := s.dockerService.GetClient().ContainerInspect(ctx, containerName, client.ContainerInspectOptions{})
 			if err != nil {
 				// Container might not exist yet, keep trying
 				continue
 			}
 
 			// Check if container has a health check defined
-			hasHealthCheck := inspect.State != nil && inspect.State.Health != nil
+			hasHealthCheck := inspect.Container.State != nil && inspect.Container.State.Health != nil
 
 			if hasHealthCheck {
-				if inspect.State.Health.Status == "healthy" {
+				if inspect.Container.State.Health.Status == "healthy" {
 					log.Printf("Container %s is healthy", containerName)
 					return nil
 				}
-				if inspect.State.Health.Status == "unhealthy" {
+				if inspect.Container.State.Health.Status == "unhealthy" {
 					return fmt.Errorf("container %s is unhealthy", containerName)
 				}
 				// Still starting, keep polling
 			} else {
 				// No health check - just verify it's running
-				if inspect.State != nil && inspect.State.Running {
+				if inspect.Container.State != nil && inspect.Container.State.Running {
 					log.Printf("Container %s is running", containerName)
 					return nil
 				}
@@ -137,7 +137,7 @@ func (s *Server) restartDependentContainers(ctx context.Context, containerName s
 
 	for _, dep := range dependents {
 		log.Printf("Restarting dependent container: %s", dep)
-		if restartErr := s.dockerService.GetClient().ContainerRestart(ctx, dep, container.StopOptions{}); restartErr != nil {
+		if _, restartErr := s.dockerService.GetClient().ContainerRestart(ctx, dep, client.ContainerRestartOptions{}); restartErr != nil {
 			errMsg := fmt.Sprintf("Failed to restart dependent %s: %v", dep, restartErr)
 			log.Printf("%s", errMsg)
 			errors = append(errors, errMsg)
@@ -266,7 +266,7 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 
 	for _, containerName := range stackContainers {
 		log.Printf("Restarting container %s in stack %s", containerName, stackName)
-		if err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, container.StopOptions{}); err != nil {
+		if _, err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, client.ContainerRestartOptions{}); err != nil {
 			errMsg := fmt.Sprintf("Failed to restart %s: %v", containerName, err)
 			log.Printf("%s", errMsg)
 			errors = append(errors, errMsg)
@@ -368,7 +368,7 @@ func (s *Server) executeContainerRestart(w http.ResponseWriter, parentCtx contex
 	}
 
 	// All checks passed - now restart the main container
-	if err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, container.StopOptions{}); err != nil {
+	if _, err := s.dockerService.GetClient().ContainerRestart(ctx, containerName, client.ContainerRestartOptions{}); err != nil {
 		log.Printf("Failed to restart container %s: %v", containerName, err)
 		RespondInternalError(w, fmt.Errorf("failed to restart container: %w", err))
 		return

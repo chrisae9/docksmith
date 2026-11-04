@@ -2,13 +2,17 @@ package update
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chis/docksmith/internal/docker"
 	"github.com/chis/docksmith/internal/events"
 	"github.com/chis/docksmith/internal/graph"
-	"github.com/docker/docker/api/types/container"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	dockerclient "github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,9 +22,9 @@ func TestStandaloneContainerDetection_EmptyComposePath(t *testing.T) {
 	mockDocker := &MockDockerClient{
 		containers: []docker.Container{
 			{
-				ID:    "standalone1",
-				Name:  "redis",
-				Image: "redis:6",
+				ID:     "standalone1",
+				Name:   "redis",
+				Image:  "redis:6",
 				Labels: map[string]string{
 					// No compose labels - standalone container
 				},
@@ -55,10 +59,10 @@ func TestStandaloneContainerDetection_EmptyComposePath(t *testing.T) {
 // TestSDKFallback_ContainerInspectRetrievesConfig tests that ContainerInspect retrieves full configuration.
 func TestSDKFallback_ContainerInspectRetrievesConfig(t *testing.T) {
 	// This test verifies the SDK inspection approach would work
-	// Skip if Docker daemon is not available
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Use an isolated Engine HTTP fixture, never the developer daemon.
+	dockerSDK, err := newSDKContractClient(t)
 	if err != nil {
-		t.Skip("Docker not available, skipping test")
+		t.Fatal(err)
 	}
 	defer dockerSDK.Close()
 
@@ -66,7 +70,7 @@ func TestSDKFallback_ContainerInspectRetrievesConfig(t *testing.T) {
 	// Note: We're just testing the API is available, not actual inspection
 	// since we don't want to depend on specific containers existing
 	ctx := context.Background()
-	_, err = dockerSDK.ContainerInspect(ctx, "nonexistent-container-test")
+	_, err = dockerSDK.ContainerInspect(ctx, "nonexistent-container-test", dockerclient.ContainerInspectOptions{})
 
 	// We expect an error since container doesn't exist, but the method should be callable
 	assert.Error(t, err)
@@ -76,16 +80,16 @@ func TestSDKFallback_ContainerInspectRetrievesConfig(t *testing.T) {
 // TestSDKFallback_ContainerRemoveAPI tests that ContainerRemove API is available.
 func TestSDKFallback_ContainerRemoveAPI(t *testing.T) {
 	// This test verifies the SDK remove approach would work
-	// Skip if Docker daemon is not available
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Use an isolated Engine HTTP fixture, never the developer daemon.
+	dockerSDK, err := newSDKContractClient(t)
 	if err != nil {
-		t.Skip("Docker not available, skipping test")
+		t.Fatal(err)
 	}
 	defer dockerSDK.Close()
 
 	// Verify we can call ContainerRemove method
 	ctx := context.Background()
-	err = dockerSDK.ContainerRemove(ctx, "nonexistent-container-test", container.RemoveOptions{})
+	_, err = dockerSDK.ContainerRemove(ctx, "nonexistent-container-test", dockerclient.ContainerRemoveOptions{})
 
 	// We expect an error since container doesn't exist, but the method should be callable
 	assert.Error(t, err)
@@ -95,10 +99,10 @@ func TestSDKFallback_ContainerRemoveAPI(t *testing.T) {
 // TestSDKFallback_ContainerCreateAPI tests that ContainerCreate API is available.
 func TestSDKFallback_ContainerCreateAPI(t *testing.T) {
 	// This test verifies the SDK create approach would work
-	// Skip if Docker daemon is not available
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Use an isolated Engine HTTP fixture, never the developer daemon.
+	dockerSDK, err := newSDKContractClient(t)
 	if err != nil {
-		t.Skip("Docker not available, skipping test")
+		t.Fatal(err)
 	}
 	defer dockerSDK.Close()
 
@@ -112,32 +116,25 @@ func TestSDKFallback_ContainerCreateAPI(t *testing.T) {
 	}
 	hostConfig := &container.HostConfig{}
 
-	// Attempt to create with invalid name to test API availability
-	_, err = dockerSDK.ContainerCreate(ctx, config, hostConfig, nil, nil, "")
+	// Create only against our isolated HTTP fixture.
+	_, err = dockerSDK.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: config, HostConfig: hostConfig})
 
-	// The call might succeed or fail depending on permissions and image availability
-	// We just want to verify the API is callable
-	// If it fails, it should not be due to method not existing
-	if err != nil {
-		// Acceptable errors: image not found, name conflicts, etc.
-		// Not acceptable: method doesn't exist, wrong signature
-		assert.NotContains(t, err.Error(), "undefined", "API should exist")
-	}
+	require.NoError(t, err)
 }
 
 // TestSDKFallback_ContainerStartAPI tests that ContainerStart API is available.
 func TestSDKFallback_ContainerStartAPI(t *testing.T) {
 	// This test verifies the SDK start approach would work
-	// Skip if Docker daemon is not available
-	dockerSDK, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	// Use an isolated Engine HTTP fixture, never the developer daemon.
+	dockerSDK, err := newSDKContractClient(t)
 	if err != nil {
-		t.Skip("Docker not available, skipping test")
+		t.Fatal(err)
 	}
 	defer dockerSDK.Close()
 
 	// Verify we can call ContainerStart method
 	ctx := context.Background()
-	err = dockerSDK.ContainerStart(ctx, "nonexistent-container-test", container.StartOptions{})
+	_, err = dockerSDK.ContainerStart(ctx, "nonexistent-container-test", dockerclient.ContainerStartOptions{})
 
 	// We expect an error since container doesn't exist, but the method should be callable
 	assert.Error(t, err)
@@ -186,4 +183,32 @@ func TestBuildImageRef_UpdatesVersion(t *testing.T) {
 			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
+}
+
+// newSDKContractClient prevents SDK API tests from touching a live daemon.
+func newSDKContractClient(t *testing.T) (*dockerclient.Client, error) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/_ping" {
+			w.Header().Set("API-Version", "1.47")
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/containers/create") {
+			var config struct {
+				Image      string
+				HostConfig *container.HostConfig
+			}
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&config))
+			assert.Equal(t, "alpine:latest", config.Image)
+			assert.NotNil(t, config.HostConfig)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"Id":"created-container"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"No such container: nonexistent-container-test"}`))
+	}))
+	t.Cleanup(server.Close)
+	return dockerclient.New(dockerclient.WithHost("tcp://" + strings.TrimPrefix(server.URL, "http://")))
 }

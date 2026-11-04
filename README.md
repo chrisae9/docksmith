@@ -79,6 +79,8 @@ A few specific problems I kept running into:
 
 ## Configuration
 
+Docksmith requires Docker Engine 19.03 or newer (Engine API 1.40+). The client automatically negotiates a compatible API version with the daemon.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHECK_INTERVAL` | `5m` | How often to check for updates |
