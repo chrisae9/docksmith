@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go backend
-FROM golang:1.26.10-alpine3.23 AS backend-builder
+FROM golang:1.27.3-alpine3.23 AS backend-builder
 
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -19,7 +19,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
 
 # Stage 3: Runtime
-FROM alpine:3.23.7
+FROM alpine:3.24.3
 
 RUN apk add --no-cache ca-certificates bash curl jq docker-cli docker-cli-compose
 
