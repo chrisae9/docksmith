@@ -40,6 +40,36 @@
   gap: var(--space-8);
 }
 
+/* Right-aligned header status: reconnecting chip + last-checked control */
+.containers-header .header-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.containers-header .refresh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: none;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.containers-header .refresh-status:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+.containers-header .refresh-status:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* Main content */
 .containers-content {
   flex: 1;
@@ -157,6 +187,8 @@
 .containers-page .status-badge.local { background: var(--color-slate-dim); color: var(--color-slate); }
 .containers-page .status-badge.ignored { background: var(--color-bg-tertiary); color: var(--color-text-tertiary); }
 .containers-page .status-badge.stopped { background: var(--color-slate-dim); color: var(--color-slate); }
+.containers-page .status-badge.floating { background: var(--color-warning-dim); color: var(--color-warning); }
+.label-icon.pin-warning { color: var(--color-warning); }
 
 /* Show full stack button (search context) */
 .show-full-stack-btn {
@@ -350,12 +382,86 @@
 .update-type-badge.minor { background: var(--color-badge-minor-dim); color: var(--color-badge-minor); }
 .update-type-badge.major { background: var(--color-badge-major-dim); color: var(--color-badge-major); }
 .update-type-badge.rebuild { background: var(--color-slate-dim); color: var(--color-slate); }
+.update-type-badge.pinnable { background: var(--color-badge-pinnable-dim); color: var(--color-badge-pinnable); }
+.update-type-badge.floating { background: var(--color-warning-dim); color: var(--color-warning); }
 .update-type-badge.blocked { background: var(--color-badge-blocked-dim); color: var(--color-badge-blocked); }
 .update-type-badge.mismatch { background: var(--color-warning-dim); color: var(--color-warning); }
+
+/* Secondary hint line under an empty state message */
+.containers-page .empty-state .empty-hint {
+  font-size: var(--text-sm);
+  opacity: 0.75;
+}
 
 /* Force variant of update button */
 .update-btn.force {
   background: var(--color-warning);
+}
+
+/* Pin-to-tag confirmation shown above the selection actions */
+.pin-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.pin-confirm p {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.pin-confirm ul {
+  margin: 0;
+  padding-left: var(--space-5);
+  max-height: 160px;
+  overflow-y: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.pin-confirm li {
+  margin: 0;
+}
+
+.pin-confirm li strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-semibold);
+}
+
+.pin-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.pin-confirm-actions button {
+  padding: var(--space-2) var(--space-5);
+  min-height: 34px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+}
+
+.pin-confirm-actions button:hover {
+  filter: brightness(1.1);
+}
+
+.pin-confirm-actions button:last-child {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
 }
 
 /* Glow change when force is active */
@@ -368,6 +474,24 @@
 @media (max-width: 640px) {
   .containers-header h1 {
     font-size: var(--text-3xl);
+  }
+
+  /* Tight header row: shrink the status gap and drop the refresh label to an
+     icon-only button (its aria-label/title still name the action). */
+  .containers-header .header-status {
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .containers-header .refresh-status {
+    padding: var(--space-2);
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .containers-header .refresh-status span {
+    display: none;
   }
 
   .containers-page .status-badge {

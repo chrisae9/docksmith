@@ -4,6 +4,7 @@ import { getScripts } from '../api/client';
 import type { Script } from '../types/api';
 import { useContainerData } from '../hooks/useContainerData';
 import { ContainerConfigCard } from '../components/ContainerConfigCard';
+import { Tooltip } from '../components/shared';
 import './ScriptSelectionPage.css';
 
 export function ScriptSelectionPage() {
@@ -147,9 +148,11 @@ export function ScriptSelectionPage() {
               className="search-input"
             />
             {searchQuery && (
-              <button className="clear-search" onClick={() => setSearchQuery('')}>
-                <i className="fa-solid fa-times"></i>
-              </button>
+              <Tooltip label="Clear search" placement="bottom" align="end">
+                <button className="clear-search" onClick={() => setSearchQuery('')}>
+                  <i className="fa-solid fa-times"></i>
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>

@@ -4,6 +4,7 @@ import { getContainerStatus } from '../api/client';
 import type { ContainerInfo } from '../types/api';
 import { useContainerData } from '../hooks/useContainerData';
 import { ContainerConfigCard } from '../components/ContainerConfigCard';
+import { Tooltip } from '../components/shared';
 import './RestartDependenciesPage.css';
 
 export function RestartDependenciesPage() {
@@ -173,9 +174,11 @@ export function RestartDependenciesPage() {
               {Array.from(selectedContainers).map(name => (
                 <span key={name} className="selected-tag">
                   {name}
-                  <button onClick={() => toggleContainer(name)}>
-                    <i className="fa-solid fa-times"></i>
-                  </button>
+                  <Tooltip label={`Remove ${name}`} placement="bottom" align="center">
+                    <button onClick={() => toggleContainer(name)}>
+                      <i className="fa-solid fa-times"></i>
+                    </button>
+                  </Tooltip>
                 </span>
               ))}
             </div>
@@ -194,9 +197,11 @@ export function RestartDependenciesPage() {
               className="search-input"
             />
             {searchQuery && (
-              <button className="clear-search" onClick={() => setSearchQuery('')}>
-                <i className="fa-solid fa-times"></i>
-              </button>
+              <Tooltip label="Clear search" placement="bottom" align="end">
+                <button className="clear-search" onClick={() => setSearchQuery('')}>
+                  <i className="fa-solid fa-times"></i>
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>

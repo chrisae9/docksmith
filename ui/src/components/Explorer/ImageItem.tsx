@@ -46,6 +46,7 @@ export function ImageItem({
         <ActionMenuButton
           isActive={isActive}
           isLoading={isLoading}
+          ariaLabel="Image actions"
           onClick={onMenuToggle}
         />
         <ActionMenu isActive={isActive}>

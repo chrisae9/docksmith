@@ -1,5 +1,6 @@
 import type {
   CheckResponse,
+  DiscoveryResult,
   OperationsResponse,
   DockerConfigResponse,
   APIResponse,
@@ -15,6 +16,7 @@ import type {
   NotifyCronValidation,
   NotifyService,
   NotifyServiceInput,
+  TriggerCheckResponse,
 } from '../types/api';
 
 const API_BASE = '/api';
@@ -102,22 +104,29 @@ export async function checkContainers(): Promise<CheckResponse> {
 }
 
 // Get cached container status (from background checker)
-export async function getContainerStatus(timeoutMs?: number): Promise<CheckResponse> {
-  return fetchAPI('/status', { timeoutMs });
-}
+//
+// Concurrent callers (dashboard, container page, hooks) share a single in-flight
+// request per timeout tier instead of issuing duplicate /status calls.
+const statusInFlight = new Map<string, Promise<CheckResponse>>();
 
-export interface TriggerCheckData {
-  /** Whether this request actually started a check (requests are deduplicated). */
-  triggered: boolean;
-  /** Whether any check is currently running. */
-  checking: boolean;
-  last_background_run: string;
+export function getContainerStatus(timeoutMs?: number): Promise<CheckResponse> {
+  const key = timeoutMs === undefined ? 'default' : String(timeoutMs);
+  const existing = statusInFlight.get(key);
+  if (existing) return existing;
+
+  const request: Promise<CheckResponse> = fetchAPI<DiscoveryResult>('/status', { timeoutMs }).finally(() => {
+    // Callers that arrive while a request is in flight join it instead of
+    // replacing it, so the entry is always this request's own.
+    statusInFlight.delete(key);
+  });
+  statusInFlight.set(key, request);
+  return request;
 }
 
 // Trigger a background update check (returns immediately; poll /status for progress).
 // Client triggers are floored to one per minute; `force` bypasses the floor for
 // callers that must start a fresh check.
-export async function triggerCheck(force = false): Promise<APIResponse<TriggerCheckData>> {
+export async function triggerCheck(force = false): Promise<APIResponse<TriggerCheckResponse>> {
   return fetchAPI(`/trigger-check${force ? '?force=true' : ''}`, { method: 'POST' });
 }
 

@@ -19,13 +19,16 @@ import type {
   VolumeInfo,
 } from '../types/api';
 import { ChangeType } from '../types/api';
-import { isUpdatable, isMismatch } from '../utils/status';
+import { isUpdatable, isVersionUpdate, isPinnable, isMismatch } from '../utils/status';
+import { buildPinPlan, pinPlanToUpdates, revalidatePinPlan, type PinPlan } from '../utils/pinPlan';
 import { parseImageRef } from '../utils/registry';
+import { formatTimeAgo } from '../utils/time';
 import { useToast } from './Toast';
 import {
   SearchBar,
   StackGroup,
   StateIndicator,
+  Tooltip,
   ActionMenuButton,
   ActionMenu,
   ActionMenuItem,
@@ -49,7 +52,7 @@ const STORAGE_KEY_COLLAPSED = 'containers_collapsed_stacks';
 const STORAGE_KEY_DASHBOARD = 'dashboard_settings'; // for migration
 
 type SubTab = 'containers' | 'images' | 'networks' | 'volumes';
-type ContainerFilter = 'all' | 'updates';
+type ContainerFilter = 'all' | 'updates' | 'pinnable';
 
 interface ContainerViewSettings {
   filter: ContainerFilter;
@@ -110,11 +113,25 @@ export function Containers() {
     volumes,
     loading,
     error,
+    checking,
+    refreshing,
+    lastBackgroundRun,
     checkProgress,
     reconnecting,
     refresh,
     cacheRefresh,
   } = useContainersData({ includeVolumeSizes: activeSubTab === 'volumes' });
+
+  // A check is in flight either because the server reports one or because this
+  // hook started one and is still polling for it.
+  const refreshBusy = checking || refreshing;
+
+  // Re-render every 30 s so the relative "Checked …" label does not go stale.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(t => t + 1), 30000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Container view settings (filter, show ignored, etc.)
   const [viewSettings, setViewSettings] = useState<ContainerViewSettings>(loadContainerViewSettings);
@@ -175,6 +192,21 @@ export function Containers() {
 
   // Bulk action state
   const [showBulkActions, setShowBulkActions] = useState(false);
+  const [pinPlan, setPinPlan] = useState<PinPlan | null>(null);
+  const cancelPinConfirm = useCallback(() => setPinPlan(null), []);
+  const pinConfirmDialogRef = useFocusTrap(pinPlan !== null, cancelPinConfirm);
+
+  // Close the pin confirmation whenever the selection changes underneath it
+  useEffect(() => {
+    setPinPlan(null);
+  }, [selectedContainers]);
+
+  // ...and whenever the container data it was built from changes. A refresh can
+  // turn a pinnable container into a blocked update; confirming the stale plan
+  // would then run an update the user never saw.
+  useEffect(() => {
+    setPinPlan(plan => (plan && revalidatePinPlan(plan, containers) ? plan : null));
+  }, [containers]);
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
@@ -264,7 +296,9 @@ export function Containers() {
   }, [closeAllMenus]);
 
   // === Container filtering ===
-  const filterContainer = useCallback((c: UnifiedContainerItem) => {
+  // Visibility rules shared by every filter; the filter-specific predicate is
+  // applied separately so the toolbar counts match the rows each filter shows.
+  const matchesCommonFilters = useCallback((c: UnifiedContainerItem, filter: ContainerFilter) => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (!c.name.toLowerCase().includes(q) &&
@@ -275,20 +309,53 @@ export function Containers() {
     }
     if (explorerSettings.containers.showRunningOnly && c.state !== 'running') return false;
     // Hide standalone containers (not in a stack) unless toggled on or in "all" view
-    if (!c.stack && viewSettings.filter !== 'all' && !viewSettings.showStandalone) return false;
+    if (!c.stack && filter !== 'all' && !viewSettings.showStandalone) return false;
     if (c.has_update_data) {
       if (c.update_status === 'LOCAL_IMAGE' && !viewSettings.showLocalImages) return false;
       if (c.update_status === 'IGNORED' && !viewSettings.showIgnored) return false;
     }
+    return true;
+  }, [searchQuery, viewSettings.showStandalone, viewSettings.showLocalImages, viewSettings.showIgnored, explorerSettings.containers.showRunningOnly]);
+
+  const filterContainer = useCallback((c: UnifiedContainerItem) => {
+    if (!matchesCommonFilters(c, viewSettings.filter)) return false;
     if (viewSettings.filter === 'updates') {
       if (!c.has_update_data) return false;
-      // Build a pseudo-ContainerInfo to use existing status helpers
-      if (isUpdatable(c.update_status || '')) return true;
+      if (isVersionUpdate(c.update_status || '')) return true;
       if (viewSettings.showMismatch && isMismatch(c.update_status || '')) return true;
       return false;
     }
+    if (viewSettings.filter === 'pinnable') {
+      return c.has_update_data && isPinnable(c.update_status || '');
+    }
     return true;
-  }, [searchQuery, viewSettings, explorerSettings.containers.showRunningOnly]);
+  }, [matchesCommonFilters, viewSettings.filter, viewSettings.showMismatch]);
+
+  // === Filter counts (must match the rows each filter shows) ===
+  // The updates button counts real version updates only, matching the sidebar;
+  // the updates filter may additionally show mismatches when showMismatch is on.
+  const updatesCount = useMemo(() => containers.filter(c =>
+    matchesCommonFilters(c, 'updates') &&
+    c.has_update_data &&
+    isVersionUpdate(c.update_status || '')
+  ).length, [containers, matchesCommonFilters]);
+
+  const pinnableCount = useMemo(() => containers.filter(c =>
+    matchesCommonFilters(c, 'pinnable') &&
+    c.has_update_data &&
+    isPinnable(c.update_status || '')
+  ).length, [containers, matchesCommonFilters]);
+
+  // Floating rows with no resolvable target are hidden from the updates and
+  // pinnable filters by design; count them so the empty states can explain why.
+  const pageFloatingNoTargetCount = useMemo(() => containers.filter(c =>
+    c.using_floating_tag &&
+    !isUpdatable(c.update_status || '') &&
+    c.update_status !== 'IGNORED' &&
+    c.update_status !== 'LOCAL_IMAGE' &&
+    c.update_status !== 'COMPOSE_MISMATCH' &&
+    c.labels?.['docksmith.allow-latest'] !== 'true'
+  ).length, [containers]);
 
   // === Container sorting ===
   const sortContainers = useCallback((items: UnifiedContainerItem[]) => {
@@ -532,6 +599,28 @@ export function Containers() {
     }
   };
 
+  // Confirming a pin executes exactly the plan the user was shown. If the data
+  // moved on, close the dialog and ask for a new confirmation instead of falling
+  // through to the bulk update, which would act on the latest status — including
+  // a forced update the user never confirmed.
+  const handlePinConfirm = () => {
+    if (!pinPlan) return;
+    const confirmed = revalidatePinPlan(pinPlan, containers);
+    setPinPlan(null);
+    if (!confirmed) {
+      toast.info('Container data changed — review the pin targets and try again');
+      return;
+    }
+    const byName = new Map(containers.map(c => [c.name, c]));
+    const ingressNames = confirmed.entries
+      .filter(entry => byName.get(entry.name)?.is_ingress)
+      .map(entry => entry.name);
+    setSelectedContainers(new Set());
+    navigate('/operation', {
+      state: { update: { containers: pinPlanToUpdates(confirmed), ingress_names: ingressNames } },
+    });
+  };
+
   const handleBulkAction = (action: 'start' | 'stop' | 'restart' | 'remove') => {
     const names = Array.from(selectedContainers);
     setSelectedContainers(new Set());
@@ -753,6 +842,21 @@ export function Containers() {
       if (c.state !== 'running') return <span className="status-badge stopped">{c.state.toUpperCase()}</span>;
       return null;
     }
+    const allowLatest = c.labels?.['docksmith.allow-latest'] === 'true';
+    if (
+      c.using_floating_tag &&
+      !allowLatest &&
+      c.update_status !== 'IGNORED' &&
+      c.update_status !== 'LOCAL_IMAGE' &&
+      c.update_status !== 'COMPOSE_MISMATCH' &&
+      !isUpdatable(c.update_status || '')
+    ) {
+      return (
+        <span className="status-badge floating" title={`Floating tag ${c.current_tag || ''} — no exact version tag could be resolved. Mount a read:packages PAT for a target.`}>
+          FLOATING
+        </span>
+      );
+    }
     switch (c.update_status) {
       case 'UPDATE_AVAILABLE':
         if (c.change_type === ChangeType.MajorChange) return <span className="status-badge major" title="Major update">MAJOR</span>;
@@ -832,6 +936,11 @@ export function Containers() {
           {c.health_status === 'unhealthy' && <span className="warn" title="Container is unhealthy"><i className="fa-solid fa-heart-crack"></i></span>}
           {c.env_controlled && <span className="label-icon env" title={`Image from .env: $${c.env_var_name || 'ENV'}`}><i className="fa-solid fa-file-code"></i></span>}
           {versionPin && <span className={`label-icon pin-${versionPin}`} title={`Version pinned to ${versionPin}`}><i className="fa-solid fa-thumbtack"></i></span>}
+          {versionPin && c.using_floating_tag && (
+            <span className="label-icon pin-warning" title="Version pin has no effect while running a floating tag — migrate to a version tag first">
+              <i className="fa-solid fa-triangle-exclamation"></i>
+            </span>
+          )}
           {hasTagRegex && <span className="label-icon regex" title="Tag regex filter"><i className="fa-solid fa-filter"></i></span>}
           {hasPreUpdateScript && !c.pre_update_check_pass && !c.pre_update_check_fail && <span className="label-icon script" title="Pre-update script"><i className="fa-solid fa-terminal"></i></span>}
           {allowsLatest && <span className="label-icon latest" title="Allows :latest"><i className="fa-solid fa-tag"></i></span>}
@@ -839,7 +948,7 @@ export function Containers() {
           {getStatusBadge(c)}
         </div>
         <div className="item-actions">
-          <ActionMenuButton isActive={isActive} isLoading={false} onClick={() => { setActiveActionMenu(isActive ? null : c.name); setConfirmRemove(null); }} />
+          <ActionMenuButton isActive={isActive} isLoading={false} ariaLabel="More actions" onClick={() => { setActiveActionMenu(isActive ? null : c.name); setConfirmRemove(null); }} />
           <ActionMenu isActive={isActive}>
             {isRunning ? (
               <>
@@ -849,7 +958,7 @@ export function Containers() {
             ) : (
               <ActionMenuItem icon="fa-play" label="Start" onClick={() => handleContainerAction(c.name, 'start')} />
             )}
-            {hasUpdate && <ActionMenuItem icon="fa-arrow-up" label={c.update_status === 'UPDATE_AVAILABLE_BLOCKED' ? 'Force Update' : 'Update'} onClick={() => {
+            {hasUpdate && <ActionMenuItem icon="fa-arrow-up" label={c.update_status === 'UPDATE_AVAILABLE_BLOCKED' ? 'Force Update' : c.update_status === 'UP_TO_DATE_PINNABLE' ? 'Pin to tag' : 'Update'} onClick={() => {
               setActiveActionMenu(null);
               navigate('/operation', { state: { update: { containers: [{ name: c.name, target_version: c.recommended_tag || c.latest_version || '', stack: c.stack || '', force: c.update_status === 'UPDATE_AVAILABLE_BLOCKED', change_type: c.change_type || 0, old_resolved_version: c.current_version || '', new_resolved_version: c.latest_resolved_version || c.latest_version || '' }] } } });
             }} />}
@@ -894,7 +1003,40 @@ export function Containers() {
         return <div className="empty-state"><i className="fa-solid fa-magnifying-glass"></i><h2>No search results</h2><p>No containers match "{searchQuery}"</p></div>;
       }
       if (viewSettings.filter === 'updates') {
-        return <div className="empty-state"><i className="fa-solid fa-circle-check"></i><h2>All containers are up to date</h2><p>There are no updates available</p></div>;
+        return (
+          <div className="empty-state">
+            <i className="fa-solid fa-circle-check"></i>
+            <h2>No version updates available</h2>
+            <p>
+              {pageFloatingNoTargetCount === 0 && 'There are no updates available'}
+              {pinnableCount > 0 && (
+                <>
+                  {pageFloatingNoTargetCount === 0 && <br />}
+                  <span className="empty-hint">{pinnableCount} container(s) have a recommended pin tag — see Pinnable.</span>
+                </>
+              )}
+              {pageFloatingNoTargetCount > 0 && (
+                <>
+                  {pinnableCount > 0 && <br />}
+                  <span className="empty-hint">{pageFloatingNoTargetCount} floating container(s) have no target — see All, and mount a read:packages PAT for targets.</span>
+                </>
+              )}
+            </p>
+          </div>
+        );
+      }
+      if (viewSettings.filter === 'pinnable') {
+        return (
+          <div className="empty-state">
+            <i className="fa-solid fa-thumbtack"></i>
+            <h2>No containers with a pin target</h2>
+            <p>
+              {pageFloatingNoTargetCount > 0
+                ? `${pageFloatingNoTargetCount} floating container(s) have no target — mount a read:packages PAT to resolve one.`
+                : 'Every container is either pinned to a version tag or already has a target.'}
+            </p>
+          </div>
+        );
       }
       return <div className="empty-state"><i className="fa-solid fa-box-open"></i><h2>No containers found</h2><p>No containers match the current filter</p></div>;
     }
@@ -924,7 +1066,7 @@ export function Containers() {
                       const stackId = `stack-${groupName}`;
                       if (searchQuery) setSearchQuery('');
                       const updates: Partial<ContainerViewSettings> = {};
-                      if (viewSettings.filter === 'updates') updates.filter = 'all';
+                      if (viewSettings.filter !== 'all') updates.filter = 'all';
                       if (!viewSettings.showIgnored && containerStacks[groupName].some(c => c.update_status === 'IGNORED')) updates.showIgnored = true;
                       if (!viewSettings.showLocalImages && containerStacks[groupName].some(c => c.update_status === 'LOCAL_IMAGE')) updates.showLocalImages = true;
                       if (Object.keys(updates).length > 0) updateViewSettings(updates);
@@ -951,19 +1093,24 @@ export function Containers() {
                   </button>
                 )}
                 {items.length > 0 && (
-                  <button
-                    className="stack-select-btn"
-                    onClick={(e) => { e.stopPropagation(); toggleStackSelection(items); }}
-                    title={items.every(c => selectedContainers.has(c.name)) ? 'Deselect all' : 'Select all'}
+                  <Tooltip
+                    label={items.every(c => selectedContainers.has(c.name)) ? 'Deselect all in stack' : 'Select all in stack'}
+                    placement="bottom"
+                    align="end"
                   >
-                    <i className={`fa-solid ${items.every(c => selectedContainers.has(c.name)) ? 'fa-square-minus' : 'fa-square-check'}`}></i>
-                  </button>
+                    <button
+                      className="stack-select-btn"
+                      onClick={(e) => { e.stopPropagation(); toggleStackSelection(items); }}
+                    >
+                      <i className={`fa-solid ${items.every(c => selectedContainers.has(c.name)) ? 'fa-square-minus' : 'fa-square-check'}`}></i>
+                    </button>
+                  </Tooltip>
                 )}
                 {explorerSettings.containers.groupBy === 'stack' && groupName !== '_standalone' && (() => {
                   const isMenuActive = activeStackMenu === groupName;
                   return (
                     <div className="stack-actions" onClick={(e) => e.stopPropagation()}>
-                      <ActionMenuButton isActive={isMenuActive} isLoading={false} onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
+                      <ActionMenuButton isActive={isMenuActive} isLoading={false} ariaLabel="Stack actions" onClick={(e) => { e.stopPropagation(); setActiveStackMenu(isMenuActive ? null : groupName); }} />
                       <ActionMenu isActive={isMenuActive}>
                         {hasActiveContainers(items) && (
                           <ActionMenuItem icon="fa-rotate" label="Restart Stack" onClick={() => handleStackAction(groupName, 'restart')} />
@@ -1099,19 +1246,30 @@ export function Containers() {
   // === Selected containers analysis ===
   const selectedAnalysis = useMemo(() => {
     const selected = containers.filter(c => selectedContainers.has(c.name));
-    const updatable = selected.filter(c => c.has_update_data && isUpdatable(c.update_status || ''));
+    const versionUpdates = selected.filter(c => c.has_update_data && isVersionUpdate(c.update_status || ''));
+    const pinnable = selected.filter(c => c.has_update_data && isPinnable(c.update_status || ''));
     const mismatches = selected.filter(c => c.has_update_data && isMismatch(c.update_status || ''));
 
-    const buildCount = updatable.filter(c => c.change_type === ChangeType.BuildChange).length;
-    const patchCount = updatable.filter(c => c.change_type === ChangeType.PatchChange).length;
-    const minorCount = updatable.filter(c => c.change_type === ChangeType.MinorChange).length;
-    const majorCount = updatable.filter(c => c.change_type === ChangeType.MajorChange).length;
-    const blockedCount = updatable.filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED').length;
-    const rebuildCount = updatable.filter(c => (c.change_type === ChangeType.NoChange || c.change_type === ChangeType.UnknownChange) && c.update_status !== 'UPDATE_AVAILABLE_BLOCKED').length;
+    const buildCount = versionUpdates.filter(c => c.change_type === ChangeType.BuildChange).length;
+    const patchCount = versionUpdates.filter(c => c.change_type === ChangeType.PatchChange).length;
+    const minorCount = versionUpdates.filter(c => c.change_type === ChangeType.MinorChange).length;
+    const majorCount = versionUpdates.filter(c => c.change_type === ChangeType.MajorChange).length;
+    const blockedCount = versionUpdates.filter(c => c.update_status === 'UPDATE_AVAILABLE_BLOCKED').length;
+    const rebuildCount = versionUpdates.filter(c =>
+      (c.change_type === ChangeType.NoChange || c.change_type === ChangeType.UnknownChange) &&
+      c.update_status !== 'UPDATE_AVAILABLE_BLOCKED'
+    ).length;
+
+    const floatingNoTargetCount = selected.filter(c =>
+      c.using_floating_tag &&
+      !isUpdatable(c.update_status || '') &&
+      c.update_status !== 'IGNORED' &&
+      c.labels?.['docksmith.allow-latest'] !== 'true'
+    ).length;
 
     return {
       count: selected.length,
-      hasUpdates: updatable.length > 0,
+      hasUpdates: versionUpdates.length > 0 || pinnable.length > 0,
       hasMismatches: mismatches.length > 0,
       hasRunning: selected.some(c => c.state === 'running'),
       hasStopped: selected.some(c => c.state !== 'running'),
@@ -1124,13 +1282,16 @@ export function Containers() {
       majorCount,
       blockedCount,
       rebuildCount,
+      pinnableCount: pinnable.length,
+      allActionablePinnable: versionUpdates.length + pinnable.length > 0 && pinnable.length === versionUpdates.length + pinnable.length && mismatches.length === 0,
       mismatchCount: mismatches.length,
-      updateTotal: updatable.length,
+      updateTotal: versionUpdates.length + pinnable.length,
+      floatingNoTargetCount,
     };
   }, [containers, selectedContainers]);
 
   // === Loading state ===
-  if (loading) {
+  if (loading && containers.length === 0) {
     return (
       <div className="containers-page">
         <header className="containers-header">
@@ -1213,15 +1374,35 @@ export function Containers() {
         );
       })()}
 
+      {error && containers.length > 0 && (
+        <div className="stale-data-banner" role="status">
+          <i className="fa-solid fa-triangle-exclamation"></i>
+          <span>Showing last known data — {error}</span>
+        </div>
+      )}
+
       <header className="containers-header">
         <div className="header-top">
           <h1>Containers</h1>
-          {reconnecting && (
-            <div className="connection-status reconnecting" title="Reconnecting...">
-              <i className="fa-solid fa-wifi fa-fade"></i>
-              <span>Reconnecting...</span>
-            </div>
-          )}
+          <div className="header-status">
+            {reconnecting && (
+              <div className="connection-status reconnecting" title="Reconnecting...">
+                <i className="fa-solid fa-wifi fa-fade"></i>
+                <span>Reconnecting...</span>
+              </div>
+            )}
+            <button
+              className="refresh-status"
+              onClick={refresh}
+              disabled={refreshBusy}
+              aria-busy={refreshBusy}
+              title={refreshBusy ? 'Checking for updates' : 'Check for updates now'}
+              aria-label={refreshBusy ? 'Checking for updates' : 'Check for updates now'}
+            >
+              <i className={`fa-solid fa-rotate ${refreshBusy ? 'fa-spin' : ''}`} />
+              <span>{refreshBusy ? 'Checking…' : `Checked ${lastBackgroundRun ? formatTimeAgo(lastBackgroundRun) : 'never'}`}</span>
+            </button>
+          </div>
         </div>
         <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={`Search ${activeSubTab}...`} />
 
@@ -1240,9 +1421,11 @@ export function Containers() {
             {activeSubTab !== 'containers' && (
               <>
                 <div className="settings-menu-wrapper">
-                  <button className={`explorer-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} title="Settings">
-                    <i className="fa-solid fa-gear"></i>
-                  </button>
+                  <Tooltip label="View options" placement="bottom" align="end">
+                    <button className={`explorer-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)}>
+                      <i className="fa-solid fa-gear"></i>
+                    </button>
+                  </Tooltip>
                   <ExplorerSettingsMenu
                     isOpen={showSettings}
                     onClose={() => setShowSettings(false)}
@@ -1266,28 +1449,37 @@ export function Containers() {
           <div className="filter-toolbar">
             <div className="segmented-control">
               <button className={viewSettings.filter === 'all' ? 'active' : ''} onClick={() => updateViewSettings({ filter: 'all' })}>All</button>
-              <button className={viewSettings.filter === 'updates' ? 'active' : ''} onClick={() => updateViewSettings({ filter: 'updates' })}>Updates</button>
+              <button className={viewSettings.filter === 'updates' ? 'active' : ''} onClick={() => updateViewSettings({ filter: 'updates' })} title={`${updatesCount} version update(s); mismatched containers are shown when enabled`}>Updates ({updatesCount})</button>
+              <button className={viewSettings.filter === 'pinnable' ? 'active' : ''} onClick={() => updateViewSettings({ filter: 'pinnable' })}>Pinnable ({pinnableCount})</button>
             </div>
             <div className="toolbar-options">
-              <button onClick={selectedContainers.size > 0 ? deselectAll : selectAll} className="icon-btn select-all-btn" title={selectedContainers.size > 0 ? 'Deselect all' : 'Select all'}>
-                <i className={`fa-solid ${selectedContainers.size > 0 ? 'fa-square-minus' : 'fa-square-check'}`}></i>
-              </button>
-              {explorerSettings.containers.groupBy === 'stack' && (
-                <button className="icon-btn" onClick={toggleAllStacks} title={collapsedStacks.size > 0 ? 'Expand all' : 'Collapse all'}>
-                  <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`}></i>
+              <Tooltip label={selectedContainers.size > 0 ? 'Deselect all' : 'Select all'} placement="bottom" align="end">
+                <button onClick={selectedContainers.size > 0 ? deselectAll : selectAll} className="icon-btn select-all-btn">
+                  <i className={`fa-solid ${selectedContainers.size > 0 ? 'fa-square-minus' : 'fa-square-check'}`}></i>
                 </button>
+              </Tooltip>
+              {explorerSettings.containers.groupBy === 'stack' && (
+                <Tooltip label={collapsedStacks.size > 0 ? 'Expand all' : 'Collapse all'} placement="bottom" align="end">
+                  <button className="icon-btn" onClick={toggleAllStacks}>
+                    <i className={`fa-solid ${collapsedStacks.size > 0 ? 'fa-chevron-right' : 'fa-chevron-down'}`}></i>
+                  </button>
+                </Tooltip>
               )}
               <div className="settings-menu-wrapper">
-                <button className={`icon-btn dashboard-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} title="View Options">
-                  <i className="fa-solid fa-sliders"></i>
-                </button>
+                <Tooltip label="View options" placement="bottom" align="end">
+                  <button className={`icon-btn dashboard-settings-btn ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)}>
+                    <i className="fa-solid fa-sliders"></i>
+                  </button>
+                </Tooltip>
                 {showSettings && (
                   <>
                     <div className="settings-menu-backdrop" onClick={(e) => { e.stopPropagation(); setShowSettings(false); }} />
                     <div className="settings-menu" role="dialog" aria-label="View options">
                       <div className="settings-menu-header">
                         <span>View Options</span>
-                        <button className="settings-close-btn" onClick={() => setShowSettings(false)}><i className="fa-solid fa-xmark"></i></button>
+                        <Tooltip label="Close" placement="bottom" align="end">
+                          <button className="settings-close-btn" onClick={() => setShowSettings(false)}><i className="fa-solid fa-xmark"></i></button>
+                        </Tooltip>
                       </div>
                       <div className="settings-menu-content">
                         <div className="settings-group">
@@ -1392,16 +1584,39 @@ export function Containers() {
           {selectedAnalysis.hasIngress && (
             <div className="ingress-warning"><i className="fa-solid fa-triangle-exclamation"></i><span>Selected containers serve the Docksmith UI. You will lose access until they restart.</span></div>
           )}
+          {pinPlan && (
+            <div className="pin-confirm" ref={pinConfirmDialogRef} role="dialog" aria-modal="true" aria-label="Pin to recommended tags">
+              <p>Replace the floating tag with the recommended version for {pinPlan.entries.length} container(s):</p>
+              <ul>
+                {pinPlan.entries.map(entry => (
+                  <li key={entry.name}><strong>{entry.name}</strong>: {entry.currentTag} → {entry.target}</li>
+                ))}
+              </ul>
+              <div className="pin-confirm-actions">
+                <button onClick={cancelPinConfirm}>Cancel</button>
+                <button onClick={handlePinConfirm}>Pin</button>
+              </div>
+            </div>
+          )}
           <div className="selection-actions">
             <div className="selection-summary">
               <span className="selection-count">{selectedAnalysis.count} selected</span>
-              {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
+              {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches || selectedAnalysis.floatingNoTargetCount > 0) && (
                 <div className="update-type-badges">
                   {selectedAnalysis.patchCount > 0 && <span className="update-type-badge patch">{selectedAnalysis.patchCount} Patch</span>}
                   {selectedAnalysis.buildCount > 0 && <span className="update-type-badge build">{selectedAnalysis.buildCount} Build</span>}
                   {selectedAnalysis.minorCount > 0 && <span className="update-type-badge minor">{selectedAnalysis.minorCount} Minor</span>}
                   {selectedAnalysis.majorCount > 0 && <span className="update-type-badge major">{selectedAnalysis.majorCount} Major</span>}
                   {selectedAnalysis.rebuildCount > 0 && <span className="update-type-badge rebuild">{selectedAnalysis.rebuildCount} Rebuild</span>}
+                  {selectedAnalysis.pinnableCount > 0 && <span className="update-type-badge pinnable">{selectedAnalysis.pinnableCount} Pinnable</span>}
+                  {selectedAnalysis.floatingNoTargetCount > 0 && (
+                    <span
+                      className="update-type-badge floating"
+                      title="Floating tag — no exact version tag could be resolved. Mount a read:packages PAT for a target."
+                    >
+                      {selectedAnalysis.floatingNoTargetCount} Floating · no target
+                    </span>
+                  )}
                   {selectedAnalysis.blockedCount > 0 && <span className="update-type-badge blocked">{selectedAnalysis.blockedCount} Blocked</span>}
                   {selectedAnalysis.mismatchCount > 0 && <span className="update-type-badge mismatch">{selectedAnalysis.mismatchCount} Mismatch</span>}
                 </div>
@@ -1437,11 +1652,11 @@ export function Containers() {
                       <button onClick={() => handleBulkLabel({ allow_latest: true })}><i className="fa-solid fa-tag"></i> Allow :latest</button>
                       <button onClick={() => handleBulkLabel({ allow_latest: false })}><i className="fa-solid fa-tag"></i> Disallow :latest</button>
                       <div className="bulk-actions-divider" />
-                      <span className="bulk-section-label">Pinning</span>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Unpin</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Pin Major</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Pin Minor</button>
-                      <button onClick={() => handleBulkLabel({ version_pin_patch: true, version_pin_major: false, version_pin_minor: false })}><i className="fa-solid fa-thumbtack"></i> Pin Patch</button>
+                      <span className="bulk-section-label">Version pinning</span>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: false, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack" style={{ opacity: 0.4 }}></i> Clear version pin</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_major: true, version_pin_minor: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Version pin · Major</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_minor: true, version_pin_major: false, version_pin_patch: false })}><i className="fa-solid fa-thumbtack"></i> Version pin · Minor</button>
+                      <button onClick={() => handleBulkLabel({ version_pin_patch: true, version_pin_major: false, version_pin_minor: false })}><i className="fa-solid fa-thumbtack"></i> Version pin · Patch</button>
                       <div className="bulk-actions-divider" />
                       <span className="bulk-section-label">Clear</span>
                       <button onClick={() => handleBulkLabel({ tag_regex: '' })}><i className="fa-solid fa-filter-circle-xmark"></i> Clear Tag Filter</button>
@@ -1453,9 +1668,12 @@ export function Containers() {
 
               {/* Update button - contextual */}
               {(selectedAnalysis.hasUpdates || selectedAnalysis.hasMismatches) && (
-                <button className={`update-btn ${selectedAnalysis.hasBlocked ? 'force' : ''}`} onClick={handleBulkUpdate}>
+                <button
+                  className={`update-btn ${selectedAnalysis.hasBlocked ? 'force' : ''}`}
+                  onClick={selectedAnalysis.allActionablePinnable ? () => setPinPlan(buildPinPlan(containers, selectedContainers)) : handleBulkUpdate}
+                >
                   {selectedAnalysis.hasBlocked && <i className="fa-solid fa-bolt"></i>}
-                  {selectedAnalysis.hasBlocked ? 'Force Update' : 'Update'}
+                  {selectedAnalysis.allActionablePinnable ? 'Pin to recommended tags' : selectedAnalysis.hasBlocked ? 'Force Update' : 'Update'}
                 </button>
               )}
             </div>

@@ -8,7 +8,6 @@ interface Tab {
   label: string;
   icon: string;
   activeIcon: string;
-  badge?: number;
   path: string;
 }
 
@@ -16,10 +15,19 @@ interface TabBarProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
   updateCount?: number;
+  pinnableCount?: number;
 }
 
-export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCount = 0 }) => {
+export const TabBar: React.FC<TabBarProps> = ({
+  activeTab,
+  onTabChange,
+  updateCount = 0,
+  pinnableCount = 0,
+}) => {
   const navigate = useNavigate();
+
+  const badgeUpdate = updateCount > 0 ? updateCount : undefined;
+  const badgePinnable = pinnableCount > 0 ? pinnableCount : undefined;
 
   const tabs: Tab[] = [
     {
@@ -27,7 +35,6 @@ export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCo
       label: 'Containers',
       icon: 'fa-solid fa-cubes',
       activeIcon: 'fa-solid fa-cubes',
-      badge: updateCount > 0 ? updateCount : undefined,
       path: '/',
     },
     {
@@ -51,6 +58,11 @@ export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCo
     navigate(tab.path);
   };
 
+  const getAriaLabel = (tab: Tab) => {
+    if (tab.id !== 'containers') return tab.label;
+    return `${tab.label}, ${updateCount} update${updateCount === 1 ? '' : 's'} available, ${pinnableCount} container${pinnableCount === 1 ? '' : 's'} on a floating tag`;
+  };
+
   return (
     <nav className="tab-bar" role="tablist" aria-label="Main navigation">
       {tabs.map((tab) => (
@@ -58,14 +70,33 @@ export const TabBar: React.FC<TabBarProps> = ({ activeTab, onTabChange, updateCo
           key={tab.id}
           role="tab"
           aria-selected={activeTab === tab.id}
-          aria-label={tab.badge ? `${tab.label}, ${tab.badge} items` : tab.label}
+          aria-label={getAriaLabel(tab)}
           className={`tab-item ${activeTab === tab.id ? 'active' : ''}`}
           onClick={() => handleTabClick(tab)}
         >
           <div className="tab-icon-container">
             <i className={`tab-icon ${activeTab === tab.id ? tab.activeIcon : tab.icon}`} aria-hidden="true"></i>
-            {tab.badge !== undefined && (
-              <span className="tab-badge" aria-hidden="true">{tab.badge > 99 ? '99+' : tab.badge}</span>
+            {tab.id === 'containers' && (badgeUpdate !== undefined || badgePinnable !== undefined) && (
+              <span className="tab-badges">
+                {badgeUpdate !== undefined && (
+                  <span
+                    className="tab-badge update"
+                    title={`${badgeUpdate} update${badgeUpdate === 1 ? '' : 's'} available`}
+                    aria-hidden="true"
+                  >
+                    {badgeUpdate > 99 ? '99+' : badgeUpdate}
+                  </span>
+                )}
+                {badgePinnable !== undefined && (
+                  <span
+                    className="tab-badge pinnable"
+                    title={`${badgePinnable} container${badgePinnable === 1 ? '' : 's'} on a floating tag`}
+                    aria-hidden="true"
+                  >
+                    {badgePinnable > 99 ? '99+' : badgePinnable}
+                  </span>
+                )}
+              </span>
             )}
           </div>
           <span className="tab-label">{tab.label}</span>
