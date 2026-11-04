@@ -106,9 +106,19 @@ export async function getContainerStatus(timeoutMs?: number): Promise<CheckRespo
   return fetchAPI('/status', { timeoutMs });
 }
 
-// Trigger a background update check (returns immediately; poll /status for progress)
-export async function triggerCheck(): Promise<APIResponse<unknown>> {
-  return fetchAPI('/trigger-check', { method: 'POST' });
+export interface TriggerCheckData {
+  /** Whether this request actually started a check (requests are deduplicated). */
+  triggered: boolean;
+  /** Whether any check is currently running. */
+  checking: boolean;
+  last_background_run: string;
+}
+
+// Trigger a background update check (returns immediately; poll /status for progress).
+// Client triggers are floored to one per minute; `force` bypasses the floor for
+// callers that must start a fresh check.
+export async function triggerCheck(force = false): Promise<APIResponse<TriggerCheckData>> {
+  return fetchAPI(`/trigger-check${force ? '?force=true' : ''}`, { method: 'POST' });
 }
 
 // Recheck a single container (synchronous, bypasses cache)

@@ -21,7 +21,7 @@ import (
 // DiscoveryResult contains the complete discovery and check results
 type DiscoveryResult struct {
 	Containers           []ContainerInfo   `json:"containers"`
-	Stacks              map[string]*Stack  `json:"stacks"`
+	Stacks              map[string]*Stack  `json:"stacks,omitempty"`
 	StandaloneContainers []ContainerInfo   `json:"standalone_containers"`
 	UpdateOrder         []string           `json:"update_order"`
 	TotalChecked        int                `json:"total_checked"`

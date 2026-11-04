@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getContainerStatus, getExplorerData, checkContainers, triggerCheck } from '../api/client';
 import { useEventStream } from '../context/EventStreamContext';
 import { usePeriodicRefresh } from './usePeriodicRefresh';
+import { checkFinished, planRefresh } from './refreshTrigger';
 import type {
   DiscoveryResult,
   ExplorerData,
@@ -166,26 +167,27 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
   // Background refresh — trigger background check, wait for it to complete, then fetch cached data.
   // Polls /api/status until checking=false and lastBackgroundRun advances past the trigger time,
   // so the UI reflects the post-trigger cache rather than the pre-trigger one.
-  const runRefresh = useCallback(async () => {
+  const runRefresh = useCallback(async (force: boolean) => {
     try {
       const triggerAt = Date.now();
-      const triggerRes = await triggerCheck();
+      const triggerRes = await triggerCheck(force);
       if (!triggerRes.success) {
         console.warn('Background check trigger failed:', triggerRes.error);
       }
 
+      // A deduplicated trigger that neither started nor joined a check means the
+      // cached result is already current; read it immediately instead of polling
+      // for a last-run timestamp that cannot advance.
+      const plan = planRefresh(triggerRes.success ? triggerRes.data : null);
       const pollDeadline = triggerAt + 15000;
       let finalStatus: DiscoveryResult | null = null;
-      // No check was started if the trigger failed, so skip the poll loop.
-      while (triggerRes.success && mountedRef.current && Date.now() < pollDeadline) {
+      while (plan.poll && mountedRef.current && Date.now() < pollDeadline) {
         await new Promise(resolve => setTimeout(resolve, 300));
         if (!mountedRef.current) return;
         const statusRes = await getContainerStatus(5000);
         if (!statusRes.success || !statusRes.data) continue;
-        const data = statusRes.data;
-        const lastRunMs = data.last_background_run ? Date.parse(data.last_background_run) : 0;
-        if (!data.checking && lastRunMs >= triggerAt) {
-          finalStatus = data;
+        if (checkFinished(plan.mode, triggerAt, statusRes.data)) {
+          finalStatus = statusRes.data;
           break;
         }
       }
@@ -211,10 +213,10 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
     }
   }, [includeVolumeSizes]);
 
-  const startRefresh = useCallback(() => {
+  const startRefresh = useCallback((force: boolean) => {
     if (!mountedRef.current) return Promise.resolve();
     lastRefreshStart.current = Date.now();
-    const run = runRefresh().finally(() => { inFlightRefresh.current = null; });
+    const run = runRefresh(force).finally(() => { inFlightRefresh.current = null; });
     inFlightRefresh.current = run;
     return run;
   }, [runRefresh]);
@@ -229,11 +231,11 @@ export function useContainersData(options: { includeVolumeSizes?: boolean } = {}
       if (!force) return current;
       return current.then(() => {
         if (inFlightRefresh.current) return inFlightRefresh.current;
-        return startRefresh();
+        return startRefresh(true);
       });
     }
     if (!force && Date.now() - lastRefreshStart.current < 1000) return Promise.resolve();
-    return startRefresh();
+    return startRefresh(force);
   }, [startRefresh]);
 
   const refresh = useCallback(() => backgroundRefresh(true), [backgroundRefresh]);

@@ -201,21 +201,54 @@ func (bc *BackgroundChecker) updateLastCacheRefreshIfNeeded(now time.Time, cache
 	}
 }
 
-// runCheck performs a check and updates the cache
+// clientTriggerMinInterval is the minimum spacing between non-forced checks
+// requested by an API client.
+const clientTriggerMinInterval = 60 * time.Second
+
+// triggerPolicy describes who asked for a check, which determines whether the
+// client rate floor applies and whether a concurrent request queues a follow-up.
+type triggerPolicy int
+
+const (
+	triggerInternal    triggerPolicy = iota // scheduled or internal refresh; never floored, queues a follow-up
+	triggerClient                           // client-requested; floored, never queues a follow-up
+	triggerClientForce                      // client-requested, bypasses the floor; never queues a follow-up
+)
+
+// runCheck claims a check as an internal trigger and runs it.
 func (bc *BackgroundChecker) runCheck() {
-	// Set checking flag. If a check is already running, record that another
-	// run is needed and return — the in-flight run will re-enter once done.
-	bc.cache.mu.Lock()
-	if bc.cache.checking {
-		bc.cache.pendingRecheck = true
-		bc.cache.mu.Unlock()
-		log.Printf("BACKGROUND_CHECKER: Check already in progress, queued follow-up")
+	if !bc.claimCheck(triggerInternal) {
 		return
+	}
+	bc.performCheck()
+}
+
+// claimCheck atomically decides whether the calling trigger may start a check.
+// It returns true (and marks the cache as checking) only when the caller should
+// launch performCheck.
+func (bc *BackgroundChecker) claimCheck(p triggerPolicy) bool {
+	bc.cache.mu.Lock()
+	defer bc.cache.mu.Unlock()
+
+	if bc.cache.checking {
+		if p == triggerInternal {
+			bc.cache.pendingRecheck = true
+			log.Printf("BACKGROUND_CHECKER: Check already in progress, queued follow-up")
+		}
+		return false
+	}
+	if p == triggerClient && !bc.cache.lastBackgroundRun.IsZero() &&
+		time.Since(bc.cache.lastBackgroundRun) < clientTriggerMinInterval {
+		return false
 	}
 	bc.cache.checking = true
 	bc.cache.pendingRecheck = false
-	bc.cache.mu.Unlock()
+	return true
+}
 
+// performCheck runs a check and updates the cache. The caller must have
+// claimed the check via claimCheck.
+func (bc *BackgroundChecker) performCheck() {
 	defer func() {
 		bc.cache.mu.Lock()
 		bc.cache.checking = false
@@ -317,7 +350,7 @@ func (bc *BackgroundChecker) notifyObserver(result *DiscoveryResult) {
 	if fn == nil {
 		return
 	}
-	// Checks never overlap (see runCheck), so seq follows check order.
+	// Checks never overlap (see claimCheck), so seq follows check order.
 	seq := bc.observerSeq.Add(1)
 	go func() {
 		defer func() {
@@ -344,7 +377,25 @@ func (bc *BackgroundChecker) MarkCacheCleared() {
 	bc.cache.cacheCleared = true
 }
 
-// TriggerCheck manually triggers a check (for manual refresh)
+// TriggerCheck triggers an internal check. If a check is already running, a
+// single follow-up check is queued and run when the in-flight check completes.
 func (bc *BackgroundChecker) TriggerCheck() {
 	go bc.runCheck()
+}
+
+// TriggerCheckClient triggers a check on behalf of an API client and reports
+// whether this call started one. Non-forced requests are rejected within
+// clientTriggerMinInterval of the last completed check; forced requests bypass
+// that floor. Either way, a request that arrives while a check is running is
+// rejected without queueing a follow-up.
+func (bc *BackgroundChecker) TriggerCheckClient(force bool) bool {
+	policy := triggerClient
+	if force {
+		policy = triggerClientForce
+	}
+	if !bc.claimCheck(policy) {
+		return false
+	}
+	go bc.performCheck()
+	return true
 }

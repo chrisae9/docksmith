@@ -16,15 +16,15 @@ Docksmith exposes a REST API at `/api/`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Server health check |
-| GET | `/api/status` | System status with last check time |
+| GET | `/api/status` | System status, slim payload (no stacks or tags) |
 | GET | `/api/docker-config` | Docker configuration info |
 
 ### Discovery & Checking
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/check` | Check all containers (clears cache) |
-| POST | `/api/trigger-check` | Background check (uses cache) |
+| GET | `/api/check` | Check all containers (clears cache, full payload) |
+| POST | `/api/trigger-check` | Background check (uses cache; `?force=true` bypasses dedupe) |
 | GET | `/api/container/{name}/recheck` | Recheck single container |
 
 ### Updates
@@ -163,6 +163,11 @@ Response:
 
 Returns system status including last check time. Used by Homepage widget.
 
+The response is slim: `containers` and `standalone_containers` omit
+`available_tags`, and the `stacks` map is omitted entirely. Counts and
+timestamps are unchanged. Use `GET /api/check` when the full payload
+(including tags and stacks) is needed.
+
 ```bash
 curl http://localhost:3000/api/status
 ```
@@ -243,6 +248,34 @@ When a container has `status: "COMPOSE_MISMATCH"`, the response includes additio
 - `error` — Human-readable description of the mismatch
 
 Use `POST /api/fix-compose-mismatch/{name}` to sync the container to the compose file specification.
+
+### POST /api/trigger-check
+
+Starts a background check that reuses cached registry data (respects
+`CACHE_TTL`). Client-triggered checks are deduplicated: without `?force=true`
+a request within the one-minute floor of the last completed check, or while a
+check is already running, does not start another one. `?force=true` bypasses
+the floor but still declines while a check is in flight.
+
+```bash
+curl -X POST "http://localhost:8080/api/trigger-check?force=true"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "triggered": true,
+    "checking": true,
+    "last_background_run": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+`triggered` reports whether this call actually started a check; `checking` is
+true while a check is in progress; `last_background_run` is the last completed
+background run (empty string when none has run yet).
 
 ### GET /api/container/{name}/recheck
 
