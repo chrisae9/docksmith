@@ -305,3 +305,89 @@ func TestComposeInputDirsExtendsCycleTerminates(t *testing.T) {
 		t.Fatal("composeInputDirs did not terminate on an extends cycle")
 	}
 }
+
+// References are interpolated before existence checks: Compose resolves
+// ${VAR:-default} and this discovery must resolve it the same way.
+func TestRecreateSelfMountsDefaultedInterpolatedInclude(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	t.Setenv("DOCKS_IT_INCLUDE_PATH", "")
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml": "include:\n  - \"${DOCKS_IT_INCLUDE_PATH:-../other}/compose.yaml\"\nservices:\n  docksmith: {}\n",
+		"/srv/stacks/other/compose.yaml":     "services:\n  other: {}\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	if !strings.Contains(args, "-v /srv/stacks/other:/srv/stacks/other:ro") {
+		t.Errorf("helper command %q must mount the interpolated include directory", args)
+	}
+}
+
+// Interpolation uses the project's .env file as well as the process environment.
+func TestRecreateSelfMountsDotEnvInterpolatedInput(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/.env":         "DOCKS_IT_SHARED_DIR=../shared\n",
+		"/srv/stacks/docksmith/compose.yaml": "include:\n  - \"${DOCKS_IT_SHARED_DIR}/compose.yaml\"\nservices:\n  docksmith: {}\n",
+		"/srv/stacks/shared/compose.yaml":    "services:\n  shared: {}\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	if !strings.Contains(args, "-v /srv/stacks/shared:/srv/stacks/shared:ro") {
+		t.Errorf("helper command %q must mount the .env-interpolated include directory", args)
+	}
+}
+
+// project_directory changes where paths inside an included file resolve.
+func TestRecreateSelfMountsIncludeProjectDirectory(t *testing.T) {
+	got := captureHelper(t, nil, nil)
+	withComposeFS(t, map[string]string{
+		"/srv/stacks/docksmith/compose.yaml":      "include:\n  - path: ../shared/compose/compose.yaml\n    project_directory: ../shared\nservices:\n  docksmith: {}\n",
+		"/srv/stacks/shared/compose/compose.yaml": "services:\n  db:\n    env_file: secrets.env\n",
+		"/srv/stacks/shared/secrets.env":          "DB=1\n",
+	})
+
+	if err := RecreateSelf(context.Background(), "docksmith:latest", "/srv/stacks/docksmith/compose.yaml", "docksmith"); err != nil {
+		t.Fatalf("RecreateSelf returned error: %v", err)
+	}
+
+	args := strings.Join(*got, " ")
+	if !strings.Contains(args, "-v /srv/stacks/shared:/srv/stacks/shared:ro") {
+		t.Errorf("helper command %q must mount the include project directory", args)
+	}
+}
+
+func TestInterpolateComposeValue(t *testing.T) {
+	env := map[string]string{"SET": "value", "EMPTY": "", "DIR": "../base"}
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"plain", "plain"},
+		{"${SET}", "value"},
+		{"$SET", "value"},
+		{"${UNSET}", ""},
+		{"${UNSET:-fallback}", "fallback"},
+		{"${EMPTY:-fallback}", "fallback"},
+		{"${EMPTY-fallback}", ""},
+		{"${SET:+alt}", "alt"},
+		{"${UNSET:+alt}", ""},
+		{"${SET+alt}", "alt"},
+		{"${UNSET+alt}", ""},
+		{"$${SET}", "${SET}"},
+		{"${DIR}/compose.yaml", "../base/compose.yaml"},
+		{"${UNSET:-${DIR}}/x", "../base/x"},
+	}
+	for _, tt := range tests {
+		if got := interpolateComposeValue(tt.in, env); got != tt.want {
+			t.Errorf("interpolateComposeValue(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
