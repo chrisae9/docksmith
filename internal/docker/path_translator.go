@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // PathTranslator translates host paths to container paths based on volume mounts
@@ -57,7 +57,7 @@ func (pt *PathTranslator) discoverMounts() error {
 	}
 
 	// Try to inspect the container by ID
-	containerJSON, err := pt.client.ContainerInspect(ctx, hostname)
+	containerJSON, err := pt.client.ContainerInspect(ctx, hostname, client.ContainerInspectOptions{})
 	if err != nil {
 		log.Printf("Failed to inspect container %s: %v", hostname, err)
 		// Try alternative: inspect all containers and find ourselves by looking for /.dockerenv
@@ -65,28 +65,28 @@ func (pt *PathTranslator) discoverMounts() error {
 		return pt.discoverMountsAlternative()
 	}
 
-	return pt.extractMounts(containerJSON.Mounts)
+	return pt.extractMounts(containerJSON.Container.Mounts)
 }
 
 // discoverMountsAlternative tries to find our container by looking for docksmith
 func (pt *PathTranslator) discoverMountsAlternative() error {
 	ctx := context.Background()
 
-	containers, err := pt.client.ContainerList(ctx, container.ListOptions{})
+	containers, err := pt.client.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
 		return err
 	}
 
 	// Look for a container with "docksmith" in the name
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, name := range c.Names {
 			if strings.Contains(name, "docksmith") {
-				containerJSON, err := pt.client.ContainerInspect(ctx, c.ID)
+				containerJSON, err := pt.client.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 				if err != nil {
 					continue
 				}
 				log.Printf("Found docksmith container: %s", name)
-				return pt.extractMounts(containerJSON.Mounts)
+				return pt.extractMounts(containerJSON.Container.Mounts)
 			}
 		}
 	}

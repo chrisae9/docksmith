@@ -20,10 +20,8 @@ import (
 	"github.com/chis/docksmith/internal/scripts"
 	"github.com/chis/docksmith/internal/selfupdate"
 	"github.com/chis/docksmith/internal/storage"
-	dockerContainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	dockerclient "github.com/docker/docker/client"
 	"github.com/google/uuid"
+	dockerclient "github.com/moby/moby/client"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1282,8 +1280,8 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 				// If the container is not running (killed during failed recreation), relaunch it
 				// with the old tag via compose up (compose file is now reverted)
 				containerRunning := false
-				if inspected, inspectErr := o.dockerSDK.ContainerInspect(ctx, cont.Name); inspectErr == nil {
-					containerRunning = inspected.State.Running
+				if inspected, inspectErr := o.dockerSDK.ContainerInspect(ctx, cont.Name, dockerclient.ContainerInspectOptions{}); inspectErr == nil {
+					containerRunning = inspected.Container.State.Running
 				}
 				if !containerRunning {
 					log.Printf("BATCH UPDATE: Container %s is not running after failure, relaunching with old tag %s", cont.Name, oldTag)
@@ -1397,7 +1395,7 @@ func (o *UpdateOrchestrator) executeBatchUpdate(ctx context.Context, operationID
 // Use this for operations that don't need compose file access (e.g., restart, stop).
 func (o *UpdateOrchestrator) checkDockerAccess(ctx context.Context) error {
 	if o.dockerSDK != nil {
-		if _, err := o.dockerSDK.Ping(ctx); err != nil {
+		if _, err := o.dockerSDK.Ping(ctx, dockerclient.PingOptions{}); err != nil {
 			return fmt.Errorf("docker socket access denied: %w", err)
 		}
 	}
@@ -1574,7 +1572,7 @@ func (o *UpdateOrchestrator) pullImage(ctx context.Context, imageRef string, pro
 			backoff *= 2
 		}
 
-		reader, err := o.dockerSDK.ImagePull(ctx, imageRef, image.PullOptions{})
+		reader, err := o.dockerSDK.ImagePull(ctx, imageRef, dockerclient.ImagePullOptions{})
 		if err != nil {
 			// Don't retry permanent errors — tag/manifest doesn't exist on the registry
 			errStr := err.Error()
@@ -1949,7 +1947,7 @@ func (o *UpdateOrchestrator) restartDependentContainers(ctx context.Context, con
 		} else {
 			// Fallback to docker restart for non-compose containers
 			log.Printf("UPDATE: Using docker restart for dependent %s (no compose file)", depName)
-			restartErr = o.dockerSDK.ContainerRestart(ctx, depName, dockerContainer.StopOptions{})
+			_, restartErr = o.dockerSDK.ContainerRestart(ctx, depName, dockerclient.ContainerRestartOptions{})
 		}
 
 		if restartErr != nil {
@@ -1992,19 +1990,19 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
+	inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	hasHealthCheck := inspect.State != nil && inspect.State.Health != nil
+	hasHealthCheck := inspect.Container.State != nil && inspect.Container.State.Health != nil
 
 	if hasHealthCheck {
 		// Check immediately first - container might already be healthy
-		if inspect.State.Health.Status == "healthy" {
+		if inspect.Container.State.Health.Status == "healthy" {
 			return nil
 		}
-		if inspect.State.Health.Status == "unhealthy" {
+		if inspect.Container.State.Health.Status == "unhealthy" {
 			return fmt.Errorf("container is unhealthy")
 		}
 
@@ -2017,16 +2015,16 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 			case <-ctx.Done():
 				return fmt.Errorf("health check timeout")
 			case <-ticker.C:
-				inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
+				inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName, dockerclient.ContainerInspectOptions{})
 				if err != nil {
 					return fmt.Errorf("failed to inspect container: %w", err)
 				}
 
-				if inspect.State.Health.Status == "healthy" {
+				if inspect.Container.State.Health.Status == "healthy" {
 					return nil
 				}
 
-				if inspect.State.Health.Status == "unhealthy" {
+				if inspect.Container.State.Health.Status == "unhealthy" {
 					return fmt.Errorf("container is unhealthy")
 				}
 			}
@@ -2034,7 +2032,7 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 	} else {
 		// Fast path: container without health check - just verify it's running
 		// Check immediately - container is usually already running after compose up
-		if inspect.State.Running {
+		if inspect.Container.State.Running {
 			return nil
 		}
 
@@ -2051,12 +2049,12 @@ func (o *UpdateOrchestrator) waitForHealthy(ctx context.Context, containerName s
 			case <-fallbackCtx.Done():
 				return fmt.Errorf("container did not start within timeout")
 			case <-ticker.C:
-				inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
+				inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName, dockerclient.ContainerInspectOptions{})
 				if err != nil {
 					return fmt.Errorf("failed to inspect container: %w", err)
 				}
 
-				if inspect.State.Running {
+				if inspect.Container.State.Running {
 					return nil
 				}
 			}
@@ -2101,12 +2099,12 @@ func (o *UpdateOrchestrator) shouldAutoRollback(ctx context.Context, containerNa
 		return policy.AutoRollbackEnabled, nil
 	}
 
-	inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName)
+	inspect, err := o.dockerSDK.ContainerInspect(ctx, containerName, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return false, nil
 	}
 
-	hasHealthCheck := inspect.State != nil && inspect.State.Health != nil
+	hasHealthCheck := inspect.Container.State != nil && inspect.Container.State.Health != nil
 	if !hasHealthCheck {
 		return false, nil
 	}
@@ -2630,7 +2628,7 @@ func (o *UpdateOrchestrator) executeDigestRollback(ctx context.Context, rollback
 	o.publishProgress(rollbackOpID, container.Name, stackName, "pulling_image", 55, fmt.Sprintf("Re-tagging as %s:%s", repo, currentTag))
 	log.Printf("DIGEST ROLLBACK: Re-tagging %s as %s:%s", digestRef, repo, currentTag)
 
-	if err := o.dockerSDK.ImageTag(ctx, digestRef, repo+":"+currentTag); err != nil {
+	if _, err := o.dockerSDK.ImageTag(ctx, dockerclient.ImageTagOptions{Source: digestRef, Target: repo + ":" + currentTag}); err != nil {
 		o.failOperation(ctx, rollbackOpID, "pulling_image", fmt.Sprintf("Failed to re-tag image: %v", err))
 		return
 	}
@@ -3466,14 +3464,14 @@ func (o *UpdateOrchestrator) executeRestart(ctx context.Context, operationID str
 		if err := recreator.RestartWithCompose(ctx, container, hostComposeFilePath, composeFilePath); err != nil {
 			// Fall back to Docker API
 			log.Printf("RESTART: Compose restart failed, falling back to Docker API: %v", err)
-			if restartErr := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerContainer.StopOptions{}); restartErr != nil {
+			if _, restartErr := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerclient.ContainerRestartOptions{}); restartErr != nil {
 				o.failOperation(ctx, operationID, "starting", fmt.Sprintf("Failed to restart container: %v", restartErr))
 				return
 			}
 		}
 	} else {
 		// No compose file - use Docker API directly
-		if err := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerContainer.StopOptions{}); err != nil {
+		if _, err := o.dockerSDK.ContainerRestart(ctx, container.Name, dockerclient.ContainerRestartOptions{}); err != nil {
 			o.failOperation(ctx, operationID, "starting", fmt.Sprintf("Failed to restart container: %v", err))
 			return
 		}
@@ -3829,10 +3827,10 @@ func (o *UpdateOrchestrator) executeStackRestart(ctx context.Context, operationI
 					restartErr = recreator.RestartWithCompose(ctx, container, hostComposeFilePath, composeFilePath)
 					if restartErr != nil {
 						log.Printf("STACK-RESTART: Compose restart failed for %s, falling back to Docker API: %v", containerName, restartErr)
-						restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerContainer.StopOptions{})
+						_, restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerclient.ContainerRestartOptions{})
 					}
 				} else {
-					restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerContainer.StopOptions{})
+					_, restartErr = o.dockerSDK.ContainerRestart(ctx, containerName, dockerclient.ContainerRestartOptions{})
 				}
 
 				if restartErr != nil {
@@ -3896,7 +3894,7 @@ func (o *UpdateOrchestrator) executeStackRestart(ctx context.Context, operationI
 			log.Printf("STACK-RESTART: Found %d external dependent(s): %v", len(externalDeps), externalDeps)
 			for _, depName := range externalDeps {
 				log.Printf("STACK-RESTART: Restarting external dependent: %s", depName)
-				if restartErr := o.dockerSDK.ContainerRestart(ctx, depName, dockerContainer.StopOptions{}); restartErr != nil {
+				if _, restartErr := o.dockerSDK.ContainerRestart(ctx, depName, dockerclient.ContainerRestartOptions{}); restartErr != nil {
 					log.Printf("STACK-RESTART: Failed to restart external dependent %s: %v", depName, restartErr)
 				} else if healthErr := o.waitForHealthy(ctx, depName, o.healthCheckCfg.Timeout); healthErr != nil {
 					log.Printf("STACK-RESTART: Health check warning for external dependent %s: %v", depName, healthErr)
