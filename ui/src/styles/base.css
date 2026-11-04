@@ -285,6 +285,29 @@ h1 {
   color: var(--text-primary);
 }
 
+/* Stale data / connection banners — keep the last-good view visible when a refresh fails */
+.stale-data-banner,
+.connection-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface-2);
+  border-left: 3px solid var(--color-warning);
+  padding: var(--space-2) var(--space-4);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.stale-data-banner > i,
+.connection-banner > i {
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
 /* Loading */
 .loading {
   display: flex;

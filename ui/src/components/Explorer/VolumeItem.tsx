@@ -50,6 +50,7 @@ export function VolumeItem({
         <ActionMenuButton
           isActive={isActive}
           isLoading={isLoading}
+          ariaLabel="Volume actions"
           onClick={onMenuToggle}
         />
         <ActionMenu isActive={isActive}>

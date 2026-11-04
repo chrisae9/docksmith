@@ -84,6 +84,7 @@ export function ContainerItem({
         <ActionMenuButton
           isActive={isActive}
           isLoading={isLoading}
+          ariaLabel="Container actions"
           onClick={onMenuToggle}
         />
         <ActionMenu isActive={isActive}>

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Tooltip } from './Tooltip';
 
 interface ActionMenuButtonProps {
   isActive: boolean;
@@ -13,26 +14,28 @@ export function ActionMenuButton({
   isLoading = false,
   onClick,
   disabled = false,
-  ariaLabel = 'Actions',
+  ariaLabel = 'More actions',
 }: ActionMenuButtonProps) {
   return (
-    <button
-      className={`action-menu-btn ${isActive ? 'active' : ''}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      disabled={disabled || isLoading}
-      aria-label={ariaLabel}
-      aria-expanded={isActive}
-      aria-haspopup="menu"
-    >
-      {isLoading ? (
-        <i className="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
-      ) : (
-        <i className="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
-      )}
-    </button>
+    <Tooltip label={ariaLabel} placement="bottom" align="end">
+      <button
+        className={`action-menu-btn ${isActive ? 'active' : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        disabled={disabled || isLoading}
+        aria-label={ariaLabel}
+        aria-expanded={isActive}
+        aria-haspopup="menu"
+      >
+        {isLoading ? (
+          <i className="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
+        ) : (
+          <i className="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
+        )}
+      </button>
+    </Tooltip>
   );
 }
 
