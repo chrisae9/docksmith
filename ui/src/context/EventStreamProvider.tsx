@@ -10,4 +10,3 @@ export function EventStreamProvider({ children }: { children: ReactNode }) {
     </EventStreamContext.Provider>
   );
 }
-

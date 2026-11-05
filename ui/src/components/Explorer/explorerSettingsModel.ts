@@ -62,4 +62,3 @@ export const DEFAULT_SETTINGS: ExplorerSettings = {
     showUnusedOnly: false,
   },
 };
-
