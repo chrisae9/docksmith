@@ -75,9 +75,14 @@ it('does not start a log stream after leaving the logs tab during an initial req
   let finish!: (value: Awaited<ReturnType<typeof getContainerLogs>>) => void;
   vi.mocked(getContainerLogs).mockReturnValue(new Promise(resolve => { finish = resolve; }));
   const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  let finishInspection!: (value: APIResponse<ContainerInspect>) => void;
+  vi.mocked(inspectContainer).mockReturnValue(new Promise(resolve => { finishInspection = resolve; }));
   open('logs');
   await waitFor(() => expect(getContainerLabels).toHaveBeenCalledTimes(2));
-  fireEvent.click(screen.getByRole('button', { name: 'Logs' }));
+  // Label requests can start before the inspection that makes the tabs visible.
+  expect(screen.queryByRole('button', { name: 'Logs' })).toBeNull();
+  await act(async () => { finishInspection(response(inspection('logs'))); });
+  fireEvent.click(await screen.findByRole('button', { name: 'Logs' }));
   expect(getContainerLogs).toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Config' }));
   await act(async () => { finish(response({ container: 'logs', logs: 'late log', tail: '500' })); });
