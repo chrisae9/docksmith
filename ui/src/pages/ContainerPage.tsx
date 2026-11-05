@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   getContainerLogs,
@@ -41,6 +41,10 @@ export function ContainerPage() {
   // Support both route patterns: /container/:containerName and /explorer/container/:name
   const { name, containerName: routeContainerName } = useParams<{ name?: string; containerName?: string }>();
   const containerName = name || routeContainerName || '';
+  return <ContainerDetail key={containerName} containerName={containerName} />;
+}
+
+function ContainerDetail({ containerName }: { containerName: string }) {
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -48,7 +52,8 @@ export function ContainerPage() {
   const { reconnecting } = useEventStream();
 
   // Get initial tab from location state
-  const initialTab = (location.state as { tab?: TabId })?.tab || 'overview';
+  const incoming = location.state as { tab?: TabId; selectedScript?: string; restartAfter?: string; tagRegex?: string } | null;
+  const initialTab = incoming?.tab || 'overview';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
   // Navigate back to containers list
@@ -64,7 +69,7 @@ export function ContainerPage() {
 
   // Logs state
   const [logs, setLogs] = useState<string>('');
-  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsLoading, setLogsLoading] = useState(initialTab === 'logs');
   const [tailLines, setTailLines] = useState(500);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -74,16 +79,15 @@ export function ContainerPage() {
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Docksmith settings state
-  const [selectedScript, setSelectedScript] = useState<string>('');
+  const [selectedScript, setSelectedScript] = useState(incoming?.selectedScript || '');
   const [ignoreFlag, setIgnoreFlag] = useState(false);
   const [allowLatestFlag, setAllowLatestFlag] = useState(false);
   const [versionPin, setVersionPin] = useState<'none' | 'patch' | 'minor' | 'major'>('none');
-  const [restartAfter, setRestartAfter] = useState<string>('');
-  const [tagRegex, setTagRegex] = useState<string>('');
+  const [restartAfter, setRestartAfter] = useState(incoming?.restartAfter || '');
+  const [tagRegex, setTagRegex] = useState(incoming?.tagRegex || '');
   const [notifyFlag, setNotifyFlag] = useState(true);
   const [notifyLevel, setNotifyLevel] = useState<string>('');
   const [notifyDigest, setNotifyDigest] = useState<'' | 'true' | 'false'>('');
-  const [hasChanges, setHasChanges] = useState(false);
   const [refreshingPrecheck, setRefreshingPrecheck] = useState(false);
   const [activeHelp, setActiveHelp] = useState<string | null>(null);
 
@@ -139,12 +143,22 @@ export function ContainerPage() {
   const [originalNotifyDigest, setOriginalNotifyDigest] = useState<'' | 'true' | 'false'>('');
 
   // Track pending state from sub-pages
-  const pendingStateRef = useRef<{ selectedScript?: string; restartAfter?: string; tagRegex?: string }>({});
+  const pendingStateRef = useRef({ selectedScript: incoming?.selectedScript, restartAfter: incoming?.restartAfter, tagRegex: incoming?.tagRegex });
+  const [previousIncoming, setPreviousIncoming] = useState(incoming);
+  if (previousIncoming !== incoming) {
+    setPreviousIncoming(incoming);
+    if (incoming?.selectedScript !== undefined) setSelectedScript(incoming.selectedScript);
+    if (incoming?.restartAfter !== undefined) setRestartAfter(incoming.restartAfter);
+    if (incoming?.tagRegex !== undefined) setTagRegex(incoming.tagRegex);
+  }
+  useLayoutEffect(() => {
+    if (incoming?.selectedScript !== undefined || incoming?.restartAfter !== undefined || incoming?.tagRegex !== undefined) {
+      pendingStateRef.current = { selectedScript: incoming.selectedScript, restartAfter: incoming.restartAfter, tagRegex: incoming.tagRegex };
+    }
+  }, [incoming]);
 
   // Fetch container inspection data
-  const fetchInspect = useCallback(async () => {
-    try {
-      const response = await inspectContainer(containerName);
+  const fetchInspect = useCallback(() => inspectContainer(containerName).then(response => {
       if (response.success && response.data) {
         setCachedInspect(containerName, response.data);
         setInspectData(response.data);
@@ -152,21 +166,14 @@ export function ContainerPage() {
       } else {
         setError(response.error || 'Failed to fetch container info');
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  }, [containerName]);
+  }).catch(error => setError(error instanceof Error ? error.message : 'Unknown error'))
+    .finally(() => setLoading(false)), [containerName]);
 
   // Fetch Docksmith-specific data (update status, labels, settings)
-  const fetchDocksmithData = useCallback(async () => {
-    try {
-      const [statusResponse, labelsResponse] = await Promise.all([
+  const fetchDocksmithData = useCallback(() => Promise.all([
         getContainerStatus(),
         getContainerLabels(containerName),
-      ]);
-
+      ]).then(([statusResponse, labelsResponse]) => {
       if (statusResponse.success && statusResponse.data) {
         const foundContainer = statusResponse.data.containers.find(
           (c) => c.container_name === containerName
@@ -221,22 +228,10 @@ export function ContainerPage() {
           setOriginalNotifyLevel(notifyLevelValue);
           setOriginalNotifyDigest(notifyDigestValue);
 
-          pendingStateRef.current = {};
+          // Keep pending navigation edits protected until saved or explicitly reset.
         }
       }
-    } catch (err) {
-      console.error('Failed to fetch Docksmith data:', err);
-    }
-  }, [containerName]);
-
-  // Reseed from the cache when navigating between containers
-  useEffect(() => {
-    const cached = getCachedInspect(containerName);
-    setInspectData(cached);
-    setLoading(!cached);
-    setError(null);
-    setDocksmithData(null);
-  }, [containerName]);
+  }).catch(error => console.error('Failed to fetch Docksmith data:', error)), [containerName]);
 
   // Retry in place instead of reloading the page
   const retry = useCallback(() => {
@@ -250,33 +245,20 @@ export function ContainerPage() {
   const streamAbortRef = useRef<AbortController | null>(null);
 
   // Fetch initial logs then start streaming
-  const fetchLogs = useCallback(async (showSpinner = true) => {
-    // Cancel any existing stream
-    if (streamAbortRef.current) {
-      streamAbortRef.current.abort();
-      streamAbortRef.current = null;
-    }
-
-    if (showSpinner) setLogsLoading(true);
-    try {
-      const response = await getContainerLogs(containerName, { tail: tailLines });
-      if (response.success && response.data) {
-        setLogs(response.data.logs);
-      } else {
+  const fetchLogs = useCallback((showSpinner = true) => {
+    streamAbortRef.current?.abort();
+    const abortController = new AbortController();
+    streamAbortRef.current = abortController;
+    return getContainerLogs(containerName, { tail: tailLines }).then(async response => {
+      if (abortController.signal.aborted) return;
+      if (showSpinner) setLogsLoading(false);
+      if (!response.success || !response.data) {
         setLogs(`Error: ${response.error || 'Failed to fetch logs'}`);
         return;
       }
-    } catch (err) {
-      setLogs(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      return;
-    } finally {
-      if (showSpinner) setLogsLoading(false);
-    }
-
+      setLogs(response.data.logs);
     // Start streaming new logs with follow=true&tail=0
-    const abortController = new AbortController();
-    streamAbortRef.current = abortController;
-
+    if (abortController.signal.aborted) return;
     try {
       const streamRes = await fetch(
         `/api/containers/${encodeURIComponent(containerName)}/logs?follow=true&tail=0`,
@@ -303,7 +285,19 @@ export function ContainerPage() {
     } catch {
       // AbortError is expected on cleanup, ignore all stream errors
     }
+    }).catch(error => {
+      if (abortController.signal.aborted) return;
+      if (showSpinner) setLogsLoading(false);
+      setLogs(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    });
   }, [containerName, tailLines]);
+
+  const logInput = activeTab === 'logs' ? tailLines : null;
+  const [previousLogInput, setPreviousLogInput] = useState(logInput);
+  if (previousLogInput !== logInput) {
+    setPreviousLogInput(logInput);
+    setLogsLoading(logInput !== null);
+  }
 
   // Initial fetch
   useEffect(() => {
@@ -311,25 +305,13 @@ export function ContainerPage() {
     fetchDocksmithData();
   }, [fetchInspect, fetchDocksmithData]);
 
-  // Handle location state updates from sub-pages
+  // Pending edits were seeded before this render; clear the navigation payload
+  // only after they are captured so refresh does not replay old edits.
   useEffect(() => {
-    const state = location.state as Record<string, unknown>;
-    if (state && (state.selectedScript !== undefined || state.restartAfter !== undefined || state.tagRegex !== undefined)) {
-      if ('selectedScript' in state) {
-        pendingStateRef.current.selectedScript = state.selectedScript as string;
-        setSelectedScript(state.selectedScript as string);
-      }
-      if ('restartAfter' in state) {
-        pendingStateRef.current.restartAfter = state.restartAfter as string;
-        setRestartAfter(state.restartAfter as string);
-      }
-      if ('tagRegex' in state) {
-        pendingStateRef.current.tagRegex = state.tagRegex as string;
-        setTagRegex(state.tagRegex as string);
-      }
+    if (incoming?.selectedScript !== undefined || incoming?.restartAfter !== undefined || incoming?.tagRegex !== undefined) {
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [location.state, location.pathname, navigate]);
+  }, [incoming, location.pathname, navigate]);
 
   // Fetch logs + start streaming when logs tab is active
   useEffect(() => {
@@ -355,17 +337,10 @@ export function ContainerPage() {
     }
   }, [logs, autoScroll]);
 
-  // Detect changes
-  useEffect(() => {
-    const scriptChanged = selectedScript !== originalScript;
-    const ignoreChanged = ignoreFlag !== originalIgnore;
-    const allowLatestChanged = allowLatestFlag !== originalAllowLatest;
-    const versionPinChanged = versionPin !== originalVersionPin;
-    const restartAfterChanged = restartAfter !== originalRestartAfter;
-    const tagRegexChanged = tagRegex !== originalTagRegex;
-    const notifyChanged = notifyFlag !== originalNotify || notifyLevel !== originalNotifyLevel || notifyDigest !== originalNotifyDigest;
-    setHasChanges(scriptChanged || ignoreChanged || allowLatestChanged || versionPinChanged || restartAfterChanged || tagRegexChanged || notifyChanged);
-  }, [selectedScript, ignoreFlag, allowLatestFlag, versionPin, restartAfter, tagRegex, notifyFlag, notifyLevel, notifyDigest, originalScript, originalIgnore, originalAllowLatest, originalVersionPin, originalRestartAfter, originalTagRegex, originalNotify, originalNotifyLevel, originalNotifyDigest]);
+  const hasChanges = selectedScript !== originalScript || ignoreFlag !== originalIgnore ||
+    allowLatestFlag !== originalAllowLatest || versionPin !== originalVersionPin ||
+    restartAfter !== originalRestartAfter || tagRegex !== originalTagRegex ||
+    notifyFlag !== originalNotify || notifyLevel !== originalNotifyLevel || notifyDigest !== originalNotifyDigest;
 
   // Handle scroll events
   const handleLogsScroll = useCallback(() => {
@@ -453,6 +428,7 @@ export function ContainerPage() {
   };
 
   const handleReset = () => {
+    pendingStateRef.current = { selectedScript: undefined, restartAfter: undefined, tagRegex: undefined };
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
@@ -1552,7 +1528,7 @@ export function ContainerPage() {
               </div>
               <div className="logs-actions">
                 <Tooltip label="Refresh logs" placement="bottom" align="end">
-                  <button onClick={() => fetchLogs(true)} disabled={logsLoading}>
+                  <button onClick={() => { setLogsLoading(true); void fetchLogs(true); }} disabled={logsLoading}>
                     <i className={`fa-solid fa-rotate ${logsLoading ? 'fa-spin' : ''}`}></i>
                   </button>
                 </Tooltip>

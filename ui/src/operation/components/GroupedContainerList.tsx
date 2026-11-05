@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { STAGE_INFO, RESTART_STAGES } from '../../constants/progress';
 import type { ContainerState } from '../types';
 
@@ -118,12 +118,10 @@ export function GroupedContainerList({ containers, expectedDependents, dependent
 
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
-  // Auto-collapse completed when count > 5
-  useEffect(() => {
-    if (completed.length > 5 && collapsedGroups['completed'] === undefined) {
-      setCollapsedGroups(prev => ({ ...prev, completed: true }));
-    }
-  }, [completed.length]);
+  // Once a large completed group appears, initialize its collapsed state.
+  if (completed.length > 5 && collapsedGroups.completed === undefined) {
+    setCollapsedGroups({ ...collapsedGroups, completed: true });
+  }
 
   const toggle = (group: string) => {
     setCollapsedGroups(prev => ({ ...prev, [group]: !prev[group] }));

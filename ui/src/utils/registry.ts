@@ -44,7 +44,7 @@ export function getRegistryUrl(image: string): string | null {
 
   // Docker Hub (docker.io or no registry prefix)
   if (imageWithoutTag.startsWith('docker.io/') || !imageWithoutTag.includes('/') || (!imageWithoutTag.includes('.') && imageWithoutTag.includes('/'))) {
-    let path = imageWithoutTag.replace('docker.io/', '');
+    const path = imageWithoutTag.replace('docker.io/', '');
     // Official images (no slash or library/)
     if (!path.includes('/') || path.startsWith('library/')) {
       const imageName = path.replace('library/', '');

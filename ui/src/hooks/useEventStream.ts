@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 export interface UpdateProgressEvent {
   operation_id: string;
@@ -62,7 +62,7 @@ export function useEventStreamCore() {
   const hadConnectionRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(function connect() {
     if (eventSourceRef.current) return;
 
     const eventSource = new EventSource('/api/events');
@@ -204,9 +204,11 @@ export function useEventStreamCore() {
     };
   }, [connect, disconnect]);
 
+  const drainEvents = useCallback(() => eventQueueRef.current.splice(0), []);
+
   return {
     ...state,
-    eventQueue: eventQueueRef as MutableRefObject<UpdateProgressEvent[]>,
+    drainEvents,
     eventSeq,
     clearEvents,
     clearWasDisconnected,

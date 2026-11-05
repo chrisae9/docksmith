@@ -1,3 +1,4 @@
+import type { APIResponse, UpdateOperation as TrackedOperation } from '../../types/api';
 import type {
   OperationInfo,
   UpdateOperation,
@@ -161,7 +162,7 @@ export class BatchTrackedExecutor implements OperationExecutor {
               }
 
               const opResponse = await fetch(`/api/operations/${opId}`);
-              const opData = await opResponse.json();
+              const opData: APIResponse<TrackedOperation> = await opResponse.json();
 
               if (opData.success && opData.data) {
                 const op = opData.data;
@@ -169,7 +170,7 @@ export class BatchTrackedExecutor implements OperationExecutor {
                 if (isTerminal) {
                   pendingUpdates.delete(name);
                   // Check per-container status from batch_details if available
-                  const detail = op.batch_details?.find((d: any) => d.container_name === name);
+                  const detail = op.batch_details?.find((d) => d.container_name === name);
                   const containerFailed = detail ? detail.status === 'failed' : op.status === 'failed';
                   if (containerFailed) {
                     failedCount++;
@@ -231,7 +232,7 @@ export class BatchTrackedExecutor implements OperationExecutor {
 
             try {
               const opResponse = await fetch(`/api/operations/${response.data.operation_id}`);
-              const opData = await opResponse.json();
+              const opData: APIResponse<TrackedOperation> = await opResponse.json();
 
               if (opData.success && opData.data) {
                 const op = opData.data;

@@ -1,3 +1,4 @@
+import type { UpdateOperation as TrackedOperation } from '../types/api';
 import type {
   OperationInfo,
   OperationType,
@@ -7,7 +8,7 @@ import type {
 } from './types';
 
 // Parse location state into OperationInfo (from router navigation)
-export function parseLocationState(state: any): OperationInfo | null {
+export function parseLocationState(state: { [T in OperationInfo as T["type"]]?: Omit<T, "type"> } | null | undefined): OperationInfo | null {
   if (!state) return null;
 
   if (state.restart) {
@@ -148,7 +149,7 @@ export function isPreCheckFailure(errorMessage: string): boolean {
 }
 
 // Page title for each operation type
-export function getPageTitle(operationType: OperationType | null, recoveredOperation?: any): string {
+export function getPageTitle(operationType: string | null, recoveredOperation?: TrackedOperation | null): string {
   // Handle recovery mode
   if (recoveredOperation && !operationType) {
     const opType = recoveredOperation.operation_type;

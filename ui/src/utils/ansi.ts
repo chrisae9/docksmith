@@ -1,3 +1,4 @@
+const ESC = String.fromCharCode(27);
 /**
  * ANSI escape code to HTML converter
  * Converts terminal color codes to styled HTML spans
@@ -183,7 +184,7 @@ function escapeHtml(text: string): string {
 export function ansiToHtml(text: string): string {
   // Match ANSI escape sequences: ESC[...m
   // ESC can be \x1b, \u001b, or \033
-  const ansiRegex = /\x1b\[([0-9;]*)m/g;
+  const ansiRegex = new RegExp(ESC + '\\[([0-9;]*)m', 'g');
 
   const state = getDefaultState();
   let result = '';
@@ -253,5 +254,5 @@ export function ansiToHtml(text: string): string {
  * Strip ANSI escape codes from text
  */
 export function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*m/g, '');
+  return text.replace(new RegExp(ESC + '\\[[0-9;]*m', 'g'), '');
 }

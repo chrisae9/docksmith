@@ -12,7 +12,8 @@ import { TabBar, type TabId } from './components/TabBar'
 import { ToastProvider, ToastContainer } from './components/Toast'
 import { Tooltip } from './components/shared'
 import { getContainerStatus } from './api/client'
-import { useEventStream, EventStreamProvider } from './context/EventStreamContext'
+import { useEventStream } from './context/EventStreamContext'
+import { EventStreamProvider } from './context/EventStreamProvider'
 import { STORAGE_KEY_TAB, ACTIVE_OPERATION_KEY } from './utils/constants'
 import { getPageTitle } from './operation/utils'
 import { isVersionUpdate, isPinnable } from './utils/status'
@@ -27,7 +28,7 @@ interface ActiveOperation {
 
 function ActiveOperationBanner({ op, onDismiss }: { op: ActiveOperation; onDismiss: () => void }) {
   const navigate = useNavigate();
-  const label = getPageTitle(op.type as any) || 'Operation in progress';
+  const label = getPageTitle(op.type) || 'Operation in progress';
 
   return (
     <div className="active-operation-banner">
@@ -51,7 +52,7 @@ function ActiveOperationBanner({ op, onDismiss }: { op: ActiveOperation; onDismi
 function AppContent() {
   const location = useLocation();
 
-  const [activeTab, setActiveTab] = useState<TabId>(() => {
+  const [savedTab, setActiveTab] = useState<TabId>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_TAB);
     // Migrate old tab IDs
     if (saved === 'updates' || saved === 'explorer') return 'containers';
@@ -85,26 +86,16 @@ function AppContent() {
 
   const isOnOperationPage = location.pathname.startsWith('/operation');
 
-  // Sync activeTab state with URL for tab highlighting
-  useEffect(() => {
-    const path = location.pathname;
-    if (path === '/' || path === '/containers') {
-      setActiveTab('containers');
-    } else if (path === '/history') {
-      setActiveTab('history');
-    } else if (path === '/settings') {
-      setActiveTab('settings');
-    }
-  }, [location.pathname]);
+  const activeTab: TabId = location.pathname === '/history' ? 'history'
+    : location.pathname === '/settings' ? 'settings'
+    : location.pathname === '/' || location.pathname === '/containers' ? 'containers' : savedTab;
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TAB, activeTab);
-  }, [activeTab]);
+    if (!isSubPage) localStorage.setItem(STORAGE_KEY_TAB, activeTab);
+  }, [activeTab, isSubPage]);
 
-  const fetchUpdateCount = useCallback(async () => {
-    try {
-      const result = await getContainerStatus();
+  const fetchUpdateCount = useCallback(() => getContainerStatus().then(result => {
       if (result.success && result.data) {
         const containers = result.data.containers;
         let updates = containers.filter(c => isVersionUpdate(c.status)).length;
@@ -124,10 +115,7 @@ function AppContent() {
         setUpdateCount(Math.max(0, updates));
         setPinnableCount(Math.max(0, pinnable));
       }
-    } catch {
-      // Silently fail - badge will show 0
-    }
-  }, []);
+  }).catch(() => { /* Keep the last badge counts on network errors. */ }), []);
 
   // Fetch update count for badge
   useEffect(() => {
@@ -205,7 +193,7 @@ function AppContent() {
         }
         // For group endpoint, check if all operations are terminal
         const ops = data.data.operations || [data.data];
-        const allDone = ops.every((op: any) => op.status === 'complete' || op.status === 'failed');
+        const allDone = ops.every((op: { status: string }) => op.status === 'complete' || op.status === 'failed');
         if (allDone) {
           sessionStorage.removeItem(ACTIVE_OPERATION_KEY);
           setActiveOp(null);

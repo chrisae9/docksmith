@@ -1,65 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useCallback } from 'react';
 import { getContainerStatus, getContainerLabels } from '../api/client';
-import type { ContainerInfo } from '../types/api';
+import { useAsyncResource } from './useAsyncResource';
 
-interface UseContainerDataResult {
-  container: ContainerInfo | undefined;
-  loading: boolean;
-  error: string | null;
-}
-
-/**
- * Shared hook for fetching container data with labels.
- * Used by ScriptSelectionPage, TagFilterPage, RestartDependenciesPage.
- */
-export function useContainerData(containerName: string | undefined): UseContainerDataResult {
-  const [container, setContainer] = useState<ContainerInfo | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!containerName) {
-      setLoading(false);
-      return;
-    }
-
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const [statusResponse, labelsResponse] = await Promise.all([
-          getContainerStatus(),
-          getContainerLabels(containerName),
-        ]);
-
-        if (statusResponse.success && statusResponse.data) {
-          const foundContainer = statusResponse.data.containers.find(
-            (c) => c.container_name === containerName
-          );
-
-          if (foundContainer && labelsResponse.success && labelsResponse.data) {
-            setContainer({
-              ...foundContainer,
-              labels: labelsResponse.data.labels || {},
-            });
-          } else if (foundContainer) {
-            setContainer(foundContainer);
-          } else {
-            setError(`Container "${containerName}" not found`);
-          }
-        } else {
-          setError(statusResponse.error || 'Failed to load container status');
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
+// Shared by the container configuration sub-pages.
+export function useContainerData(containerName: string | undefined) {
+  const load = useCallback(async () => {
+    const [status, labels] = await Promise.all([
+      getContainerStatus(), getContainerLabels(containerName!),
+    ]);
+    if (!status.success || !status.data) throw new Error(status.error || 'Failed to load container status');
+    const container = status.data.containers.find(item => item.container_name === containerName);
+    if (!container) throw new Error(`Container "${containerName}" not found`);
+    return labels.success && labels.data ? { ...container, labels: labels.data.labels || {} } : container;
   }, [containerName]);
-
+  const { data: container, loading, error } = useAsyncResource(containerName || '', load);
   return { container, loading, error };
 }

@@ -113,7 +113,7 @@ Run it on a trusted network or behind [Tailscale](docs/integrations.md).
 
 ## Development
 
-From `ui/`, run `npm ci`, `npm test`, and `npm run build`. Run `npm run typecheck` to check types without producing a frontend bundle.
+Use Node 26, matching the frontend builder. From `ui/`, run `npm ci`, `npm test`, and `npm run build`. Run `npm run typecheck` to check types without producing a frontend bundle.
 
 The build uses TypeScript 7 through the `typescript-compiler` npm alias. The `typescript` package stays on 5.9 for ESLint's compiler API; TypeScript 7 does not provide that JavaScript API. Use the npm scripts to select the build compiler explicitly.
 

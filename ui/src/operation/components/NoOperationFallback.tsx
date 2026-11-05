@@ -24,7 +24,7 @@ export function NoOperationFallback() {
         const ops = res.data.operations;
         // Deduplicate by batch_group_id (show one entry per batch)
         const seen = new Set<string>();
-        const deduped = ops.filter((op: any) => {
+        const deduped = ops.filter((op) => {
           if (op.batch_group_id) {
             if (seen.has(op.batch_group_id)) return false;
             seen.add(op.batch_group_id);

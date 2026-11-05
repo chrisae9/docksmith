@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Tooltip } from './Tooltip';
 
 interface ActionMenuButtonProps {
@@ -46,15 +46,14 @@ interface ActionMenuProps {
 }
 
 export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
+  return isActive ? <OpenActionMenu menuRef={menuRef}>{children}</OpenActionMenu> : null;
+}
+
+function OpenActionMenu({ menuRef, children }: Omit<ActionMenuProps, 'isActive'>) {
   const internalRef = useRef<HTMLDivElement>(null);
   const [flipUp, setFlipUp] = useState(false);
 
   useLayoutEffect(() => {
-    if (!isActive) {
-      setFlipUp(false);
-      return;
-    }
-
     const checkPosition = () => {
       const menu = internalRef.current;
       if (!menu) return;
@@ -71,20 +70,14 @@ export function ActionMenu({ isActive, menuRef, children }: ActionMenuProps) {
     };
 
     checkPosition();
-  }, [isActive]);
-
-  if (!isActive) return null;
+  }, []);
+  useImperativeHandle(menuRef, () => internalRef.current!, []);
 
   return (
     <div
       className={`action-menu ${flipUp ? 'flip-up' : ''}`}
       role="menu"
-      ref={(node) => {
-        (internalRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-        if (menuRef && 'current' in menuRef) {
-          (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-        }
-      }}
+      ref={internalRef}
     >
       {children}
     </div>

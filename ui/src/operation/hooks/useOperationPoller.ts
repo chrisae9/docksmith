@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import type { APIResponse, UpdateOperation } from '../../types/api';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { OperationAction } from '../types';
 
 interface UseOperationPollerOptions {
@@ -7,7 +8,7 @@ interface UseOperationPollerOptions {
   batchGroupId: string | null;
   runId: string;
   dispatch: React.Dispatch<OperationAction>;
-  onOperationComplete?: (opId: string, op: any) => void;
+  onOperationComplete?: (opId: string, op: UpdateOperation) => void;
   pollInterval?: number;
   sseConnected?: boolean;
 }
@@ -27,7 +28,7 @@ export function useOperationPoller({
   const loggedOpsRef = useRef(new Set<string>());
   // Use a ref so changing sseConnected doesn't restart the poll loop
   const sseConnectedRef = useRef(sseConnected);
-  sseConnectedRef.current = sseConnected;
+  useLayoutEffect(() => { sseConnectedRef.current = sseConnected; }, [sseConnected]);
 
   useEffect(() => {
     if (!enabled) {
@@ -63,7 +64,7 @@ export function useOperationPoller({
             const response = await fetch(`/api/operations/group/${batchGroupId}`, { signal });
             if (!response.ok) continue;
 
-            const data = await response.json();
+            const data: APIResponse<{ operations: UpdateOperation[] }> = await response.json();
             if (!data.success || !data.data) continue;
 
             const ops = data.data.operations;
@@ -88,7 +89,7 @@ export function useOperationPoller({
                 }
                 if (!loggedOps.has(op.operation_id)) {
                   loggedOps.add(op.operation_id);
-                  const names = op.batch_details.map((d: any) => d.container_name);
+                  const names = op.batch_details.map((d) => d.container_name);
                   const msg = op.status === 'complete' ? 'Update completed' : (op.error_message || 'Update failed');
                   const logType = op.status === 'complete' ? 'success' : 'error';
                   const logIcon = op.status === 'complete' ? 'fa-circle-check' : 'fa-circle-xmark';
@@ -126,7 +127,7 @@ export function useOperationPoller({
             }
 
             if (allDone) {
-              const allComplete = ops.every((op: any) => op.status === 'complete');
+              const allComplete = ops.every((op: UpdateOperation) => op.status === 'complete');
               dispatch({ type: 'SET_END_TIME', runId, endTime: Date.now() });
               dispatch({ type: 'SET_STATUS', runId, status: allComplete ? 'success' : 'failed' });
               dispatch({
@@ -149,7 +150,7 @@ export function useOperationPoller({
                 const response = await fetch(`/api/operations/${opId}`, { signal });
                 if (!response.ok) continue;
 
-                const data = await response.json();
+                const data: APIResponse<UpdateOperation> = await response.json();
                 if (!data.success || !data.data) continue;
 
                 const op = data.data;
@@ -169,7 +170,7 @@ export function useOperationPoller({
 
                   if (isTerminal && !loggedOps.has(opId)) {
                     loggedOps.add(opId);
-                    const names = op.batch_details.map((d: any) => d.container_name);
+                    const names = op.batch_details.map((d) => d.container_name);
                     const msg = op.status === 'complete' ? 'Update completed' : (op.error_message || 'Update failed');
                     const logType = op.status === 'complete' ? 'success' : 'error';
                     const logIcon = op.status === 'complete' ? 'fa-circle-check' : 'fa-circle-xmark';
@@ -202,13 +203,13 @@ export function useOperationPoller({
                     }
                   }
                 }
-              } catch (err) {
+              } catch {
                 if (signal.aborted) return;
                 // Network error, continue polling
               }
             }
           }
-        } catch (err) {
+        } catch {
           if (signal.aborted) return;
           // Network error, continue polling
         }

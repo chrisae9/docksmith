@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { DEFAULT_SETTINGS, type ExplorerSettings } from './Explorer/explorerSettingsModel';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -40,8 +41,6 @@ import { NetworkItem } from './Explorer/NetworkItem';
 import { VolumeItem } from './Explorer/VolumeItem';
 import {
   ExplorerSettingsMenu,
-  DEFAULT_SETTINGS,
-  type ExplorerSettings,
 } from './Explorer/ExplorerSettings';
 import { SkeletonDashboard } from './Skeleton/Skeleton';
 
@@ -196,17 +195,14 @@ export function Containers() {
   const cancelPinConfirm = useCallback(() => setPinPlan(null), []);
   const pinConfirmDialogRef = useFocusTrap(pinPlan !== null, cancelPinConfirm);
 
-  // Close the pin confirmation whenever the selection changes underneath it
-  useEffect(() => {
-    setPinPlan(null);
-  }, [selectedContainers]);
-
-  // ...and whenever the container data it was built from changes. A refresh can
-  // turn a pinnable container into a blocked update; confirming the stale plan
-  // would then run an update the user never saw.
-  useEffect(() => {
-    setPinPlan(plan => (plan && revalidatePinPlan(plan, containers) ? plan : null));
-  }, [containers]);
+  // Reset before committing a render with a stale confirmation.
+  const [pinInputs, setPinInputs] = useState({ selectedContainers, containers });
+  if (pinInputs.selectedContainers !== selectedContainers || pinInputs.containers !== containers) {
+    setPinInputs({ selectedContainers, containers });
+    if (pinInputs.selectedContainers !== selectedContainers || (pinPlan && !revalidatePinPlan(pinPlan, containers))) {
+      setPinPlan(null);
+    }
+  }
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
@@ -267,7 +263,9 @@ export function Containers() {
   // (which runs between pointerdown and click via microtask) can't remove the click handler.
   const menuDismissFlag = useRef(false);
   const anyMenuOpenRef = useRef(false);
-  anyMenuOpenRef.current = !!(activeActionMenu || activeImageMenu || activeNetworkMenu || activeVolumeMenu || activeStackMenu);
+  useLayoutEffect(() => {
+    anyMenuOpenRef.current = !!(activeActionMenu || activeImageMenu || activeNetworkMenu || activeVolumeMenu || activeStackMenu);
+  }, [activeActionMenu, activeImageMenu, activeNetworkMenu, activeVolumeMenu, activeStackMenu]);
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
@@ -384,7 +382,7 @@ export function Containers() {
         result = sorted;
     }
     return asc ? result : result.reverse();
-  }, [explorerSettings.containers.sortBy, explorerSettings.containers.ascending]);
+  }, [explorerSettings.containers]);
 
   // === Container groups (memoized) ===
   const containerGroups = useMemo(() => {
@@ -423,7 +421,7 @@ export function Containers() {
     }
 
     return groups;
-  }, [containers, containerStacks, standaloneContainers, filterContainer, sortContainers, explorerSettings.containers.groupBy]);
+  }, [containers, containerStacks, standaloneContainers, filterContainer, sortContainers, explorerSettings.containers]);
 
   // === Counts ===
   const counts = useMemo(() => ({

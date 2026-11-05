@@ -37,7 +37,7 @@ export function useOperationExecutor({ operationInfo, dispatch, runId }: UseOper
     // Get and run the executor
     const executor = getExecutor(operationInfo.type);
     executor.execute(operationInfo, { dispatch, runId, setSearchParams });
-  }, [operationInfo]);
+  }, [operationInfo, dispatch, location.pathname, navigate, runId, setSearchParams]);
 }
 
 // Build initial container state based on operation type
