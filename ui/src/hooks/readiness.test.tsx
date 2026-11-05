@@ -135,3 +135,17 @@ it('processes queued SSE events against the current run instead of stale render 
   expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'SSE_EVENT', event: expect.objectContaining({ operation_id: 'second' }) }));
   expect(queue).toEqual([]);
 });
+
+it('drains an early SSE event when the operation becomes running without a new event', () => {
+  let state = createInitialState();
+  const queued: UpdateProgressEvent[] = [{ operation_id: 'early', container_name: 'app', stack_name: '',
+    stage: 'pulling', progress: 10, percent: 10, message: 'Starting' }];
+  const drain = () => queued.splice(0);
+  const dispatch = vi.fn();
+  const hook = renderHook(() => useSSEProgress(state, dispatch, drain, 1));
+  expect(dispatch).not.toHaveBeenCalled();
+  state = { ...state, phase: 'running', operationId: 'early' };
+  hook.rerender();
+  expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'SSE_EVENT' }));
+  expect(queued).toEqual([]);
+});

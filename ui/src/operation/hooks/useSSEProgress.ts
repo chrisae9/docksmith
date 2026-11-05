@@ -25,7 +25,7 @@ export function useSSEProgress(
   });
   useEffect(() => {
     processPendingEvents();
-  }, [eventSeq]);
+  }, [eventSeq, state.phase]);
 }
 
 function processEvent(

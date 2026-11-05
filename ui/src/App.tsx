@@ -92,8 +92,8 @@ function AppContent() {
 
   // Save active tab to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TAB, activeTab);
-  }, [activeTab]);
+    if (!isSubPage) localStorage.setItem(STORAGE_KEY_TAB, activeTab);
+  }, [activeTab, isSubPage]);
 
   const fetchUpdateCount = useCallback(() => getContainerStatus().then(result => {
       if (result.success && result.data) {

@@ -5,7 +5,7 @@ WORKDIR /build/ui
 COPY ui/package*.json ./
 RUN npm ci
 COPY ui/ ./
-RUN npm run build
+RUN npm run lint && npm test && npm run build
 
 # Stage 2: Build Go backend
 FROM golang:1.27.3-alpine3.23 AS backend-builder

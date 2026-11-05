@@ -7,6 +7,8 @@
 agent-os/
 
 # Build artifacts
+**/node_modules/
+ui/dist/
 docksmith
 *.exe
 *.dll

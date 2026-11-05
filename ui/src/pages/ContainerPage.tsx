@@ -228,7 +228,7 @@ function ContainerDetail({ containerName }: { containerName: string }) {
           setOriginalNotifyLevel(notifyLevelValue);
           setOriginalNotifyDigest(notifyDigestValue);
 
-          pendingStateRef.current = { selectedScript: undefined, restartAfter: undefined, tagRegex: undefined };
+          // Keep pending navigation edits protected until saved or explicitly reset.
         }
       }
   }).catch(error => console.error('Failed to fetch Docksmith data:', error)), [containerName]);
@@ -428,6 +428,7 @@ function ContainerDetail({ containerName }: { containerName: string }) {
   };
 
   const handleReset = () => {
+    pendingStateRef.current = { selectedScript: undefined, restartAfter: undefined, tagRegex: undefined };
     setSelectedScript(originalScript);
     setIgnoreFlag(originalIgnore);
     setAllowLatestFlag(originalAllowLatest);
