@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useAsyncResource } from '../hooks/useAsyncResource';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getScripts } from '../api/client';
 import type { Script } from '../types/api';
@@ -12,50 +13,33 @@ export function ScriptSelectionPage() {
   const location = useLocation();
   const { containerName } = useParams<{ containerName: string }>();
 
+  const currentScript = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.currentScript || '';
+
   const { container, loading: loadingContainer } = useContainerData(containerName);
-  const [scripts, setScripts] = useState<Script[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const response = await getScripts();
+    if (!response.success || !response.data) throw new Error(response.error || 'Failed to load scripts');
+    return response.data.scripts || [];
+  }, []);
+  const { data, loading, error } = useAsyncResource(containerName || '', load);
+  const scripts: Script[] = data || [];
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedScript, setSelectedScript] = useState<string>('');
-  const [originalScript, setOriginalScript] = useState<string>('');
+  const [selectedScript, setSelectedScript] = useState<string>(currentScript);
 
   // Get current script from location state
-  const currentScript = (location.state as any)?.currentScript || '';
 
-  useEffect(() => {
-    if (!containerName) {
-      navigate('/');
-      return;
-    }
-
-    // Initialize selected script from current
+  const originalScript = currentScript;
+  const inputKey = JSON.stringify([containerName, currentScript]);
+  const [previousInput, setPreviousInput] = useState(inputKey);
+  if (previousInput !== inputKey) {
+    setPreviousInput(inputKey);
     setSelectedScript(currentScript);
-    setOriginalScript(currentScript);
-
-    const fetchScripts = async () => {
-      try {
-        setLoading(true);
-        const scriptsResponse = await getScripts();
-
-        if (scriptsResponse.success && scriptsResponse.data) {
-          setScripts(scriptsResponse.data.scripts || []);
-        } else {
-          setError(scriptsResponse.error || 'Failed to load scripts');
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchScripts();
-  }, [containerName, navigate, currentScript]);
+  }
+  useEffect(() => { if (!containerName) navigate('/'); }, [containerName, navigate]);
 
   // Get other pending changes from location state (to preserve them)
-  const pendingTagRegex = (location.state as any)?.pendingTagRegex;
-  const pendingRestartAfter = (location.state as any)?.pendingRestartAfter;
+  const pendingTagRegex = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingTagRegex;
+  const pendingRestartAfter = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingRestartAfter;
 
   const handleDone = () => {
     if (!containerName) return;

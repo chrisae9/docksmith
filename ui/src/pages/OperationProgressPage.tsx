@@ -48,7 +48,7 @@ export function OperationProgressPage() {
   const [state, dispatch] = useOperationState();
 
   // SSE event stream
-  const { eventQueue, eventSeq, wasDisconnected, clearWasDisconnected, connected, reconnecting } = useEventStream();
+  const { drainEvents, eventSeq, wasDisconnected, clearWasDisconnected, connected, reconnecting } = useEventStream();
 
   // Hook: execute operation on mount (fresh operations only)
   useOperationExecutor({ operationInfo, dispatch, runId: state.runId });
@@ -57,7 +57,7 @@ export function OperationProgressPage() {
   useRecovery({ urlOperationId, urlBatchGroupId, operationInfo, phase: state.phase, runId: state.runId, dispatch });
 
   // Hook: process SSE events into state (uses ref-based queue to avoid React batching event loss)
-  useSSEProgress(state, dispatch, eventQueue, eventSeq);
+  useSSEProgress(state, dispatch, drainEvents, eventSeq);
 
   // Hook: poll for authoritative status (fallback for SSE)
   const pollerOperationIds = useMemo(() => {
@@ -149,10 +149,11 @@ export function OperationProgressPage() {
 
   // Activity log: collapsible, auto-expand on errors
   const [logCollapsed, setLogCollapsed] = useState(true);
-
-  useEffect(() => {
+  const [hadErrors, setHadErrors] = useState(hasErrors);
+  if (hadErrors !== hasErrors) {
+    setHadErrors(hasErrors);
     if (hasErrors) setLogCollapsed(false);
-  }, [hasErrors]);
+  }
 
   // Auto-scroll activity log
   useEffect(() => {

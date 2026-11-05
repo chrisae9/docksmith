@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useEffectEvent } from 'react';
 import type { UpdateProgressEvent } from '../../hooks/useEventStream';
 import { STAGE_INFO, RESTART_STAGES } from '../../constants/progress';
 import { isPreCheckFailure } from '../utils';
@@ -16,27 +16,16 @@ const SSE_COMPLETION_OPS: OperationType[] = [
 export function useSSEProgress(
   state: OperationState,
   dispatch: React.Dispatch<OperationAction>,
-  eventQueue: MutableRefObject<UpdateProgressEvent[]>,
+  drainEvents: () => UpdateProgressEvent[],
   eventSeq: number,
 ) {
-  // Use refs to avoid stale closures in the effect while reading latest state
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  useEffect(() => {
+  const processPendingEvents = useEffectEvent(() => {
     if (state.phase !== 'running') return;
-
-    // Drain the queue — process ALL events that arrived since last render.
-    // This is immune to React batching: even if 10 events arrive in one tick,
-    // they all land in the ref queue and we process every one.
-    const events = eventQueue.current;
-    eventQueue.current = [];
-
-    for (const event of events) {
-      processEvent(stateRef.current, dispatch, event);
-    }
-  }, [eventSeq]); // eslint-disable-line react-hooks/exhaustive-deps
-  // eventSeq triggers the effect; we read state from ref to avoid re-running on every state change
+    for (const event of drainEvents()) processEvent(state, dispatch, event);
+  });
+  useEffect(() => {
+    processPendingEvents();
+  }, [eventSeq]);
 }
 
 function processEvent(

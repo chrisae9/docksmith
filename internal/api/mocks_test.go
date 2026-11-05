@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -383,7 +384,63 @@ func (m *MockStorage) DeleteScriptAssignment(ctx context.Context, containerName 
 }
 
 func (m *MockStorage) QueryUpdateOperations(ctx context.Context, opts storage.OperationQueryOptions) (storage.OperationQueryResult, error) {
-	return storage.OperationQueryResult{}, nil
+	if m.GetError != nil {
+		return storage.OperationQueryResult{}, m.GetError
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	operations := make([]storage.UpdateOperation, 0)
+	cursor, cursorErr := time.Parse(time.RFC3339Nano, opts.Cursor)
+	for _, op := range m.operations {
+		if opts.Status != "" && op.Status != opts.Status {
+			continue
+		}
+		if opts.Status == "" && op.Status != "complete" && op.Status != "failed" {
+			continue
+		}
+		if opts.Container != "" && op.ContainerName != opts.Container {
+			continue
+		}
+		if opts.Type == "updates" {
+			if op.OperationType != "single" && op.OperationType != "batch" && op.OperationType != "stack" {
+				continue
+			}
+		} else if opts.Type != "" && op.OperationType != opts.Type {
+			continue
+		}
+		if opts.DateFrom != nil && (op.StartedAt == nil || op.StartedAt.Before(*opts.DateFrom)) {
+			continue
+		}
+		if opts.DateTo != nil && (op.StartedAt == nil || op.StartedAt.After(*opts.DateTo)) {
+			continue
+		}
+		if cursorErr == nil && (op.StartedAt == nil || !op.StartedAt.Before(cursor)) {
+			continue
+		}
+		operations = append(operations, op)
+	}
+	sort.SliceStable(operations, func(i, j int) bool {
+		if operations[i].StartedAt == nil {
+			return false
+		}
+		if operations[j].StartedAt == nil {
+			return true
+		}
+		return operations[i].StartedAt.After(*operations[j].StartedAt)
+	})
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	result := storage.OperationQueryResult{Operations: operations}
+	if len(operations) > limit {
+		result.HasMore = true
+		result.Operations = operations[:limit]
+		if last := result.Operations[limit-1]; last.StartedAt != nil {
+			result.NextCursor = last.StartedAt.Format(time.RFC3339Nano)
+		}
+	}
+	return result, nil
 }
 
 func (m *MockStorage) DeleteAllHistory(ctx context.Context) (int64, error) {

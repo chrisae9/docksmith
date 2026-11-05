@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useAsyncResource } from '../hooks/useAsyncResource';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getContainerStatus } from '../api/client';
 import type { ContainerInfo } from '../types/api';
@@ -13,52 +14,27 @@ export function RestartDependenciesPage() {
   const { containerName } = useParams<{ containerName: string }>();
 
   const { container, loading: loadingContainer } = useContainerData(containerName);
-  const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const response = await getContainerStatus();
+    if (!response.success || !response.data) throw new Error(response.error || 'Failed to load containers');
+    return response.data.containers.filter(item => item.container_name !== containerName);
+  }, [containerName]);
+  const { data, loading, error } = useAsyncResource(containerName || '', load);
+  const containers: ContainerInfo[] = data || [];
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContainers, setSelectedContainers] = useState<Set<string>>(new Set());
-  const [originalDependencies, setOriginalDependencies] = useState<Set<string>>(new Set());
 
   // Get current dependencies from location state or empty
-  const currentDependencies = (location.state as any)?.currentDependencies || '';
+  const currentDependencies = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.currentDependencies || '';
 
-  useEffect(() => {
-    if (!containerName) {
-      navigate('/');
-      return;
-    }
-
-    // Initialize selected containers from current dependencies
-    if (currentDependencies) {
-      const deps = currentDependencies.split(',').map((d: string) => d.trim()).filter(Boolean);
-      setSelectedContainers(new Set(deps));
-      setOriginalDependencies(new Set(deps));
-    }
-
-    const fetchContainersList = async () => {
-      try {
-        setLoading(true);
-        const statusResponse = await getContainerStatus();
-
-        if (statusResponse.success && statusResponse.data) {
-          // Filter out the current container from the list of available containers
-          const allContainers = statusResponse.data.containers.filter(
-            c => c.container_name !== containerName
-          );
-          setContainers(allContainers);
-        } else {
-          setError(statusResponse.error || 'Failed to load containers');
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchContainersList();
-  }, [containerName, navigate, currentDependencies]);
+  const originalDependencies = new Set(currentDependencies.split(',').map(value => value.trim()).filter(Boolean));
+  const inputKey = JSON.stringify([containerName, currentDependencies]);
+  const [previousInput, setPreviousInput] = useState<string | null>(null);
+  if (previousInput !== inputKey) {
+    setPreviousInput(inputKey);
+    setSelectedContainers(originalDependencies);
+  }
+  useEffect(() => { if (!containerName) navigate('/'); }, [containerName, navigate]);
 
   const toggleContainer = (name: string) => {
     setSelectedContainers(prev => {
@@ -73,8 +49,8 @@ export function RestartDependenciesPage() {
   };
 
   // Get other pending changes from location state (to preserve them)
-  const pendingTagRegex = (location.state as any)?.pendingTagRegex;
-  const pendingScript = (location.state as any)?.pendingScript;
+  const pendingTagRegex = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingTagRegex;
+  const pendingScript = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingScript;
 
   const handleDone = () => {
     if (!containerName) return;

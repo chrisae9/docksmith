@@ -71,7 +71,7 @@ export function useSelfRestartRecovery({
             return;
           }
           // Still pending_restart or in_progress — keep polling
-        } catch (err) {
+        } catch {
           if (signal.aborted) return;
           // ECONNREFUSED / network error — server still restarting, keep polling
         }

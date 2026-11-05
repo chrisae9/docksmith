@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useEffectEvent, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getOperations, rollbackContainers } from '../api/client';
 import type { UpdateOperation, BatchContainerDetail } from '../types/api';
@@ -127,25 +127,27 @@ export function History() {
   // Focus trap for rollback confirmation dialog
   const dialogRef = useFocusTrap(!!rollbackConfirm || !!batchRollbackConfirm, cancelRollback);
 
-  const fetchOperations = useCallback(async (reset: boolean) => {
-    if (reset) {
-      setLoading(true);
-      setCursor(undefined);
-    } else {
-      setLoadingMore(true);
-    }
-
-    try {
-      const dateRange = getDateRange(datePreset, customDateFrom, customDateTo);
-      const response = await getOperations({
-        limit: PAGE_SIZE,
-        status: statusFilter !== 'all' ? statusFilter : undefined,
-        type: typeFilter !== 'all' ? typeFilter : undefined,
-        cursor: reset ? undefined : cursor,
-        date_from: dateRange.from,
-        date_to: dateRange.to,
-      });
-
+  const queryKey = JSON.stringify([statusFilter, typeFilter, datePreset, customDateFrom, customDateTo]);
+  const [previousQuery, setPreviousQuery] = useState(queryKey);
+  if (previousQuery !== queryKey) {
+    setPreviousQuery(queryKey);
+    setLoading(true);
+    setError(null);
+    setCursor(undefined);
+  }
+  const requestId = useRef(0);
+  const fetchOperations = useCallback((reset: boolean) => {
+    const request = ++requestId.current;
+    const dateRange = getDateRange(datePreset, customDateFrom, customDateTo);
+    return getOperations({
+      limit: PAGE_SIZE,
+      status: statusFilter !== 'all' ? statusFilter : undefined,
+      type: typeFilter !== 'all' ? typeFilter : undefined,
+      cursor: reset ? undefined : cursor,
+      date_from: dateRange.from,
+      date_to: dateRange.to,
+    }).then(response => {
+      if (request !== requestId.current) return;
       if (response.success && response.data) {
         const newOps = response.data.operations;
         if (reset) {
@@ -158,18 +160,16 @@ export function History() {
       } else {
         setError(response.error || 'Failed to fetch operations');
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
+    }).catch(error => {
+      if (request === requestId.current) setError(error instanceof Error ? error.message : 'Unknown error');
+    }).finally(() => {
+      if (request === requestId.current) { setLoading(false); setLoadingMore(false); }
+    });
   }, [statusFilter, typeFilter, datePreset, customDateFrom, customDateTo, cursor]);
 
-  // Initial load + refetch on filter changes
-  useEffect(() => {
-    fetchOperations(true);
-  }, [statusFilter, typeFilter, datePreset, customDateFrom, customDateTo]);
+  // Cursor updates are pagination results, not a new filter request.
+  const fetchFirstPage = useEffectEvent(() => { void fetchOperations(true); });
+  useEffect(() => { fetchFirstPage(); }, [queryKey]);
 
   // Group operations by batch_group_id into display items
   const buildDisplayItems = (ops: UpdateOperation[]): DisplayItem[] => {
@@ -1020,7 +1020,7 @@ export function History() {
         </header>
         <div className="error">
           <p>{error}</p>
-          <button onClick={() => fetchOperations(true)}>Retry</button>
+          <button onClick={() => { setLoading(true); setError(null); void fetchOperations(true); }}>Retry</button>
         </div>
       </div>
     );
@@ -1119,7 +1119,7 @@ export function History() {
             {hasMore && (
               <button
                 className="load-more-btn"
-                onClick={() => fetchOperations(false)}
+                onClick={() => { setLoadingMore(true); void fetchOperations(false); }}
                 disabled={loadingMore}
               >
                 {loadingMore ? 'Loading...' : 'Load More'}

@@ -1,2 +1,3 @@
 export { ToastContainer } from './Toast';
-export { ToastProvider, useToast, type Toast, type ToastType } from '../../context/ToastContext';
+export { useToast, type Toast, type ToastType } from '../../context/ToastContext';
+export { ToastProvider } from '../../context/ToastProvider';

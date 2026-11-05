@@ -6,7 +6,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 import { NotificationSettings } from './NotificationSettings';
 
 export function Settings() {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
@@ -50,17 +50,6 @@ export function Settings() {
     }
   };
 
-  // Fetch initial status
-  useEffect(() => {
-    fetchStatus();
-    fetchDockerConfigData();
-    getSetting('history_retention_days').then(res => {
-      if (res.success && res.data) {
-        setRetentionPolicy(res.data.value);
-      }
-    });
-  }, []);
-
   // Update time ago every 10 seconds
   useEffect(() => {
     const interval = setInterval(() => {
@@ -74,7 +63,7 @@ export function Settings() {
     return () => clearInterval(interval);
   }, [lastCheckTime, lastBackgroundRun]);
 
-  const updateTimestamps = (data: DiscoveryResult) => {
+  const updateTimestamps = useCallback((data: DiscoveryResult) => {
     if (data.last_cache_refresh) {
       setLastCheckTime(data.last_cache_refresh);
       setCacheAge(formatTimeAgo(data.last_cache_refresh));
@@ -89,36 +78,31 @@ export function Settings() {
       setLastBackgroundRun(null);
       setBackgroundAge('Never');
     }
-  };
+  }, []);
 
-  const fetchStatus = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await getContainerStatus();
-      if (response.success && response.data) {
-        setResult(response.data);
-        updateTimestamps(response.data);
-      } else {
-        setError(response.error || 'Failed to fetch status');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchStatus = useCallback(() => getContainerStatus().then(response => {
+    if (response.success && response.data) {
+      setResult(response.data);
+      setError(null);
+      updateTimestamps(response.data);
+    } else setError(response.error || 'Failed to fetch status');
+  }).catch(error => setError(error instanceof Error ? error.message : 'Unknown error'))
+    .finally(() => setLoading(false)), [updateTimestamps]);
 
-  const fetchDockerConfigData = async () => {
-    try {
-      const response = await getDockerConfig();
-      if (response.success && response.data) {
-        setDockerConfig(response.data);
+  const fetchDockerConfigData = useCallback(() => getDockerConfig().then(response => {
+    if (response.success && response.data) setDockerConfig(response.data);
+  }).catch(() => { /* No authenticated registries available. */ }), []);
+
+  // Fetch initial status
+  useEffect(() => {
+    fetchStatus();
+    fetchDockerConfigData();
+    getSetting('history_retention_days').then(res => {
+      if (res.success && res.data) {
+        setRetentionPolicy(res.data.value);
       }
-    } catch {
-      // Silently fail - UI will show "No authenticated registries found"
-    }
-  };
+    });
+  }, [fetchStatus, fetchDockerConfigData]);
 
   const backgroundRefresh = async () => {
     setLoading(true);

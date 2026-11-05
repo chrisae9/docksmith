@@ -1,3 +1,4 @@
+import { useNow } from '../../hooks/useNow';
 import type { ContainerExplorerItem } from '../../types/api';
 import {
   ActionMenuButton,
@@ -36,11 +37,11 @@ export function ContainerItem({
   onConfirmRemove,
   menuRef,
 }: ContainerItemProps) {
+  const now = useNow() / 1000;
   const isRunning = container.state === 'running';
 
   // Format created time as relative time
   const formatCreated = (timestamp: number): string => {
-    const now = Date.now() / 1000;
     const diff = now - timestamp;
     if (diff < 60) return 'just now';
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;

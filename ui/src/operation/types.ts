@@ -1,3 +1,5 @@
+import type { UpdateOperation as TrackedOperation } from '../types/api';
+import type { UpdateProgressEvent } from '../hooks/useEventStream';
 import type { LogEntry } from '../constants/progress';
 
 // Operation type union (all 17 types)
@@ -204,7 +206,7 @@ export interface OperationState {
   canForceRetry: boolean;
   forceRetryMessage: string;
   canRetry: boolean;
-  recoveredOperation: any | null;
+  recoveredOperation: TrackedOperation | null;
   expectedDependents: string[];
   dependentsRestarted: string[];
   dependentsBlocked: string[];
@@ -234,6 +236,6 @@ export type OperationAction =
   | { type: 'SET_CONTAINER_OP_ID'; runId: string; containerName: string; operationId: string }
   | { type: 'SET_SAW_PENDING_RESTART'; runId: string; value: boolean }
   | { type: 'RECOVERY_LOADED'; runId: string; state: Partial<OperationState> }
-  | { type: 'SSE_EVENT'; runId: string; event: any; containerName: string | null }
+  | { type: 'SSE_EVENT'; runId: string; event: UpdateProgressEvent; containerName: string | null }
   | { type: 'POLL_UPDATE'; runId: string; containerName: string; status: 'success' | 'failed' | 'in_progress'; message?: string; error?: string }
   | { type: 'RETRY'; newRunId: string };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { List } from 'react-window';
 import { useRegistryTags } from '../hooks/useRegistryTags';
@@ -30,13 +30,10 @@ export function TagFilterPage() {
 
   const { container, loading: loadingContainer } = useContainerData(containerName);
   const [pattern, setPattern] = useState('');
-  const [originalPattern, setOriginalPattern] = useState('');
-  const [isValid, setIsValid] = useState(true);
-  const [errorMessage, setErrorMessage] = useState('');
   const [copied, setCopied] = useState(false);
 
   // Get current tag regex from location state (passed from detail page)
-  const currentTagRegex = (location.state as any)?.currentTagRegex || '';
+  const currentTagRegex = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.currentTagRegex || '';
 
   // Get container details
   const currentTag = container?.current_tag || '';
@@ -45,38 +42,21 @@ export function TagFilterPage() {
   // Fetch tags from registry
   const { tags, loading, error: fetchError } = useRegistryTags(imageRef);
 
-  // Initialize pattern from location state (passed from detail page)
-  useEffect(() => {
-    // Use location state value if available, otherwise fallback to container label
-    const initialPattern = currentTagRegex || container?.labels?.['docksmith.tag-regex'] || '';
-    setPattern(initialPattern);
-    setOriginalPattern(initialPattern);
-  }, [currentTagRegex, container]);
-
-  // Validate regex pattern
-  useEffect(() => {
-    if (!pattern) {
-      setIsValid(true);
-      setErrorMessage('');
-      return;
-    }
-
-    try {
-      new RegExp(pattern);
-
-      if (pattern.length > 500) {
-        setIsValid(false);
-        setErrorMessage('Pattern too long (max 500 characters)');
-        return;
-      }
-
-      setIsValid(true);
-      setErrorMessage('');
-    } catch (e) {
-      setIsValid(false);
-      setErrorMessage(e instanceof Error ? e.message : 'Invalid regex pattern');
-    }
-  }, [pattern]);
+  const originalPattern = currentTagRegex || container?.labels?.['docksmith.tag-regex'] || '';
+  const inputKey = JSON.stringify([containerName, originalPattern]);
+  const [previousInput, setPreviousInput] = useState<string | null>(null);
+  if (previousInput !== inputKey) {
+    setPreviousInput(inputKey);
+    setPattern(originalPattern);
+  }
+  // Validation is derived from the current edit, so it cannot lag one render.
+  let errorMessage = '';
+  if (pattern.length > 500) errorMessage = 'Pattern too long (max 500 characters)';
+  else if (pattern) {
+    try { new RegExp(pattern); }
+    catch (error) { errorMessage = error instanceof Error ? error.message : 'Invalid regex pattern'; }
+  }
+  const isValid = !errorMessage;
 
   // Process tags with match info
   const processedTags = useMemo((): TagInfo[] => {
@@ -142,8 +122,8 @@ Please provide a regex pattern that matches the tags I want. The pattern should 
   };
 
   // Get other pending changes from location state (to preserve them)
-  const pendingScript = (location.state as any)?.pendingScript;
-  const pendingRestartAfter = (location.state as any)?.pendingRestartAfter;
+  const pendingScript = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingScript;
+  const pendingRestartAfter = (location.state as { currentScript?: string; currentDependencies?: string; currentTagRegex?: string; pendingTagRegex?: string; pendingRestartAfter?: string; pendingScript?: string })?.pendingRestartAfter;
 
   const handleDone = () => {
     if (!isValid || !containerName) return;
