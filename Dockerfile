@@ -1,5 +1,5 @@
 # Stage 1: Build React frontend
-FROM node:26.13.0-alpine3.23 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26.13.0-alpine3.23 AS frontend-builder
 
 WORKDIR /build/ui
 COPY ui/package*.json ./
@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run lint && npm test && npm run build
 
 # Stage 2: Build Go backend
-FROM golang:1.27.3-alpine3.23 AS backend-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.23 AS backend-builder
 
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -16,7 +16,9 @@ ENV GOTOOLCHAIN=auto
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
 
 # Stage 3: Runtime
 FROM alpine:3.24.3
@@ -29,6 +31,9 @@ WORKDIR /app
 
 COPY --from=backend-builder /build/docksmith /app/docksmith
 COPY --from=frontend-builder /build/ui/dist /app/ui/dist
+
+# Execute the packaged binary on each target architecture before publishing.
+RUN /app/docksmith --version
 
 EXPOSE 8080
 
