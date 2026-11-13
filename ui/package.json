@@ -26,7 +26,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/react-router-dom": "^5.3.3",
     "@types/react-window": "^2.0.0",
-    "@vitejs/plugin-react": "^6.2.1",
+    "@vitejs/plugin-react": "^6.3.0",
     "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
@@ -34,8 +34,8 @@
     "jsdom": "31.0.0",
     "typescript": "~5.9.3",
     "typescript-compiler": "npm:typescript@~7.0.2",
-    "typescript-eslint": "^8.72.1",
-    "vite": "^8.3.6",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.7",
     "vitest": "^5.1.0"
   },
   "overrides": {
