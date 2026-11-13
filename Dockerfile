@@ -21,7 +21,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X 'github.com/chis/docksmith/internal/output.Version=${VERSION}'" -o docksmith ./cmd/docksmith
 
 # Stage 3: Runtime
-FROM alpine:3.24.3
+FROM alpine:3.24.4
 
 RUN apk add --no-cache ca-certificates bash curl jq docker-cli docker-cli-compose
 
