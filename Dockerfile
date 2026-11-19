@@ -1,5 +1,5 @@
 # Stage 1: Build React frontend
-FROM --platform=$BUILDPLATFORM node:26.13.0-alpine3.23 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26.13.1-alpine3.23 AS frontend-builder
 
 WORKDIR /build/ui
 COPY ui/package*.json ./
@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run lint && npm test && npm run build
 
 # Stage 2: Build Go backend
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.23 AS backend-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.23 AS backend-builder
 
 WORKDIR /build
 COPY go.mod go.sum ./
